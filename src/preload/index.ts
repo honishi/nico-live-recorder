@@ -1,7 +1,39 @@
-import { contextBridge } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
+import {
+  IPC,
+  type AppSettings,
+  type AppStatus,
+  type FollowCheckResult,
+  type RecordingInfo,
+  type TargetAddResult,
+} from '../shared/types';
 
 const api = {
-  appVersion: (): string => process.env['npm_package_version'] ?? '',
+  getStatus: (): Promise<AppStatus> => ipcRenderer.invoke(IPC.getStatus),
+  getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
+  updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.updateSettings, patch),
+  chooseOutputDir: (): Promise<AppSettings | undefined> => ipcRenderer.invoke(IPC.chooseOutputDir),
+  openOutputDir: (): Promise<void> => ipcRenderer.invoke(IPC.openOutputDir),
+  openPath: (target: string): Promise<void> => ipcRenderer.invoke(IPC.openPath, target),
+  addTarget: (input: string): Promise<TargetAddResult> => ipcRenderer.invoke(IPC.addTarget, input),
+  removeTarget: (userId: string): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.removeTarget, userId),
+  setTargetEnabled: (userId: string, enabled: boolean): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.setTargetEnabled, userId, enabled),
+  checkFollow: (userId: string): Promise<FollowCheckResult> =>
+    ipcRenderer.invoke(IPC.checkFollow, userId),
+  login: (): Promise<boolean> => ipcRenderer.invoke(IPC.login),
+  logout: (): Promise<void> => ipcRenderer.invoke(IPC.logout),
+  startRecording: (input: string): Promise<RecordingInfo> =>
+    ipcRenderer.invoke(IPC.startRecording, input),
+  stopRecording: (programId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.stopRecording, programId),
+  onStatusChanged: (listener: (status: AppStatus) => void): (() => void) => {
+    const handler = (_event: unknown, status: AppStatus): void => listener(status);
+    ipcRenderer.on(IPC.statusChanged, handler);
+    return () => ipcRenderer.off(IPC.statusChanged, handler);
+  },
 };
 
 export type RendererApi = typeof api;
