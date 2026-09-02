@@ -1,0 +1,45 @@
+{
+  "_comment": "Example test data for web-push-crypto.test.ts",
+  "_instructions": {
+    "setup": [
+      "1. Copy this file to 'datasets/your-test-name.json'",
+      "2. Replace dummy values with real test data",
+      "3. NEVER commit files in the datasets/ directory"
+    ],
+    "how_to_get_real_data": [
+      "1. Enable console logging in web-push-manager.ts",
+      "2. Turn ON push notifications in the extension options",
+      "3. Receive a push notification",
+      "4. Check Chrome DevTools console for the logged data",
+      "5. Copy the keys, encrypted payload, and decrypted result"
+    ],
+    "format": {
+      "authSecret": "16 bytes, Base64 URL-safe encoded",
+      "publicKey": "65 bytes (uncompressed P-256), Base64 URL-safe encoded",
+      "privateKey": "32 bytes, Base64 URL-safe encoded",
+      "encryptedPayload": "Base64 URL-safe encoded aes128gcm format",
+      "decryptedJson": "The expected JSON after decryption"
+    }
+  },
+  "keys": {
+    "authSecret": "AAAAAAAAAAAAAAAAAAAAAA",
+    "publicKey": "BDummy_PublicKey_65bytes_P256_Uncompressed_Format_0x04_Prefix_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "privateKey": "Dummy_PrivateKey_32bytes_XXXXXX"
+  },
+  "payload": {
+    "encryptedPayload": "DummyBase64URLSafeEncodedPayloadDataHere_ThisIsJustAPlaceholder"
+  },
+  "expected": {
+    "decryptedJson": {
+      "body": "「Example Broadcast Title」を放送",
+      "data": {
+        "created_at": "2024-01-01T00:00:00Z",
+        "on_click": "https://live.nicovideo.jp/watch/lv000000000?from=webpush&_topic=live_user_program_onairs",
+        "tracking_parameter": "live_onair-lv000000000-webpush-nico_account_webpush",
+        "ttl": 600
+      },
+      "icon": "https://secure-dcdn.cdn.nimg.jp/nicoaccount/usericon/000/0000000.jpg",
+      "title": "ExampleUserさんが生放送を開始"
+    }
+  }
+}
