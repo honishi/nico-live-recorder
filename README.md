@@ -33,6 +33,9 @@ Windows と macOS で動作します。streamlink は使わず、ffmpeg だけ�
 
 ## 開発
 
+Node のバージョンは `.node-version` に固定しています (nodenv などで自動的に切り替わります)。
+Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` などに使う npm 11 が同梱されます。
+
 ```bash
 npm install
 npm run dev          # electron-vite の開発モードで起動
