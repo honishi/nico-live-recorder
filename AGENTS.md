@@ -31,6 +31,11 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 - Electron 全体は `--remote-debugging-port` 付きで起動し、CDP から `window.api.*` を呼んで確認できる。
 - ログインが必要な経路 (push 登録、フォロー中番組のポーリング、フォロー状態確認) はエージェントでは検証できない。変更したら人間側の確認を依頼する。
 
+## 依存パッケージ
+
+- 公開から 7 日未満のバージョンは `.npmrc` の `min-release-age` で弾かれる。最新版が入らないときは 1 つ前を使う。
+- 新しい依存を足すときは install script の有無を確認し、必要なものだけ `package.json` の `allowScripts` で許可する。
+
 ## ニコニコ API の扱い
 
 - 非公開 API (push 登録、フォロー状態確認、nvapi など) は予告なく変わる前提で書く。
