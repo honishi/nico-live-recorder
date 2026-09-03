@@ -3,9 +3,15 @@
 nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業するときの規約。
 仕組みやコード構成は [README.md](README.md) を参照すること。
 
+## Issue と作業の流れ
+
+- やることは GitHub の issue で管理する。着手する作業は issue から始め、無ければ先に作る。
+- 優先度は `priority: high / medium / low`、種類は `type: infra / feature / chore` のラベルで表す。
+- ブランチ名と commit の footer (`Closes #12`) に issue 番号を入れ、マージで issue を閉じる。
+
 ## ブランチとマージ
 
-- 新機能の実装は必ずブランチを作って行う。ブランチ名は `do-something-cool` のようにハイフン区切り。
+- 新機能の実装は必ずブランチを作って行う。ブランチ名は `add-something-cool-12` のようにハイフン区切りで、末尾に issue 番号を付ける。
 - マージは `git merge --no-ff` で行い、マージコミットを残す。
 
 ## コミットメッセージ
