@@ -28,6 +28,8 @@ interface ActiveRecording {
   controller: AbortController;
   done: Promise<void>;
   sizeTimer?: NodeJS.Timeout;
+  /** 再開前に終わったファイルの合計サイズ */
+  finishedPartBytes: number;
 }
 
 export interface RecordingManagerOptions {
@@ -41,6 +43,10 @@ export interface RecordingManagerOptions {
 
 const SIZE_POLL_MS = 1_000;
 const OUTPUT_DIR_CHECK_TTL_MS = 30_000;
+/** 録画が途中で止まったときの再開の上限と待ち時間 */
+const MAX_RECORD_ATTEMPTS = 10;
+const RETRY_BASE_DELAY_MS = 5_000;
+const RETRY_MAX_DELAY_MS = 60_000;
 
 /**
  * 検知と録画の司令塔。
@@ -336,7 +342,12 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       outputDir,
     };
     const controller = new AbortController();
-    const recording: ActiveRecording = { info, controller, done: Promise.resolve() };
+    const recording: ActiveRecording = {
+      info,
+      controller,
+      done: Promise.resolve(),
+      finishedPartBytes: 0,
+    };
     this.active.set(programId, recording);
     // 開始時点で履歴に残す。途中でアプリが落ちても「中断」として復元できる
     this.history.upsert(info);
@@ -351,38 +362,85 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
         recording.sizeTimer = setInterval(() => void this.refreshSize(recording), SIZE_POLL_MS);
 
-        const result = await recordProgram(
-          {
-            programId,
-            outputDir,
-            cookies,
-            ffmpegPath: this.ffmpegPath,
-            logger: prefixLogger(this.logger, programId),
-            programInfo,
-            onComment: (_comment, count) => {
-              info.commentCount = count;
+        // 映像が異常終了し、番組がまだ放送中なら、連番付きの別ファイルで録画を再開する
+        let attempt = 1;
+        let delayMs = RETRY_BASE_DELAY_MS;
+        let outcome: 'done' | 'failed' = 'done';
+        let lastReason = 'no video';
+        while (true) {
+          info.attempt = attempt;
+          const result = await recordProgram(
+            {
+              programId,
+              outputDir,
+              cookies,
+              ffmpegPath: this.ffmpegPath,
+              logger: prefixLogger(this.logger, programId),
+              programInfo,
+              attempt,
+              prefetchBackwardComments: attempt === 1,
+              onComment: (_comment, count) => {
+                info.commentCount = count;
+              },
             },
-          },
-          controller.signal,
-        );
-        info.videoPath = result.videoPath;
-        info.commentsPath = result.commentsPath;
-        await this.refreshSize(recording);
-        const errorText = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
-        if (result.errors.length > 0 && !result.video) {
-          info.state = 'failed';
-          info.error = errorText;
-        } else {
-          info.state = 'done';
-          if (result.errors.length > 0) {
-            info.error = errorText;
+            controller.signal,
+          );
+          info.videoPath = result.videoPath;
+          info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
+          info.commentsPath ??= result.commentsPath;
+          await this.refreshSize(recording);
+          recording.finishedPartBytes = info.videoBytes;
+
+          const errorText = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
+          lastReason = result.video?.reason ?? 'no video';
+          const videoOk = result.video !== undefined;
+          const abnormal =
+            !controller.signal.aborted &&
+            (!videoOk || lastReason === 'idle' || lastReason === 'disconnected');
+          if (!abnormal) {
+            outcome = videoOk ? 'done' : 'failed';
+            info.error = result.errors.length > 0 ? errorText : undefined;
+            break;
           }
+          if (attempt >= MAX_RECORD_ATTEMPTS) {
+            outcome = 'failed';
+            info.error = `再開の上限 (${MAX_RECORD_ATTEMPTS} 回) に達しました: ${errorText || lastReason}`;
+            break;
+          }
+
+          info.state = 'starting';
+          this.emitChange();
+          this.logger.warn(
+            `[rec] video stopped (${errorText || lastReason}) for ${programId}, retrying in ${delayMs / 1000}s (attempt ${attempt + 1}/${MAX_RECORD_ATTEMPTS})`,
+          );
+          await abortableDelay(delayMs, controller.signal);
+          if (controller.signal.aborted) {
+            outcome = 'done';
+            break;
+          }
+          // 待っている間に番組が終わっていたら、そこまでの録画で完了とする
+          const latest = await new NicoClient(programId, { cookies })
+            .getProgramInfo()
+            .catch(() => undefined);
+          if (!latest || latest.status === NicoLiveProgramStatus.ended || !latest.webSocketUrl) {
+            this.logger.info(`[rec] ${programId} has ended, not resuming`);
+            outcome = 'done';
+            info.error = undefined;
+            break;
+          }
+          attempt += 1;
+          delayMs = Math.min(RETRY_MAX_DELAY_MS, delayMs * 2);
+          info.state = 'recording';
+          this.emitChange();
+          this.logger.info(`[rec] resume ${programId} (attempt ${attempt})`);
         }
+
+        info.state = outcome;
         this.logger.info(
-          `[rec] ${info.state === 'done' ? 'finished' : 'failed'} ${programId} "${info.title}" (${result.video?.reason ?? 'no video'}, ${info.commentCount} comments)`,
+          `[rec] ${outcome === 'done' ? 'finished' : 'failed'} ${programId} "${info.title}" (${lastReason}, ${info.commentCount} comments, ${attempt} part${attempt > 1 ? 's' : ''})`,
         );
         this.notify(
-          info.state === 'done' ? '録画が終了しました' : '録画に失敗しました',
+          outcome === 'done' ? '録画が終了しました' : '録画に失敗しました',
           `${providerName ?? ''} ${info.title}`,
         );
       } catch (error) {
@@ -440,16 +498,19 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     return writable;
   }
 
+  /** 現在のファイルのサイズに、再開前のファイルの合計を足して videoBytes にする */
   private async refreshSize(recording: ActiveRecording): Promise<void> {
-    const videoPath = recording.info.videoPath ?? (await this.findVideoPath(recording.info));
+    const info = recording.info;
+    const videoPath = info.videoPath ?? (await this.findVideoPath(info));
     if (!videoPath) {
       return;
     }
     try {
       const stat = await fs.stat(videoPath);
-      if (stat.size !== recording.info.videoBytes) {
-        recording.info.videoBytes = stat.size;
-        recording.info.videoPath = videoPath;
+      const total = recording.finishedPartBytes + stat.size;
+      if (total !== info.videoBytes || info.videoPath !== videoPath) {
+        info.videoBytes = total;
+        info.videoPath = videoPath;
         this.emitChange();
       }
     } catch {
@@ -457,10 +518,17 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     }
   }
 
+  /** ファイル名は録画側が決めるので、現在の attempt に対応する .ts を保存先から探す */
   private async findVideoPath(info: RecordingInfo): Promise<string | undefined> {
     try {
       const entries = await fs.readdir(info.outputDir);
-      const name = entries.find((e) => e.includes(`_${info.programId}_`) && e.endsWith('.ts'));
+      const suffix = (info.attempt ?? 1) > 1 ? `_${info.attempt}.ts` : '.ts';
+      const name = entries.find(
+        (e) =>
+          e.includes(`_${info.programId}_`) &&
+          e.endsWith(suffix) &&
+          ((info.attempt ?? 1) > 1 || !/_\d+\.ts$/.test(e)),
+      );
       return name ? path.join(info.outputDir, name) : undefined;
     } catch {
       return undefined;
@@ -481,6 +549,24 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private emitChange(): void {
     this.emit('change');
   }
+}
+
+function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 function sanitizeDirName(name: string): string {

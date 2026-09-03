@@ -13,6 +13,8 @@ export interface CommentRecorderOptions {
   programInfo?: NicoLiveProgramInfo;
   /** 1 件受信するごとに呼ばれる (UI のカウンタ更新など) */
   onComment?: (comment: NicoComment, count: number) => void;
+  /** 接続前の過去コメントも取得するか (再開時は重複を避けるため false にする) */
+  prefetchBackward?: boolean;
 }
 
 export interface CommentRecordResult {
@@ -57,7 +59,7 @@ export async function recordComments(
   let count = 0;
   try {
     const stream = client.streamComments(
-      { signal, startPosition: 'now', prefetchBackward: true },
+      { signal, startPosition: 'now', prefetchBackward: options.prefetchBackward ?? true },
       options.programInfo,
     );
     for await (const comment of stream) {

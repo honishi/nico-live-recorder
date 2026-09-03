@@ -54,8 +54,13 @@ export interface RecordingInfo {
   commentCount: number;
   videoBytes: number;
   outputDir: string;
+  /** 最新の録画ファイル。再開すると連番付きの別ファイルになる */
   videoPath?: string;
+  /** これまでの録画ファイルすべて (再開分を含む) */
+  videoPaths?: string[];
   commentsPath?: string;
+  /** 何回目の録画か (2 以上は失敗後の再開) */
+  attempt?: number;
   /** 録画ファイルが保存先に残っているか (終了後に確認する) */
   videoExists?: boolean;
   error?: string;

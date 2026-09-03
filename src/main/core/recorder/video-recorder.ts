@@ -198,11 +198,28 @@ export async function recordVideo(
   };
   signal?.addEventListener('abort', onAbort, { once: true });
 
+  // 開発用: 再開処理を確かめるために、指定 ms 後に映像を失敗させる
+  const devFailAfterMs = Number(process.env['NLR_DEV_FAIL_VIDEO_AFTER_MS'] ?? 0);
+  let devFailure: Error | undefined;
+  const devFailTimer =
+    devFailAfterMs > 0
+      ? setTimeout(() => {
+          if (!finishing) {
+            devFailure = new Error('dev: injected video failure');
+            videoTrack.requestStop();
+            audioTrack?.requestStop();
+          }
+        }, devFailAfterMs)
+      : undefined;
+
   try {
     const [videoResult, audioResult] = await Promise.all([
       videoTrack.run(pipes.video, signal),
       audioTrack && pipes.audio ? audioTrack.run(pipes.audio, signal) : Promise.resolve(undefined),
     ]);
+    if (devFailure) {
+      throw devFailure;
+    }
     if (!finishing) {
       reason = videoResult.reason === 'idle' ? 'idle' : 'endlist';
     }
@@ -221,6 +238,9 @@ export async function recordVideo(
     throw error;
   } finally {
     signal?.removeEventListener('abort', onAbort);
+    if (devFailTimer) {
+      clearTimeout(devFailTimer);
+    }
     session.close();
   }
 }

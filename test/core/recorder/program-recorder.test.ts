@@ -54,6 +54,12 @@ describe('buildBaseName', () => {
     expect(buildBaseName(info({ beginTime, title: 'a/b' }))).toBe('20260903_014249_lv123_a_b');
   });
 
+  test('2 回目以降は末尾に連番を付ける', () => {
+    const beginTime = Math.floor(new Date(2026, 8, 3, 1, 42, 49).getTime() / 1000);
+    expect(buildBaseName(info({ beginTime, title: 'x' }), 1)).toBe('20260903_014249_lv123_x');
+    expect(buildBaseName(info({ beginTime, title: 'x' }), 2)).toBe('20260903_014249_lv123_x_2');
+  });
+
   test('開始時刻が無ければ現在時刻を使う', () => {
     expect(buildBaseName(info({ beginTime: 0 }))).toMatch(/^\d{8}_\d{6}_lv123_タイトル$/);
   });

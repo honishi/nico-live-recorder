@@ -30,6 +30,7 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 - テストは `test/` 以下に `src/main/` を鏡写しにして置く (`src/main/core/nico/hls.ts` → `test/core/nico/hls.test.ts`)。
 - 録画コアの変更は `npx tsx scripts/record.ts <lv番号> 30 ./recordings` で実放送に対して確認する。
 - Electron 全体は `--remote-debugging-port` 付きで起動し、CDP から `window.api.*` を呼んで確認できる。開発中のアプリと同時に立てるときは `NLR_USER_DATA` で別の userData を指定する。
+- 失敗後の再開処理は `NLR_DEV_FAIL_VIDEO_AFTER_MS=8000` のように設定して起動すると、映像を強制的に失敗させて確認できる。
 - ログインが必要な経路 (push 登録、フォロー中番組のポーリング、フォロー状態確認) はエージェントでは検証できない。変更したら人間側の確認を依頼する。
 
 ## 依存パッケージ

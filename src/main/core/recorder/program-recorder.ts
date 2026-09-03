@@ -16,6 +16,10 @@ export interface ProgramRecorderOptions {
   logger?: Logger;
   programInfo?: NicoLiveProgramInfo;
   onComment?: (comment: NicoComment, count: number) => void;
+  /** 何回目の録画か。2 以上はファイル名に連番を付ける */
+  attempt?: number;
+  /** 接続前の過去コメントも取得するか (再開時は false) */
+  prefetchBackwardComments?: boolean;
 }
 
 export interface ProgramRecordResult {
@@ -50,9 +54,10 @@ function formatTimestamp(date: Date): string {
   );
 }
 
-export function buildBaseName(info: NicoLiveProgramInfo): string {
+export function buildBaseName(info: NicoLiveProgramInfo, attempt = 1): string {
   const begin = info.beginTime > 0 ? new Date(info.beginTime * 1000) : new Date();
-  return `${formatTimestamp(begin)}_${info.nicoliveProgramId}_${sanitizeFileName(info.title)}`;
+  const suffix = attempt > 1 ? `_${attempt}` : '';
+  return `${formatTimestamp(begin)}_${info.nicoliveProgramId}_${sanitizeFileName(info.title)}${suffix}`;
 }
 
 /**
@@ -71,7 +76,7 @@ export async function recordProgram(
   const info = options.programInfo ?? (await client.getProgramInfo(signal));
 
   await fs.mkdir(options.outputDir, { recursive: true });
-  const baseName = buildBaseName(info);
+  const baseName = buildBaseName(info, options.attempt ?? 1);
   const videoPath = path.join(options.outputDir, `${baseName}.ts`);
   const commentsPath = path.join(options.outputDir, `${baseName}.comments.jsonl`);
   const metadataPath = path.join(options.outputDir, `${baseName}.json`);
@@ -109,6 +114,15 @@ export async function recordProgram(
   };
   await writeMetadata();
 
+  // 映像が異常終了したらコメント取得も止めて、呼び出し側が再開を判断できるようにする。
+  // 番組終了による正常終了ではコメントはそのまま終わりまで受信する
+  const internal = new AbortController();
+  const onOuterAbort = (): void => internal.abort();
+  if (signal?.aborted) {
+    internal.abort();
+  }
+  signal?.addEventListener('abort', onOuterAbort, { once: true });
+
   const videoTask = recordVideo(
     {
       programId: options.programId,
@@ -119,14 +133,18 @@ export async function recordProgram(
       logger: prefixLogger(logger, 'video'),
       programInfo: info,
     },
-    signal,
+    internal.signal,
   ).then(
     (video) => {
       result.video = video;
+      if (video.reason === 'idle' || video.reason === 'disconnected') {
+        internal.abort();
+      }
     },
     (error: unknown) => {
       logger.error('video recording failed', error);
       result.errors.push({ target: 'video', message: (error as Error).message });
+      internal.abort();
     },
   );
 
@@ -139,8 +157,9 @@ export async function recordProgram(
       logger: prefixLogger(logger, 'comments'),
       programInfo: info,
       onComment: options.onComment,
+      prefetchBackward: options.prefetchBackwardComments ?? true,
     },
-    signal,
+    internal.signal,
   ).then(
     (comments) => {
       result.comments = comments;
@@ -151,7 +170,11 @@ export async function recordProgram(
     },
   );
 
-  await Promise.all([videoTask, commentsTask]);
+  try {
+    await Promise.all([videoTask, commentsTask]);
+  } finally {
+    signal?.removeEventListener('abort', onOuterAbort);
+  }
   await writeMetadata();
   return result;
 }

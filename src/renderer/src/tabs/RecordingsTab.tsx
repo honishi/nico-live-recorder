@@ -134,6 +134,9 @@ function RecordingCard({
           </span>
           <span className="name ellipsis">{r.providerName ?? r.providerId ?? '—'}</span>
           <span className="id">{r.programId}</span>
+          {(r.attempt ?? 1) > 1 && (
+            <span className="badge badge-neutral">再開 {r.attempt} 回目</span>
+          )}
         </div>
         <div className="ellipsis">{r.title}</div>
         <div className="stats">
