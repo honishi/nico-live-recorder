@@ -6,9 +6,17 @@ import { ProgramDetector, type DetectedProgram } from '../core/detector/program-
 import { prefixLogger, type Logger } from '../core/logger';
 import { recordProgram } from '../core/recorder/program-recorder';
 import { NicoClient } from '../vendor/nico-client/NicoClient';
+import { NicoLiveProgramStatus, type NicoLiveProgramInfo } from '../vendor/nico-client/types';
 import { setPushLogger } from '../vendor/web-push/push-diagnostics';
 import { WebPushManager, type PushStateStore } from '../core/push/web-push-manager';
-import type { PushStatusInfo, RecordingInfo, RecordingSource } from '../../shared/types';
+import {
+  codedError,
+  ERROR_CODES,
+  type AppAlert,
+  type PushStatusInfo,
+  type RecordingInfo,
+  type RecordingSource,
+} from '../../shared/types';
 import type { NicoAuth } from './auth';
 import type { SettingsStore } from './settings-store';
 
@@ -28,7 +36,8 @@ export interface RecordingManagerOptions {
 }
 
 const HISTORY_LIMIT = 50;
-const SIZE_POLL_MS = 5_000;
+const SIZE_POLL_MS = 1_000;
+const OUTPUT_DIR_CHECK_TTL_MS = 30_000;
 
 /**
  * 検知と録画の司令塔。
@@ -47,6 +56,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private readonly history: RecordingInfo[] = [];
   private restarting?: Promise<void>;
   private stopped = false;
+  /** ログイン cookie はあるのに API が認証エラーを返した (セッション切れ) */
+  private authExpired = false;
+  private outputDirCheck?: { dir: string; writable: boolean; checkedAt: number };
 
   constructor(options: RecordingManagerOptions) {
     super();
@@ -63,7 +75,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       error: (...args) => pushLogger.error(...args),
     });
 
-    this.auth.on('change', () => void this.restartDetection());
+    this.auth.on('change', () => {
+      this.authExpired = false;
+      void this.restartDetection();
+    });
     this.settings.on('change', () => void this.restartDetection());
   }
 
@@ -86,6 +101,38 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
   getRecordings(): RecordingInfo[] {
     return [...[...this.active.values()].map((a) => a.info), ...this.history];
+  }
+
+  /** ヘッダ直下のバナーに出す、解消するまで続く問題 (重い順に 1 件だけ) */
+  async getAlerts(loggedIn: boolean): Promise<AppAlert[]> {
+    const alerts: AppAlert[] = [];
+    const settings = this.settings.get();
+    if (!(await this.isOutputDirWritable(settings.outputDir))) {
+      alerts.push({
+        kind: 'output-dir',
+        severity: 'error',
+        message: '保存先に書き込めません',
+        actionLabel: '保存先を変更',
+      });
+    }
+    if (loggedIn && this.authExpired) {
+      alerts.push({
+        kind: 'auth-expired',
+        severity: 'error',
+        message: 'ログインが切れました',
+        actionLabel: 'ログイン',
+      });
+    }
+    if (loggedIn && settings.pushEnabled && this.push?.getStatus().state === 'error') {
+      alerts.push({
+        kind: 'push-unavailable',
+        severity: 'warn',
+        message: 'push 通知に接続できません (ポーリングのみで監視中)',
+        actionLabel: '再接続',
+      });
+    }
+    alerts.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'error' ? -1 : 1));
+    return alerts.slice(0, 1);
   }
 
   async start(): Promise<void> {
@@ -161,6 +208,19 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       detector.markSeen(programId);
     }
     detector.on('program', (program) => void this.handleDetected(program));
+    // ポーリングの成否からセッション切れを判定してバナーに出す
+    detector.on('polled', () => {
+      if (this.authExpired) {
+        this.authExpired = false;
+        this.emitChange();
+      }
+    });
+    detector.on('pollError', (error) => {
+      if (error.name === 'NotAuthenticatedError' && !this.authExpired) {
+        this.authExpired = true;
+        this.emitChange();
+      }
+    });
     detector.start();
     this.detector = detector;
     this.logger.info(
@@ -176,24 +236,32 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     );
     if (!target) {
       this.logger.debug(
-        `detected ${program.programId} by ${program.providerName ?? program.providerId ?? '?'} (not a target)`,
+        `[detector] ${program.programId} by ${program.providerName ?? program.providerId ?? '?'} is not a target`,
       );
       return;
     }
     if (program.alreadyOnAir && !settings.recordOngoingOnStart) {
-      this.logger.info(`skip ongoing program ${program.programId} (${target.name})`);
+      this.logger.info(`[detector] skip ongoing program ${program.programId} (${target.name})`);
       return;
     }
     this.logger.info(
-      `target program detected via ${program.source}: ${program.programId} "${program.title}" by ${target.name}`,
+      `[detector] target program via ${program.source}: ${program.programId} "${program.title}" by ${target.name}`,
     );
-    await this.startRecording(program.programId, program.source, {
-      title: program.title,
-      providerId: program.providerId,
-      providerName: target.name,
-    });
+    try {
+      await this.startRecording(program.programId, program.source, {
+        title: program.title,
+        providerId: program.providerId,
+        providerName: target.name,
+      });
+    } catch (error) {
+      this.logger.error(`[rec] could not start ${program.programId}`, error);
+    }
   }
 
+  /**
+   * 録画を開始する。番組情報を先に取得し、取得できない番組は例外にする
+   * (手動録画の入力エラーを呼び出し側で表示するため)
+   */
   async startRecording(
     programId: string,
     source: RecordingSource,
@@ -203,21 +271,37 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     if (existing) {
       return existing.info;
     }
-    this.detector?.markSeen(programId);
-
     const settings = this.settings.get();
     const cookies = await this.auth.getCookieRecord();
+
+    let programInfo: NicoLiveProgramInfo;
+    try {
+      programInfo = await new NicoClient(programId, { cookies }).getProgramInfo();
+    } catch (error) {
+      throw codedError(ERROR_CODES.programUnavailable, (error as Error).message);
+    }
+    if (programInfo.status === NicoLiveProgramStatus.ended || !programInfo.webSocketUrl) {
+      throw codedError(ERROR_CODES.programUnavailable, programInfo.status);
+    }
+    this.detector?.markSeen(programId);
+
+    const providerName = meta.providerName ?? programInfo.providerName;
+    const providerId = meta.providerId ?? programInfo.providerId;
+    const outputDir = path.join(
+      settings.outputDir,
+      sanitizeDirName(providerName ?? providerId ?? 'unknown'),
+    );
     const info: RecordingInfo = {
       programId,
-      title: meta.title ?? programId,
-      providerId: meta.providerId,
-      providerName: meta.providerName,
+      title: programInfo.title || meta.title || programId,
+      providerId,
+      providerName,
       source,
       state: 'starting',
       startedAt: new Date().toISOString(),
       commentCount: 0,
       videoBytes: 0,
-      outputDir: settings.outputDir,
+      outputDir,
     };
     const controller = new AbortController();
     const recording: ActiveRecording = { info, controller, done: Promise.resolve() };
@@ -226,16 +310,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
     recording.done = (async () => {
       try {
-        const programInfo = await new NicoClient(programId, { cookies }).getProgramInfo();
-        info.title = programInfo.title;
-        info.providerId ??= programInfo.providerId;
-        info.providerName ??= programInfo.providerName;
-        const providerDir = sanitizeDirName(info.providerName ?? info.providerId ?? 'unknown');
-        const outputDir = path.join(settings.outputDir, providerDir);
-        info.outputDir = outputDir;
         info.state = 'recording';
         this.emitChange();
-        this.notify('録画を開始しました', `${info.providerName ?? ''} ${info.title}`);
+        this.logger.info(`[rec] start ${programId} "${info.title}" by ${providerName ?? '?'}`);
+        this.notify('録画を開始しました', `${providerName ?? ''} ${info.title}`);
 
         recording.sizeTimer = setInterval(() => void this.refreshSize(recording), SIZE_POLL_MS);
 
@@ -255,23 +333,27 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         );
         info.videoPath = result.videoPath;
         await this.refreshSize(recording);
+        const errorText = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
         if (result.errors.length > 0 && !result.video) {
           info.state = 'failed';
-          info.error = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
+          info.error = errorText;
         } else {
           info.state = 'done';
           if (result.errors.length > 0) {
-            info.error = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
+            info.error = errorText;
           }
         }
+        this.logger.info(
+          `[rec] ${info.state === 'done' ? 'finished' : 'failed'} ${programId} "${info.title}" (${result.video?.reason ?? 'no video'}, ${info.commentCount} comments)`,
+        );
         this.notify(
           info.state === 'done' ? '録画が終了しました' : '録画に失敗しました',
-          `${info.providerName ?? ''} ${info.title}`,
+          `${providerName ?? ''} ${info.title}`,
         );
       } catch (error) {
         info.state = 'failed';
         info.error = (error as Error).message;
-        this.logger.error(`recording ${programId} failed`, error);
+        this.logger.error(`[rec] failed ${programId}`, error);
         this.notify('録画に失敗しました', `${info.title}: ${info.error}`);
       } finally {
         if (recording.sizeTimer) {
@@ -294,8 +376,51 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     }
     recording.info.state = 'finishing';
     recording.controller.abort();
+    this.logger.info(`[rec] stop requested ${programId}`);
     this.emitChange();
     return true;
+  }
+
+  /** 終了した録画のファイルが残っているかを確認して埋める */
+  async refreshVideoExistence(): Promise<void> {
+    await Promise.all(
+      this.history.map(async (info) => {
+        if (!info.videoPath) {
+          info.videoExists = false;
+          return;
+        }
+        try {
+          await fs.access(info.videoPath);
+          info.videoExists = true;
+        } catch {
+          info.videoExists = false;
+        }
+      }),
+    );
+  }
+
+  private async isOutputDirWritable(dir: string): Promise<boolean> {
+    const cached = this.outputDirCheck;
+    if (cached && cached.dir === dir && Date.now() - cached.checkedAt < OUTPUT_DIR_CHECK_TTL_MS) {
+      return cached.writable;
+    }
+    let writable = false;
+    try {
+      await fs.access(dir, fs.constants.W_OK);
+      writable = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // まだ無いディレクトリは、作れる場所なら書き込めるとみなす
+        try {
+          await fs.access(path.dirname(dir), fs.constants.W_OK);
+          writable = true;
+        } catch {
+          writable = false;
+        }
+      }
+    }
+    this.outputDirCheck = { dir, writable, checkedAt: Date.now() };
+    return writable;
   }
 
   private async refreshSize(recording: ActiveRecording): Promise<void> {

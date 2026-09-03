@@ -6,6 +6,8 @@ import {
   type FollowCheckResult,
   type RecordingInfo,
   type TargetAddResult,
+  type TargetUser,
+  type UiState,
 } from '../shared/types';
 
 const api = {
@@ -13,10 +15,16 @@ const api = {
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
   updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.updateSettings, patch),
+  updateUi: (patch: Partial<UiState>): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.updateUi, patch),
   chooseOutputDir: (): Promise<AppSettings | undefined> => ipcRenderer.invoke(IPC.chooseOutputDir),
   openOutputDir: (): Promise<void> => ipcRenderer.invoke(IPC.openOutputDir),
   openPath: (target: string): Promise<void> => ipcRenderer.invoke(IPC.openPath, target),
+  openLogFile: (): Promise<void> => ipcRenderer.invoke(IPC.openLogFile),
+  reconnectPush: (): Promise<void> => ipcRenderer.invoke(IPC.reconnectPush),
   addTarget: (input: string): Promise<TargetAddResult> => ipcRenderer.invoke(IPC.addTarget, input),
+  restoreTarget: (target: TargetUser): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.restoreTarget, target),
   removeTarget: (userId: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.removeTarget, userId),
   setTargetEnabled: (userId: string, enabled: boolean): Promise<AppSettings> =>

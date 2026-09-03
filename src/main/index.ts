@@ -1,15 +1,20 @@
 import path from 'node:path';
-import { app, BrowserWindow, powerSaveBlocker, shell } from 'electron';
-import { IPC } from '../shared/types';
+import { app, BrowserWindow, powerSaveBlocker, screen, shell } from 'electron';
+import { IPC, type WindowBounds } from '../shared/types';
 import { AppLogger } from './app/app-logger';
 import { NicoAuth } from './app/auth';
 import { buildStatus, registerIpcHandlers } from './app/ipc';
 import { FilePushStateStore } from './app/push-state-store';
 import { RecordingManager } from './app/recording-manager';
 import { SettingsStore } from './app/settings-store';
-import { AppTray } from './app/tray';
+import { AppTray, type TrayState } from './app/tray';
 import { resolveFfmpegPath } from './core/nico/ffmpeg';
 import { configureProtoRootDir } from './vendor/nico-client/internal/protoLoader';
+
+const WINDOW_MIN_WIDTH = 760;
+const WINDOW_MIN_HEIGHT = 520;
+const WINDOW_DEFAULT_WIDTH = 900;
+const WINDOW_DEFAULT_HEIGHT = 640;
 
 let mainWindow: BrowserWindow | undefined;
 let tray: AppTray | undefined;
@@ -25,12 +30,37 @@ if (!gotLock) {
   app.quit();
 }
 
-function createMainWindow(): BrowserWindow {
+/** 保存した位置とサイズが現在のディスプレイに収まるときだけ復元する */
+function restoredBounds(saved: WindowBounds | undefined): Partial<WindowBounds> {
+  if (!saved || saved.width < WINDOW_MIN_WIDTH || saved.height < WINDOW_MIN_HEIGHT) {
+    return {};
+  }
+  const { x, y } = saved;
+  if (x === undefined || y === undefined) {
+    return { width: saved.width, height: saved.height };
+  }
+  const visible = screen.getAllDisplays().some((display) => {
+    const area = display.workArea;
+    return (
+      x >= area.x - 20 &&
+      y >= area.y - 20 &&
+      x < area.x + area.width - 100 &&
+      y < area.y + area.height - 100
+    );
+  });
+  return visible ? saved : { width: saved.width, height: saved.height };
+}
+
+function createMainWindow(settings: SettingsStore): BrowserWindow {
+  const bounds = restoredBounds(settings.get().window);
   const window = new BrowserWindow({
-    width: 980,
-    height: 720,
-    minWidth: 760,
-    minHeight: 520,
+    width: bounds.width ?? WINDOW_DEFAULT_WIDTH,
+    height: bounds.height ?? WINDOW_DEFAULT_HEIGHT,
+    x: bounds.x,
+    y: bounds.y,
+    minWidth: WINDOW_MIN_WIDTH,
+    minHeight: WINDOW_MIN_HEIGHT,
+    title: 'Nico Live Recorder',
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -41,6 +71,22 @@ function createMainWindow(): BrowserWindow {
     },
   });
   window.on('ready-to-show', () => window.show());
+
+  // 位置とサイズは少し待ってから保存する (ドラッグ中の連続イベントをまとめる)
+  let saveTimer: NodeJS.Timeout | undefined;
+  const saveBounds = (): void => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+    }
+    saveTimer = setTimeout(() => {
+      if (!window.isDestroyed() && !window.isMinimized()) {
+        settings.setWindowBounds(window.getBounds());
+      }
+    }, 500);
+  };
+  window.on('resize', saveBounds);
+  window.on('move', saveBounds);
+
   // ウィンドウを閉じてもトレイに常駐し続ける
   window.on('close', (event) => {
     if (!quitting) {
@@ -58,15 +104,6 @@ function createMainWindow(): BrowserWindow {
     void window.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
   return window;
-}
-
-function showMainWindow(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    mainWindow = createMainWindow();
-    return;
-  }
-  mainWindow.show();
-  mainWindow.focus();
 }
 
 async function bootstrap(): Promise<void> {
@@ -109,6 +146,15 @@ async function bootstrap(): Promise<void> {
     }
   });
 
+  const showMainWindow = (): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      mainWindow = createMainWindow(settings);
+      return;
+    }
+    mainWindow.show();
+    mainWindow.focus();
+  };
+
   const ctx = {
     version: app.getVersion(),
     settings,
@@ -129,12 +175,17 @@ async function bootstrap(): Promise<void> {
   const broadcast = async (): Promise<void> => {
     const status = await buildStatus(ctx);
     const active = status.recordings.filter((r) => r.state === 'recording').length;
+    const trayState: TrayState = !status.auth.loggedIn
+      ? 'logged-out'
+      : active > 0
+        ? 'recording'
+        : 'idle';
     const summary = !status.auth.loggedIn
       ? '未ログイン'
       : active > 0
         ? `${active} 件録画中`
         : `監視中 (push: ${status.push.state})`;
-    tray?.update(status.recordings, summary);
+    tray?.update(status.recordings, summary, trayState);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.statusChanged, status);
     }
@@ -154,7 +205,10 @@ async function bootstrap(): Promise<void> {
   settings.on('change', scheduleBroadcast);
   logger.on('entry', scheduleBroadcast);
 
-  mainWindow = createMainWindow();
+  app.on('second-instance', showMainWindow);
+  app.on('activate', showMainWindow);
+
+  mainWindow = createMainWindow(settings);
   await manager.start();
   scheduleBroadcast();
 
@@ -176,8 +230,6 @@ async function bootstrap(): Promise<void> {
   });
 }
 
-app.on('second-instance', showMainWindow);
-app.on('activate', showMainWindow);
 app.on('window-all-closed', () => {
   // トレイ常駐なので何もしない
 });

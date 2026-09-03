@@ -33,6 +33,8 @@ export interface ProgramDetectorOptions {
 
 export interface ProgramDetectorEvents {
   program: [program: DetectedProgram];
+  /** ポーリングが成功した (放送中の件数) */
+  polled: [count: number];
   pollError: [error: Error];
 }
 
@@ -164,6 +166,7 @@ export class ProgramDetector extends EventEmitter<ProgramDetectorEvents> {
       const programs = await fetchFollowingOnAirPrograms(cookie, { userAgent: this.userAgent });
       const initial = !this.firstPollDone;
       this.firstPollDone = true;
+      this.emit('polled', programs.length);
       for (const program of programs) {
         if (this.seen.has(program.id)) {
           continue;

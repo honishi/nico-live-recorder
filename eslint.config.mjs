@@ -14,6 +14,7 @@ export default tseslint.config(
       'release/**',
       'node_modules/**',
       'resources/**',
+      'docs/**',
       'test/vendor/web-push/data/**',
     ],
   },

@@ -51,7 +51,10 @@ Electron を起動せずに録画部分だけを試すスクリプトもあり�
 npx tsx scripts/record.ts lv123456789 30 ./recordings      # 30 秒だけ録画
 npx tsx scripts/record-comments.ts                          # コメント取得のみ
 NICO_USER_SESSION=... npx tsx scripts/push-listen.ts        # push 購読の疎通確認
+npm run build && npx tsx scripts/e2e-screenshots.ts         # アプリを起動して各タブのスクリーンショット
 ```
+
+画面のデザインは `docs/design/` (Claude Design のハンドオフ) を正としています。
 
 ### コード構成
 
