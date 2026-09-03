@@ -21,8 +21,8 @@ jobs:
       # 署名用の証明書は CI に無いので、electron-builder の自動検出を止める
       CSC_IDENTITY_AUTO_DISCOVERY: false
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: npm
@@ -32,7 +32,7 @@ jobs:
       - run: npm run build
       - run: npx electron-builder ${{ matrix.args }} --publish never
       - name: Upload to the GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: |
