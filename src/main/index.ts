@@ -16,6 +16,9 @@ const WINDOW_MIN_WIDTH = 760;
 const WINDOW_MIN_HEIGHT = 520;
 const WINDOW_DEFAULT_WIDTH = 900;
 const WINDOW_DEFAULT_HEIGHT = 640;
+/** 終了時に録画の停止処理とログの書き出しを待つ上限 */
+const QUIT_SHUTDOWN_TIMEOUT_MS = 15_000;
+const QUIT_LOG_CLOSE_TIMEOUT_MS = 2_000;
 
 let mainWindow: BrowserWindow | undefined;
 let tray: AppTray | undefined;
@@ -241,16 +244,29 @@ async function bootstrap(): Promise<void> {
     if (manager.hasActiveRecordings()) {
       logger.info('stopping recordings before quit');
     }
+    // どこかで失敗しても、上限時間を過ぎても、必ず app.exit に到達させる
+    const withTimeout = (task: Promise<unknown>, ms: number): Promise<void> =>
+      Promise.race([
+        task.then(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, ms)),
+      ]);
     void (async () => {
       try {
-        await manager.shutdown();
+        await withTimeout(manager.shutdown(), QUIT_SHUTDOWN_TIMEOUT_MS);
       } catch (error) {
         logger.error('shutdown failed', error);
-      } finally {
-        history.flush();
-        await logger.close();
-        app.exit(0);
       }
+      try {
+        history.flush();
+      } catch (error) {
+        logger.error('history flush failed', error);
+      }
+      try {
+        await withTimeout(logger.close(), QUIT_LOG_CLOSE_TIMEOUT_MS);
+      } catch {
+        // ログが閉じられなくても終了は続ける
+      }
+      app.exit(0);
     })();
   });
 }
