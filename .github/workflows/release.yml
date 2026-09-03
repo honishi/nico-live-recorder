@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --mac
+          - os: windows-latest
+            args: --win
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    env:
+      # 署名用の証明書は CI に無いので、electron-builder の自動検出を止める
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      # ffmpeg-static はインストール時に実行環境向けのバイナリを取得するため、OS ごとに npm ci する
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npx electron-builder ${{ matrix.args }} --publish never
+      - name: Upload to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
