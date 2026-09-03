@@ -128,8 +128,11 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
     const repair = this.client?.isSubscriptionRepairRequired() === true;
     return {
       ...this.status,
+      // error は start() の失敗で明示的に入るので、接続状態からの再計算で上書きしない
       state:
-        this.status.state === 'stopped' || this.status.state === 'starting'
+        this.status.state === 'stopped' ||
+        this.status.state === 'starting' ||
+        this.status.state === 'error'
           ? this.status.state
           : repair
             ? 'repair-required'

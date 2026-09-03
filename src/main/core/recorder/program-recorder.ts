@@ -16,15 +16,21 @@ export interface ProgramRecorderOptions {
   logger?: Logger;
   programInfo?: NicoLiveProgramInfo;
   onComment?: (comment: NicoComment, count: number) => void;
-  /** 何回目の録画か。2 以上はファイル名に連番を付ける */
+  /** 何回目の録画か。2 以上はファイル名に連番を付ける。同名ファイルがあれば次の空き番号に進める */
   attempt?: number;
   /** 接続前の過去コメントも取得するか (再開時は false) */
   prefetchBackwardComments?: boolean;
+  /** コメントの出力先を固定する (再開時に最初のパートのファイルへ追記するため) */
+  commentsPath?: string;
+  /** 出力先が決まった時点で呼ばれる (録画中のサイズ表示などに使う) */
+  onPaths?: (paths: { attempt: number; videoPath: string; commentsPath: string }) => void;
 }
 
 export interface ProgramRecordResult {
   programId: string;
   programInfo: NicoLiveProgramInfo;
+  /** 実際に使った連番 (既存ファイルを避けて進むことがある) */
+  attempt: number;
   baseName: string;
   videoPath: string;
   commentsPath: string;
@@ -61,6 +67,27 @@ export function buildBaseName(info: NicoLiveProgramInfo, attempt = 1): string {
 }
 
 /**
+ * 既存のファイルを上書きしないよう、指定の連番から空いている番号を探す
+ * (クラッシュ後に同じ放送を録り直す場合など)
+ */
+export async function resolveAvailableAttempt(
+  outputDir: string,
+  info: NicoLiveProgramInfo,
+  attempt: number,
+  maxAttempt = 100,
+): Promise<number> {
+  for (let candidate = attempt; candidate < attempt + maxAttempt; candidate += 1) {
+    const videoPath = path.join(outputDir, `${buildBaseName(info, candidate)}.ts`);
+    try {
+      await fs.access(videoPath);
+    } catch {
+      return candidate;
+    }
+  }
+  throw new Error(`空いている連番が見つかりません: ${outputDir}`);
+}
+
+/**
  * 1 番組の映像とコメントを並行して録画し、メタデータ JSON も書き出す。
  * どちらかが失敗しても、もう一方は続行する。
  */
@@ -76,14 +103,18 @@ export async function recordProgram(
   const info = options.programInfo ?? (await client.getProgramInfo(signal));
 
   await fs.mkdir(options.outputDir, { recursive: true });
-  const baseName = buildBaseName(info, options.attempt ?? 1);
+  const attempt = await resolveAvailableAttempt(options.outputDir, info, options.attempt ?? 1);
+  const baseName = buildBaseName(info, attempt);
   const videoPath = path.join(options.outputDir, `${baseName}.ts`);
-  const commentsPath = path.join(options.outputDir, `${baseName}.comments.jsonl`);
+  const commentsPath =
+    options.commentsPath ?? path.join(options.outputDir, `${baseName}.comments.jsonl`);
   const metadataPath = path.join(options.outputDir, `${baseName}.json`);
+  options.onPaths?.({ attempt, videoPath, commentsPath });
 
   const result: ProgramRecordResult = {
     programId: options.programId,
     programInfo: info,
+    attempt,
     baseName,
     videoPath,
     commentsPath,

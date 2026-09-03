@@ -224,6 +224,14 @@ export async function recordVideo(
       reason = videoResult.reason === 'idle' ? 'idle' : 'endlist';
     }
     const exit = await muxer.finish();
+    // 多重化に失敗した ts は使えないので、ユーザーの停止以外では失敗として扱う (再開の対象になる)
+    if (exit.exitCode !== 0) {
+      const detail = `ffmpeg exited with ${exit.exitCode === null ? `signal ${exit.signal ?? '?'}` : `code ${exit.exitCode}`}`;
+      if (!signal?.aborted) {
+        throw new Error(detail);
+      }
+      logger.warn(`${detail} after stop request`);
+    }
     return {
       outputPath: options.outputPath,
       startedAt,

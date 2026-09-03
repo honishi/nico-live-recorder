@@ -108,6 +108,16 @@ export class ProgramDetector extends EventEmitter<ProgramDetectorEvents> {
     }
   }
 
+  /** 既知扱いを解除し、次の検知で再度通知できるようにする (開始に失敗したときなど) */
+  unmarkSeen(programId: string): void {
+    if (this.seen.delete(programId)) {
+      const index = this.seenOrder.indexOf(programId);
+      if (index >= 0) {
+        this.seenOrder.splice(index, 1);
+      }
+    }
+  }
+
   private async handlePush(program: PushProgram): Promise<void> {
     const programId = program.programId;
     if (!programId) {
