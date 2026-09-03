@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import WebSocket, { type RawData } from 'ws';
-import { DEFAULT_USER_AGENT } from '../../nico-client/internal/userAgent';
+import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
 import { silentLogger, type Logger } from '../logger';
 import { asString } from '../util';
 

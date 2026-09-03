@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { PushStateStore, PushSubscriptionState } from '../push/web-push-manager';
+import type { PushStateStore, PushSubscriptionState } from '../core/push/web-push-manager';
 
 /** push 購読状態を userData 配下の JSON に保存する */
 export class FilePushStateStore implements PushStateStore {

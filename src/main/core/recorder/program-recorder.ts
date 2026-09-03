@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { NicoClient } from '../../nico-client/NicoClient';
-import type { NicoLiveProgramInfo, NicoComment } from '../../nico-client/types';
+import { NicoClient } from '../../vendor/nico-client/NicoClient';
+import type { NicoLiveProgramInfo, NicoComment } from '../../vendor/nico-client/types';
 import { prefixLogger, silentLogger, type Logger } from '../logger';
 import { recordComments, type CommentRecordResult } from './comment-recorder';
 import { recordVideo, type VideoRecordResult } from './video-recorder';

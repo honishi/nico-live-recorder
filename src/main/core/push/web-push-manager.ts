@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
-import { DEFAULT_USER_AGENT } from '../nico-client/internal/userAgent';
-import { silentLogger, type Logger } from '../core/logger';
-import { AutoPushClient } from './autopush-client';
-import { pushDiagnostics } from './push-diagnostics';
+import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
+import { silentLogger, type Logger } from '../logger';
+import { AutoPushClient } from '../../vendor/web-push/autopush-client';
+import { pushDiagnostics } from '../../vendor/web-push/push-diagnostics';
 import {
   base64Encode,
   base64UrlEncode,
@@ -12,7 +12,7 @@ import {
   generateKeyPair,
   importKeys,
   parseAutoPushPayload,
-} from './web-push-crypto';
+} from '../../vendor/web-push/web-push-crypto';
 
 /** push 通知から得られる放送情報 */
 export interface PushProgram {

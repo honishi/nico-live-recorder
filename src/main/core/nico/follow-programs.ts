@@ -1,4 +1,4 @@
-import { DEFAULT_USER_AGENT } from '../../nico-client/internal/userAgent';
+import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
 import { asString } from '../util';
 
 /** フォロー中の放送一覧 API (要ログイン) から得られる放送 */

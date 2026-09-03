@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
-import { NicoClient } from '../../nico-client/NicoClient';
-import { NicoLiveProgramStatus } from '../../nico-client/types';
-import type { WebPushManager, PushProgram } from '../../push/web-push-manager';
+import { NicoClient } from '../../vendor/nico-client/NicoClient';
+import { NicoLiveProgramStatus } from '../../vendor/nico-client/types';
+import type { WebPushManager, PushProgram } from '../push/web-push-manager';
 import { silentLogger, type Logger } from '../logger';
 import { fetchFollowingOnAirPrograms, NotAuthenticatedError } from '../nico/follow-programs';
 

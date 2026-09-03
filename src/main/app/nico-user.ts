@@ -1,4 +1,4 @@
-import { DEFAULT_USER_AGENT } from '../nico-client/internal/userAgent';
+import { DEFAULT_USER_AGENT } from '../vendor/nico-client/internal/userAgent';
 import type { FollowCheckResult } from '../../shared/types';
 
 const NICKNAME_API = 'https://api.live2.nicovideo.jp/api/v1/user/nickname';

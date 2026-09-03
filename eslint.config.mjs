@@ -14,7 +14,7 @@ export default tseslint.config(
       'release/**',
       'node_modules/**',
       'resources/**',
-      'test/push/data/**',
+      'test/vendor/web-push/data/**',
     ],
   },
   js.configs.recommended,
@@ -67,12 +67,7 @@ export default tseslint.config(
   // 流用元 (stream-journal / chrome-nico-alert) のコードは upstream との差分を小さく保つため、
   // any や unsafe 系のルールを緩める
   {
-    files: [
-      'src/main/nico-client/**',
-      'src/main/push/autopush-client.ts',
-      'src/main/push/web-push-crypto.ts',
-      'test/push/web-push-crypto.test.ts',
-    ],
+    files: ['src/main/vendor/**', 'test/vendor/**'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unsafe-argument': 'off',

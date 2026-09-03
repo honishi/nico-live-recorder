@@ -1,6 +1,6 @@
-import { NicoClient } from '../../nico-client/NicoClient';
-import { DEFAULT_USER_AGENT } from '../../nico-client/internal/userAgent';
-import { NicoLiveProgramStatus, type NicoLiveProgramInfo } from '../../nico-client/types';
+import { NicoClient } from '../../vendor/nico-client/NicoClient';
+import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
+import { NicoLiveProgramStatus, type NicoLiveProgramInfo } from '../../vendor/nico-client/types';
 import { silentLogger, type Logger } from '../logger';
 import { FfmpegMuxer } from '../nico/ffmpeg';
 import {

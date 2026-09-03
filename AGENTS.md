@@ -43,7 +43,7 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 
 ## 流用元コード
 
-- `src/main/push/` は chrome-nico-alert、`src/main/nico-client/` は stream-journal 由来。upstream の修正を取り込めるよう、構造を大きく変えない。
+- `src/main/vendor/` は流用元のコード (`web-push/` は chrome-nico-alert、`nico-client/` は stream-journal 由来)。upstream の修正を取り込めるよう、構造を大きく変えない。ESLint の緩和対象でもある。
 
 ## ログ
 

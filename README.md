@@ -59,8 +59,9 @@ NICO_USER_SESSION=... npx tsx scripts/push-listen.ts        # push 購読の疎�
 src/main/core/nico/        視聴 WebSocket、HLS 取得・復号、ffmpeg 多重化、フォロー中番組 API
 src/main/core/recorder/    映像録画・コメント録画・番組単位の録画まとめ
 src/main/core/detector/    push + ポーリングの放送検知
-src/main/push/             AutoPush クライアント、RFC8291 復号、購読管理 (chrome-nico-alert 由来)
-src/main/nico-client/      NDGR コメントクライアント (stream-journal 由来)
+src/main/core/push/        Web Push の購読管理 (ニコニコ push API への登録、通知の復号)
+src/main/vendor/web-push/  AutoPush クライアントと RFC8291 復号 (chrome-nico-alert 由来)
+src/main/vendor/nico-client/  NDGR コメントクライアント (stream-journal 由来)
 src/main/app/              Electron 側: 設定、ログイン、録画マネージャ、トレイ、IPC
 src/renderer/              React の設定ウィンドウ
 resources/proto/           NDGR の protobuf 定義

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { once } from 'node:events';
-import { NicoClient } from '../../nico-client/NicoClient';
-import type { NicoComment, NicoLiveProgramInfo } from '../../nico-client/types';
+import { NicoClient } from '../../vendor/nico-client/NicoClient';
+import type { NicoComment, NicoLiveProgramInfo } from '../../vendor/nico-client/types';
 import { silentLogger, type Logger } from '../logger';
 
 export interface CommentRecorderOptions {
