@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="display:flex;flex-direction:column;gap:18px">
+  <sc-if value="{{ signedOut }}" hint-placeholder-val="{{ false }}">
+    <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface);padding:26px 24px;display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center">
+      <div style="width:38px;height:38px;border-radius:19px;background:var(--accent-weak);display:flex;align-items:center;justify-content:center">
+        <div style="width:11px;height:11px;border-radius:6px;background:var(--accent)"></div>
+      </div>
+      <div style="font-size:15px;font-weight:600;line-height:1.4;color:var(--text)">ログインすると自動録画がはじまります</div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-2);max-width:430px">push 通知はログイン中のアカウントがフォローしている配信者にだけ届きます。まずログインしてください。</div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button style="font-size:12px;font-weight:500;padding:6px 14px;border-radius:6px;border:1px solid transparent;background:var(--accent);color:#fff;cursor:pointer">ニコニコにログイン</button>
+        <button style="font-size:12px;font-weight:500;padding:6px 14px;border-radius:6px;border:1px solid var(--border-2);background:var(--surface);color:var(--text);cursor:pointer">保存先を先に決める</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+      <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface-2);padding:12px 14px;display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:.04em">STEP 1</div>
+        <div style="font-size:13px;line-height:1.6;color:var(--text)">ニコニコにログイン</div>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface-2);padding:12px 14px;display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:.04em">STEP 2</div>
+        <div style="font-size:13px;line-height:1.6;color:var(--text)">録画したい配信者をフォロー</div>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface-2);padding:12px 14px;display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:.04em">STEP 3</div>
+        <div style="font-size:13px;line-height:1.6;color:var(--text)">対象に追加して待つだけ</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ live }}" hint-placeholder-val="{{ true }}">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <div style="font-size:13px;font-weight:600;color:var(--text)">録画中</div>
+        <div style="font-size:12px;color:var(--text-3)">2 件</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="background:var(--rec-weak);border:1px solid var(--rec-border);border-radius:8px;padding:var(--pad);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center">
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;min-width:0">
+              <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px 2px 6px;border-radius:999px;background:var(--rec);color:#fff"><span style="width:6px;height:6px;border-radius:3px;background:#fff"></span>録画中</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text)">ひとえちゃん</span>
+              <span style="font-size:11px;color:var(--text-3);font-family:var(--mono)">lv351308144</span>
+            </div>
+            <div style="font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">死んだら即終了マリオ3 挑戦22回目 現在最高5-4</div>
+            <div style="display:flex;gap:16px;font-size:12px;color:var(--text-2);font-variant-numeric:tabular-nums">
+              <span>0:08:25</span><span>76.5 MB</span><span>コメント 442</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0">
+            <button style="font-size:12px;font-weight:500;padding:6px 12px;border-radius:6px;border:1px solid var(--rec-border);background:transparent;color:var(--rec);cursor:pointer">停止</button>
+            <button style="font-size:12px;font-weight:500;padding:6px 12px;border-radius:6px;border:1px solid var(--border-2);background:var(--surface);color:var(--text);cursor:pointer">表示</button>
+          </div>
+        </div>
+        <div style="background:var(--rec-weak);border:1px solid var(--rec-border);border-radius:8px;padding:var(--pad);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center">
+          <div style="display:flex;flex-direction:column;gap:6px;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;min-width:0">
+              <span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px 2px 6px;border-radius:999px;background:var(--rec);color:#fff"><span style="width:6px;height:6px;border-radius:3px;background:#fff"></span>録画中</span>
+              <span style="font-size:13px;font-weight:600;color:var(--text)">Mr.Tina葬葬</span>
+              <span style="font-size:11px;color:var(--text-3);font-family:var(--mono)">lv351312182</span>
+            </div>
+            <div style="font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">週末雑談 / 今週買ったもの紹介</div>
+            <div style="display:flex;gap:16px;font-size:12px;color:var(--text-2);font-variant-numeric:tabular-nums">
+              <span>0:41:02</span><span>312 MB</span><span>コメント 1,208</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-shrink:0">
+            <button style="font-size:12px;font-weight:500;padding:6px 12px;border-radius:6px;border:1px solid var(--rec-border);background:transparent;color:var(--rec);cursor:pointer">停止</button>
+            <button style="font-size:12px;font-weight:500;padding:6px 12px;border-radius:6px;border:1px solid var(--border-2);background:var(--surface);color:var(--text);cursor:pointer">表示</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <div style="font-size:13px;font-weight:600;color:var(--text)">直近の録画</div>
+          <div style="font-size:12px;color:var(--text-3)">今日 3 件</div>
+        </div>
+        <a href="#" style="font-size:12px;color:var(--accent);text-decoration:none">すべての履歴</a>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden">
+        <div style="display:grid;grid-template-columns:78px minmax(88px,1fr) minmax(0,2.4fr) 62px 68px 62px;gap:10px;align-items:center;padding:0 var(--pad);height:30px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:.02em">
+          <div>状態</div><div>配信者</div><div>タイトル</div><div style="text-align:right">時間</div><div style="text-align:right">サイズ</div><div style="text-align:right">コメント</div>
+        </div>
+        <div style="display:grid;grid-template-columns:78px minmax(88px,1fr) minmax(0,2.4fr) 62px 68px 62px;gap:10px;align-items:center;padding:0 var(--pad);height:var(--rowh);border-bottom:1px solid var(--border);font-size:13px;color:var(--text)">
+          <div><span style="display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:var(--success-weak);color:var(--success)">完了</span></div>
+          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">ひとえちゃん</div>
+          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)">死んだら即終了マリオ3 挑戦21回目</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">1:12:40</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">612 MB</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">3,041</div>
+        </div>
+        <div style="display:grid;grid-template-columns:78px minmax(88px,1fr) minmax(0,2.4fr) 62px 68px 62px;gap:10px;align-items:center;padding:0 var(--pad);height:var(--rowh);border-bottom:1px solid var(--border);font-size:13px;color:var(--text)">
+          <div><span style="display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:var(--success-weak);color:var(--success)">完了</span></div>
+          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">こばやし</div>
+          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">朝の雑談 #218</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">0:52:03</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">438 MB</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">1,764</div>
+        </div>
+        <div style="display:grid;grid-template-columns:78px minmax(88px,1fr) minmax(0,2.4fr) 62px 68px 62px;gap:10px;align-items:center;padding:0 var(--pad);height:var(--rowh);font-size:13px;color:var(--text)">
+          <div><span style="display:inline-block;font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:var(--warn-weak);color:var(--warn)">中断</span></div>
+          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Mr.Tina葬葬</div>
+          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-2)">接続が切れて 2 分で終了 — 詳細</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">0:02:11</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">18 MB</div>
+          <div style="text-align:right;font-variant-numeric:tabular-nums;color:var(--text-2)">42</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input placeholder="手動録画: lv123456789 または視聴ページの URL" style="flex:1;min-width:0;font-size:13px;padding:7px 10px;border-radius:6px;border:1px solid var(--border-2);background:var(--surface);color:var(--text)" />
+        <button style="font-size:12px;font-weight:500;padding:7px 14px;border-radius:6px;border:1px solid transparent;background:var(--accent);color:#fff;cursor:pointer">録画開始</button>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:820,&quot;height&quot;:480},&quot;mode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;live&quot;,&quot;signedout&quot;],&quot;default&quot;:&quot;live&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const signedOut = this.props.mode === 'signedout';
+    return { signedOut, live: !signedOut };
+  }
+}
+</script>
+</body>
+</html>

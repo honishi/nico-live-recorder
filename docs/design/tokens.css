@@ -1,0 +1,119 @@
+/* Nico Live Recorder — 設定ウィンドウ デザイントークン
+   ライトを既定にし、ダークは値だけ差し替える。名前は変えないこと。 */
+
+:root {
+  /* 面と文字 */
+  --bg: #eef0f3;
+  --surface: #ffffff;
+  --surface-2: #f7f8fa;
+  --titlebar: #e9ebee;
+  --text: #191c1f;
+  --text-2: #5f6772;
+  --text-3: #8d959f;
+  --border: #e4e7eb;
+  --border-2: #cdd2d8;
+  --hover: #f1f3f5;
+
+  /* 意味色 */
+  --accent: #2f6fd0;
+  --success: #1c8a4d;
+  --warn: #a86a06;
+  --rec: #d92b2b;
+
+  /* 淡色の面は導出する（ダークでも同じ式で成立） */
+  --accent-weak: color-mix(in oklab, var(--accent) 14%, var(--surface));
+  --success-weak: color-mix(in oklab, var(--success) 15%, var(--surface));
+  --warn-weak: color-mix(in oklab, var(--warn) 17%, var(--surface));
+  --rec-weak: color-mix(in oklab, var(--rec) 9%, var(--surface));
+  --rec-border: color-mix(in oklab, var(--rec) 34%, var(--surface));
+
+  /* 余白（この 6 段以外は使わない） */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+
+  /* 密度に依存する寸法 */
+  --pad: 14px;   /* カード・表の左右 padding */
+  --rowh: 36px;  /* 表の本文行 */
+
+  /* 文字 */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN",
+             "Yu Gothic UI", "Segoe UI", Meiryo, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-title: 20px;   /* 600 */
+  --fs-head: 15px;    /* 600 */
+  --fs-body: 13px;    /* 400 基準 */
+  --fs-sub: 12px;     /* 400 */
+  --fs-micro: 11px;   /* 600 */
+
+  /* 角丸 */
+  --r-badge: 4px;
+  --r-control: 6px;
+  --r-card: 8px;
+  --r-window: 10px;
+
+  color-scheme: light;
+}
+
+:root[data-density="compact"] {
+  --pad: 10px;
+  --rowh: 30px;
+}
+
+:root[data-theme="dark"] {
+  --bg: #1b1e21;
+  --surface: #24272b;
+  --surface-2: #2a2e33;
+  --titlebar: #1f2225;
+  --text: #e9ebee;
+  --text-2: #9ba3ad;
+  --text-3: #737b84;
+  --border: #33373c;
+  --border-2: #43484f;
+  --hover: #2c3035;
+
+  --accent: #6da8f5;
+  --success: #55c98a;
+  --warn: #dfa63e;
+  --rec: #ff6a61;
+
+  color-scheme: dark;
+}
+
+/* OS 追従にする場合（アプリ設定で上書きするなら data-theme を優先） */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1e21;
+    --surface: #24272b;
+    --surface-2: #2a2e33;
+    --titlebar: #1f2225;
+    --text: #e9ebee;
+    --text-2: #9ba3ad;
+    --text-3: #737b84;
+    --border: #33373c;
+    --border-2: #43484f;
+    --hover: #2c3035;
+    --accent: #6da8f5;
+    --success: #55c98a;
+    --warn: #dfa63e;
+    --rec: #ff6a61;
+    color-scheme: dark;
+  }
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--fs-body);
+  color: var(--text);
+  background: var(--bg);
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { filter: brightness(0.9); }
+
+/* 数値の列は必ず等幅数字にする */
+.num { font-variant-numeric: tabular-nums; text-align: right; color: var(--text-2); }
