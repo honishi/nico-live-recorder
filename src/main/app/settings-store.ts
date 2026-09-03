@@ -22,7 +22,11 @@ export function defaultSettings(defaultOutputDir: string): AppSettings {
 /**
  * 設定の JSON ファイル永続化。書き込みは一時ファイル経由で置き換える
  */
-export class SettingsStore extends EventEmitter<{ change: [settings: AppSettings] }> {
+export class SettingsStore extends EventEmitter<{
+  change: [settings: AppSettings];
+  /** UI 状態だけが変わった (検知の再起動は不要) */
+  ui: [ui: UiState];
+}> {
   private settings: AppSettings;
 
   constructor(
@@ -48,6 +52,7 @@ export class SettingsStore extends EventEmitter<{ change: [settings: AppSettings
   updateUi(patch: Partial<UiState>): AppSettings {
     this.settings = { ...this.settings, ui: { ...this.settings.ui, ...patch } };
     this.persist();
+    this.emit('ui', { ...this.settings.ui });
     return this.get();
   }
 
