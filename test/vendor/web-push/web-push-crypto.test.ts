@@ -21,7 +21,7 @@ import {
   parseAutoPushPayload,
   decryptNotification,
   decryptNotificationWithInfo,
-} from '../../src/main/vendor/web-push/web-push-crypto';
+} from '../../../src/main/vendor/web-push/web-push-crypto';
 
 // ========== Test Data Loading ==========
 const testDataDir = path.join(__dirname, 'data');
