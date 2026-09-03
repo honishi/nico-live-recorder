@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactElement } from 'react';
 import type { AppSettings, FollowCheckResult } from '@shared/types';
 
 interface Props {
@@ -13,7 +13,7 @@ const FOLLOW_LABELS: Record<FollowCheckResult, string> = {
   unknown: '不明',
 };
 
-export function TargetsPanel({ settings, loggedIn, run }: Props): JSX.Element {
+export function TargetsPanel({ settings, loggedIn, run }: Props): ReactElement {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [followStates, setFollowStates] = useState<Record<string, FollowCheckResult>>({});

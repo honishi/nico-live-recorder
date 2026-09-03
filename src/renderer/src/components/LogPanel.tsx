@@ -1,11 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactElement } from 'react';
 import type { LogEntry } from '@shared/types';
 
 interface Props {
   logs: LogEntry[];
 }
 
-export function LogPanel({ logs }: Props): JSX.Element {
+export function LogPanel({ logs }: Props): ReactElement {
   const bottom = useRef<HTMLDivElement>(null);
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: 'end' });

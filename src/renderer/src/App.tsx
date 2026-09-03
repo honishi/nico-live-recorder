@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import type { AppSettings, AppStatus } from '@shared/types';
 import { AuthPanel } from './components/AuthPanel';
 import { LogPanel } from './components/LogPanel';
@@ -6,7 +6,7 @@ import { RecordingsPanel } from './components/RecordingsPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { TargetsPanel } from './components/TargetsPanel';
 
-export function App(): JSX.Element {
+export function App(): ReactElement {
   const [status, setStatus] = useState<AppStatus>();
   const [settings, setSettings] = useState<AppSettings>();
   const [error, setError] = useState<string>();
