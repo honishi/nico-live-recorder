@@ -66,7 +66,7 @@ function createMainWindow(settings: SettingsStore): BrowserWindow {
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
     },
