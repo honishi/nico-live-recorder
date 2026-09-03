@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="display:flex;flex-direction:column;gap:10px;min-height:0">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer">
+        <input type="checkbox" style="accent-color:var(--accent);width:13px;height:13px" />debug を表示
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-2);cursor:pointer">
+        <input type="checkbox" checked="{{ true }}" style="accent-color:var(--accent);width:13px;height:13px" />自動スクロール
+      </label>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button style="font-size:12px;font-weight:500;padding:5px 12px;border-radius:6px;border:1px solid var(--border-2);background:var(--surface);color:var(--text);cursor:pointer">ファイルを開く</button>
+      <button style="font-size:12px;font-weight:500;padding:5px 12px;border-radius:6px;border:1px solid var(--border-2);background:var(--surface);color:var(--text);cursor:pointer">コピー</button>
+    </div>
+  </div>
+  <div style="border:1px solid var(--border);border-radius:8px;background:var(--surface-2);padding:10px 12px;display:flex;flex-direction:column;gap:3px;font-family:var(--mono);font-size:11px;line-height:1.6;overflow:hidden;flex:1;min-height:0">
+    <div style="display:grid;grid-template-columns:62px 46px minmax(0,1fr);gap:8px">
+      <span style="color:var(--text-3)">19:26:03</span><span style="color:var(--accent);font-weight:600">INFO</span><span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">[push] received "ひとえちゃんさんが生放送を開始" lv351308144</span>
+    </div>
+    <div style="display:grid;grid-template-columns:62px 46px minmax(0,1fr);gap:8px">
+      <span style="color:var(--text-3)">19:26:03</span><span style="color:var(--success);font-weight:600">REC</span><span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">start lv351308144 → 20260903_1926_ひとえちゃん.ts</span>
+    </div>
+    <div style="display:grid;grid-template-columns:62px 46px minmax(0,1fr);gap:8px">
+      <span style="color:var(--text-3)">19:26:13</span><span style="color:var(--text-3);font-weight:600">INFO</span><span style="color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">[comments] segment completed with 3 comments</span>
+    </div>
+    <div style="display:grid;grid-template-columns:62px 46px minmax(0,1fr);gap:8px">
+      <span style="color:var(--text-3)">19:26:29</span><span style="color:var(--text-3);font-weight:600">INFO</span><span style="color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">[autopush] WebSocket state check: OPEN</span>
+    </div>
+    <div style="display:grid;grid-template-columns:62px 46px minmax(0,1fr);gap:8px">
+      <span style="color:var(--text-3)">19:27:41</span><span style="color:var(--warn);font-weight:600">WARN</span><span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">[lv351312182] segment fetch retry (1/5)</span>
+    </div>
+    <div style="display:grid;grid-template-columns:62px 46px minmax(0,1fr);gap:8px">
+      <span style="color:var(--text-3)">19:27:44</span><span style="color:var(--text-3);font-weight:600">INFO</span><span style="color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">detected lv351312190 by 名無し (not a target)</span>
+    </div>
+    <div style="display:grid;grid-template-columns:62px 46px minmax(0,1fr);gap:8px">
+      <span style="color:var(--text-3)">19:28:02</span><span style="color:var(--rec);font-weight:600">ERROR</span><span style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">[lv351301004] comment socket closed unexpectedly (1006)</span>
+    </div>
+    <div style="display:grid;grid-template-columns:62px 46px minmax(0,1fr);gap:8px">
+      <span style="color:var(--text-3)">19:28:05</span><span style="color:var(--text-3);font-weight:600">INFO</span><span style="color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">[poll] 4 targets checked in 812ms</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:700,&quot;height&quot;:300}}"></script>
+</body>
+</html>
