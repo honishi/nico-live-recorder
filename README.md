@@ -67,6 +67,11 @@ src/renderer/              React の設定ウィンドウ
 resources/proto/           NDGR の protobuf 定義
 ```
 
+## CI とリリース
+
+- PR と main への push で GitHub Actions (`.github/workflows/ci.yml`) が format / lint / typecheck / test / build を実行します。
+- `v0.1.0` のような `v` 始まりのタグを push すると、macOS (Apple Silicon) と Windows (x64) のパッケージを作り、下書きのリリースに添付します (`release.yml`)。内容を確認してから公開してください。署名と公証は行っていません。
+
 ## パッケージング
 
 ```bash
