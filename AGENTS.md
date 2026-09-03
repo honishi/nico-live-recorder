@@ -26,7 +26,7 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 
 ## 検証
 
-- commit 前に `npm run format` → `npm run typecheck` → `npm test` を通す。
+- commit 前に `npm run format` → `npm run lint` → `npm run typecheck` → `npm test` を通す。
 - 録画コアの変更は `npx tsx scripts/record.ts <lv番号> 30 ./recordings` で実放送に対して確認する。
 - Electron 全体は `--remote-debugging-port` 付きで起動し、CDP から `window.api.*` を呼んで確認できる。
 - ログインが必要な経路 (push 登録、フォロー中番組のポーリング、フォロー状態確認) はエージェントでは検証できない。変更したら人間側の確認を依頼する。

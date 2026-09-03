@@ -3,7 +3,9 @@
  * Implementation of encryption/decryption processing
  */
 // Node の WebCrypto 型 (ブラウザの lib.dom を使わないため明示する)
-type CryptoKey = import('node:crypto').webcrypto.CryptoKey;
+import type { webcrypto } from 'node:crypto';
+
+type CryptoKey = webcrypto.CryptoKey;
 
 // ========== Base64 Encoding/Decoding ==========
 /**
