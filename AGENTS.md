@@ -17,3 +17,24 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 
 - 読者の理解を助けるためのコメントを日本語で書く。
 - コードを目で追うときのひとかたまりの処理ごとにコメントを付け、上から自然に読める状態にする。
+
+## 検証
+
+- commit 前に `npm run format` → `npm run typecheck` → `npm test` を通す。
+- 録画コアの変更は `npx tsx scripts/record.ts <lv番号> 30 ./recordings` で実放送に対して確認する。
+- Electron 全体は `--remote-debugging-port` 付きで起動し、CDP から `window.api.*` を呼んで確認できる。
+- ログインが必要な経路 (push 登録、フォロー中番組のポーリング、フォロー状態確認) はエージェントでは検証できない。変更したら人間側の確認を依頼する。
+
+## ニコニコ API の扱い
+
+- 非公開 API (push 登録、フォロー状態確認、nvapi など) は予告なく変わる前提で書く。
+- 失敗は機能単位で degrade させ、録画や検知の全体を止めない。
+
+## 流用元コード
+
+- `src/main/push/` は chrome-nico-alert、`src/main/nico-client/` は stream-journal 由来。upstream の修正を取り込めるよう、構造を大きく変えない。
+
+## ログ
+
+- ユーザーが見る情報 (検知、録画の開始・終了、エラー) は `info` 以上。内部の状態遷移は `debug`。
+- パッケージ版は `info` 以上だけをウィンドウのログとファイルに出す。
