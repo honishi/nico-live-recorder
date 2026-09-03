@@ -4,6 +4,8 @@ import {
   type AppSettings,
   type AppStatus,
   type FollowCheckResult,
+  type HistoryPage,
+  type HistoryQuery,
   type RecordingInfo,
   type TargetAddResult,
   type TargetUser,
@@ -37,6 +39,16 @@ const api = {
     ipcRenderer.invoke(IPC.startRecording, input),
   stopRecording: (programId: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.stopRecording, programId),
+  listHistory: (query: HistoryQuery): Promise<HistoryPage> =>
+    ipcRenderer.invoke(IPC.listHistory, query),
+  removeHistory: (programId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.removeHistory, programId),
+  historyContextMenu: (
+    programId: string,
+    videoPath?: string,
+    commentsPath?: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke(IPC.historyContextMenu, programId, videoPath, commentsPath),
   onStatusChanged: (listener: (status: AppStatus) => void): (() => void) => {
     const handler = (_event: unknown, status: AppStatus): void => listener(status);
     ipcRenderer.on(IPC.statusChanged, handler);

@@ -4,6 +4,7 @@ import { IPC, type WindowBounds } from '../shared/types';
 import { AppLogger } from './app/app-logger';
 import { NicoAuth } from './app/auth';
 import { buildStatus, registerIpcHandlers } from './app/ipc';
+import { HistoryStore } from './app/history-store';
 import { FilePushStateStore } from './app/push-state-store';
 import { RecordingManager } from './app/recording-manager';
 import { SettingsStore } from './app/settings-store';
@@ -132,12 +133,20 @@ async function bootstrap(): Promise<void> {
     logger.error('ffmpeg not found', error);
   }
 
-  const manager = new RecordingManager({ settings, auth, pushStore, logger, ffmpegPath });
+  const history = new HistoryStore(path.join(userData, 'recording-history.json'));
+  const manager = new RecordingManager({
+    settings,
+    auth,
+    pushStore,
+    history,
+    logger,
+    ffmpegPath,
+  });
 
   // 録画中はスリープさせない
   let blockerId: number | undefined;
   manager.on('change', () => {
-    const recording = manager.getRecordings().some((r) => r.state === 'recording');
+    const recording = manager.hasActiveRecordings();
     if (recording && blockerId === undefined) {
       blockerId = powerSaveBlocker.start('prevent-app-suspension');
     } else if (!recording && blockerId !== undefined) {
@@ -216,15 +225,17 @@ async function bootstrap(): Promise<void> {
     quitting = true;
   });
   app.on('will-quit', (event) => {
-    if (manager.getRecordings().some((r) => r.state === 'recording' || r.state === 'starting')) {
+    if (manager.hasActiveRecordings()) {
       event.preventDefault();
       logger.info('stopping recordings before quit');
       void manager.shutdown().finally(() => {
+        history.flush();
         logger.close();
         app.exit(0);
       });
     } else {
       void manager.shutdown();
+      history.flush();
       logger.close();
     }
   });
