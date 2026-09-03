@@ -230,20 +230,28 @@ async function bootstrap(): Promise<void> {
   app.on('before-quit', () => {
     quitting = true;
   });
+  // 終了時は録画の停止処理 (ffmpeg の書き終わり、履歴の確定) とログの書き出しを待ってから抜ける
+  let quitHandled = false;
   app.on('will-quit', (event) => {
-    if (manager.hasActiveRecordings()) {
-      event.preventDefault();
-      logger.info('stopping recordings before quit');
-      void manager.shutdown().finally(() => {
-        history.flush();
-        logger.close();
-        app.exit(0);
-      });
-    } else {
-      void manager.shutdown();
-      history.flush();
-      logger.close();
+    if (quitHandled) {
+      return;
     }
+    quitHandled = true;
+    event.preventDefault();
+    if (manager.hasActiveRecordings()) {
+      logger.info('stopping recordings before quit');
+    }
+    void (async () => {
+      try {
+        await manager.shutdown();
+      } catch (error) {
+        logger.error('shutdown failed', error);
+      } finally {
+        history.flush();
+        await logger.close();
+        app.exit(0);
+      }
+    })();
   });
 }
 

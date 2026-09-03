@@ -156,9 +156,12 @@ export function codedError(code: ErrorCode, detail?: string): Error {
   return new Error(detail ? `${code}: ${detail}` : code);
 }
 
+/**
+ * ipcRenderer.invoke の reject は "Error invoking remote method 'x': Error: E_XXX: ..." の形で
+ * 届くため、先頭ではなく文中から既知のコードを探す
+ */
 export function parseErrorCode(message: string): ErrorCode | undefined {
-  const match = message.match(/^(E_[A-Z_]+)/);
-  return match ? (match[1] as ErrorCode) : undefined;
+  return Object.values(ERROR_CODES).find((code) => new RegExp(`\\b${code}\\b`).test(message));
 }
 
 export const IPC = {

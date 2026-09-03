@@ -85,6 +85,19 @@ describe('ProgramDetector', () => {
     detector.stop();
   });
 
+  test('unmarkSeen した番組は次のポーリングで再度通知する', async () => {
+    fetchFollowing.mockResolvedValue([following('lv1', '100')]);
+    const { detector, detected } = createDetector();
+    detector.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detected).toHaveLength(1);
+
+    detector.unmarkSeen('lv1');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(detected).toHaveLength(2);
+    detector.stop();
+  });
+
   test('未ログインならポーリングしない', async () => {
     const detector = new ProgramDetector({ cookieHeader: async () => undefined });
     detector.start();

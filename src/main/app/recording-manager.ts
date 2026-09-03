@@ -45,6 +45,9 @@ const SIZE_POLL_MS = 1_000;
 const OUTPUT_DIR_CHECK_TTL_MS = 30_000;
 /** 録画が途中で止まったときの再開の上限と待ち時間 */
 const MAX_RECORD_ATTEMPTS = 10;
+/** 検知直後の開始 (番組情報の取得) が失敗したときの再試行 */
+const DETECT_START_ATTEMPTS = 3;
+const DETECT_START_RETRY_MS = 30_000;
 const RETRY_BASE_DELAY_MS = 5_000;
 const RETRY_MAX_DELAY_MS = 60_000;
 
@@ -120,10 +123,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     return [...active, ...(await HistoryStore.checkExistence(this.history.finishedToday()))];
   }
 
+  /** 停止処理中 (finishing) も含めて、まだ終わっていない録画があるか */
   hasActiveRecordings(): boolean {
-    return [...this.active.values()].some(
-      (a) => a.info.state === 'recording' || a.info.state === 'starting',
-    );
+    return this.active.size > 0;
   }
 
   /** 合計サイズから削除済みを除くため、条件に合う全件でファイルの有無を確認する */
@@ -285,15 +287,32 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.logger.info(
       `[detector] target program via ${program.source}: ${program.programId} "${program.title}" by ${target.name}`,
     );
-    try {
-      await this.startRecording(program.programId, program.source, {
-        title: program.title,
-        providerId: program.providerId,
-        providerName: target.name,
-      });
-    } catch (error) {
-      this.logger.error(`[rec] could not start ${program.programId}`, error);
+    // 番組情報の取得などで一時的に失敗しても、放送中なら何度か開始を試みる。
+    // それでも駄目なら既知扱いを解除し、次のポーリングや push で拾い直せるようにする
+    for (let attempt = 1; attempt <= DETECT_START_ATTEMPTS; attempt += 1) {
+      try {
+        await this.startRecording(program.programId, program.source, {
+          title: program.title,
+          providerId: program.providerId,
+          providerName: target.name,
+        });
+        return;
+      } catch (error) {
+        const message = (error as Error).message;
+        if (message.endsWith(NicoLiveProgramStatus.ended)) {
+          this.logger.info(`[rec] ${program.programId} already ended, not recording`);
+          return;
+        }
+        this.logger.warn(
+          `[rec] could not start ${program.programId} (attempt ${attempt}/${DETECT_START_ATTEMPTS}): ${message}`,
+        );
+        if (attempt < DETECT_START_ATTEMPTS && !this.stopped) {
+          await new Promise((resolve) => setTimeout(resolve, DETECT_START_RETRY_MS));
+        }
+      }
     }
+    this.logger.error(`[rec] giving up on ${program.programId} for now; it may be detected again`);
+    this.detector?.unmarkSeen(program.programId);
   }
 
   /**
@@ -329,6 +348,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       settings.outputDir,
       sanitizeDirName(providerName ?? providerId ?? 'unknown'),
     );
+    // 同じ番組を録り直す場合 (クラッシュ後の再起動など) は、前回のファイルとコメント数を引き継ぐ
+    const previous = this.history.get(programId);
+    const previousPaths = previous?.videoPaths ?? [];
+    const previousBytes = await sumFileSizes(previousPaths);
     const info: RecordingInfo = {
       programId,
       title: programInfo.title || meta.title || programId,
@@ -337,16 +360,18 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       source,
       state: 'starting',
       startedAt: new Date().toISOString(),
-      commentCount: 0,
-      videoBytes: 0,
+      commentCount: previous?.commentCount ?? 0,
+      videoBytes: previousBytes,
       outputDir,
+      videoPaths: previousPaths.length > 0 ? previousPaths : undefined,
+      commentsPath: previous?.commentsPath,
     };
     const controller = new AbortController();
     const recording: ActiveRecording = {
       info,
       controller,
       done: Promise.resolve(),
-      finishedPartBytes: 0,
+      finishedPartBytes: previousBytes,
     };
     this.active.set(programId, recording);
     // 開始時点で履歴に残す。途中でアプリが落ちても「中断」として復元できる
@@ -368,7 +393,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         let outcome: 'done' | 'failed' = 'done';
         let lastReason = 'no video';
         while (true) {
-          info.attempt = attempt;
+          // コメント件数はパートをまたいで累計する
+          const countBefore = info.commentCount;
           const result = await recordProgram(
             {
               programId,
@@ -378,16 +404,23 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               logger: prefixLogger(this.logger, programId),
               programInfo,
               attempt,
-              prefetchBackwardComments: attempt === 1,
+              // 既存ファイルと重ならない連番を recorder が選ぶので、実際の値をここで受け取る
+              onPaths: (paths) => {
+                info.attempt = paths.attempt;
+                info.videoPath = paths.videoPath;
+                info.commentsPath ??= paths.commentsPath;
+              },
+              // コメントは最初のパートのファイルに追記し続ける
+              commentsPath: info.commentsPath,
+              prefetchBackwardComments: attempt === 1 && !previous,
               onComment: (_comment, count) => {
-                info.commentCount = count;
+                info.commentCount = countBefore + count;
               },
             },
             controller.signal,
           );
           info.videoPath = result.videoPath;
           info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
-          info.commentsPath ??= result.commentsPath;
           await this.refreshSize(recording);
           recording.finishedPartBytes = info.videoBytes;
 
@@ -418,15 +451,23 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
             outcome = 'done';
             break;
           }
-          // 待っている間に番組が終わっていたら、そこまでの録画で完了とする
+          // 待っている間に番組が終わっていたら、そこまでの録画で完了とする。
+          // 番組情報の取得に失敗したときは終了とみなさず、次の試行に回す
           const latest = await new NicoClient(programId, { cookies })
             .getProgramInfo()
-            .catch(() => undefined);
-          if (!latest || latest.status === NicoLiveProgramStatus.ended || !latest.webSocketUrl) {
+            .catch((error: unknown) => {
+              this.logger.warn(`[rec] could not check ${programId} before resuming`, error);
+              return undefined;
+            });
+          if (latest && (latest.status === NicoLiveProgramStatus.ended || !latest.webSocketUrl)) {
             this.logger.info(`[rec] ${programId} has ended, not resuming`);
             outcome = 'done';
             info.error = undefined;
             break;
+          }
+          if (latest) {
+            // 切断の原因が WebSocket URL の失効でも再開できるよう、最新の番組情報で繋ぎ直す
+            programInfo = latest;
           }
           attempt += 1;
           delayMs = Math.min(RETRY_MAX_DELAY_MS, delayMs * 2);
@@ -549,6 +590,18 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private emitChange(): void {
     this.emit('change');
   }
+}
+
+async function sumFileSizes(paths: string[]): Promise<number> {
+  let total = 0;
+  for (const filePath of paths) {
+    try {
+      total += (await fs.stat(filePath)).size;
+    } catch {
+      // 消されたファイルは数えない
+    }
+  }
+  return total;
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {

@@ -32,8 +32,7 @@ describe('AppLogger', () => {
     const logger = new AppLogger(dir, 'info');
     logger.debug('[detector] quiet');
     logger.info('[rec] start lv1');
-    logger.close();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await logger.close();
 
     expect(logger.recent().map((e) => [e.level, e.category])).toEqual([
       ['debug', 'poll'],
@@ -50,18 +49,17 @@ describe('AppLogger', () => {
     const logger = new AppLogger(dir, 'info');
     logger.setOutputLevel('debug');
     logger.debug('[detector] verbose');
-    logger.close();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await logger.close();
     expect(fs.readFileSync(path.join(dir, 'app.log'), 'utf8')).toContain('verbose');
   });
 
-  test('entry イベントで 1 件ずつ通知する', () => {
+  test('entry イベントで 1 件ずつ通知する', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const logger = new AppLogger(dir, 'info');
     const listener = vi.fn();
     logger.on('entry', listener);
     logger.warn('something');
-    logger.close();
+    await logger.close();
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener.mock.calls[0][0]).toMatchObject({ level: 'warn', message: 'something' });
   });

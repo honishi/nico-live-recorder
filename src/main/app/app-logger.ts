@@ -97,9 +97,17 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
     this.write('error', args);
   }
 
-  close(): void {
-    this.stream?.end();
+  /** ファイルへの書き込みを終えるまで待つ */
+  close(): Promise<void> {
+    const stream = this.stream;
     this.stream = undefined;
+    if (!stream) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      stream.once('error', () => resolve());
+      stream.end(() => resolve());
+    });
   }
 
   private write(level: LogLevel, args: unknown[]): void {

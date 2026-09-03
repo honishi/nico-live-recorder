@@ -1,4 +1,11 @@
-import { buildBaseName, sanitizeFileName } from '../../../src/main/core/recorder/program-recorder';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  buildBaseName,
+  resolveAvailableAttempt,
+  sanitizeFileName,
+} from '../../../src/main/core/recorder/program-recorder';
 import {
   NicoLiveProgramStatus,
   type NicoLiveProgramInfo,
@@ -62,5 +69,36 @@ describe('buildBaseName', () => {
 
   test('開始時刻が無ければ現在時刻を使う', () => {
     expect(buildBaseName(info({ beginTime: 0 }))).toMatch(/^\d{8}_\d{6}_lv123_タイトル$/);
+  });
+});
+
+describe('resolveAvailableAttempt', () => {
+  test('既存の録画ファイルがあれば次の空き連番を返す', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nlr-attempt-'));
+    try {
+      const program = {
+        nicoliveProgramId: 'lv123',
+        title: 'x',
+        description: '',
+        status: NicoLiveProgramStatus.onAir,
+        openTime: 0,
+        beginTime: Math.floor(new Date(2026, 8, 3, 1, 0, 0).getTime() / 1000),
+        vposBaseTime: 0,
+        endTime: 0,
+        scheduledEndTime: 0,
+        hasTimeshift: false,
+        supplierIntroduction: '',
+        commentCount: 0,
+        watchCount: 0,
+      };
+      expect(await resolveAvailableAttempt(dir, program, 1)).toBe(1);
+      fs.writeFileSync(path.join(dir, `${buildBaseName(program, 1)}.ts`), '');
+      fs.writeFileSync(path.join(dir, `${buildBaseName(program, 2)}.ts`), '');
+      expect(await resolveAvailableAttempt(dir, program, 1)).toBe(3);
+      expect(await resolveAvailableAttempt(dir, program, 2)).toBe(3);
+      expect(await resolveAvailableAttempt(dir, program, 5)).toBe(5);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
