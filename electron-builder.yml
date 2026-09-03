@@ -1,0 +1,26 @@
+appId: net.honishi.nico-live-recorder
+productName: NicoLiveRecorder
+directories:
+  buildResources: build
+  output: release
+files:
+  - out/**
+  - '!**/.DS_Store'
+# ffmpeg バイナリは asar の外に置かないと spawn できない
+asarUnpack:
+  - node_modules/ffmpeg-static/**
+extraResources:
+  - from: resources/proto
+    to: proto
+npmRebuild: false
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.utilities
+win:
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

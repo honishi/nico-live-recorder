@@ -1,0 +1,8 @@
+.DS_Store
+node_modules/
+out/
+dist/
+release/
+*.log
+.claude/settings.local.json
+.codex/
