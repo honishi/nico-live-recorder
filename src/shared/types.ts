@@ -55,6 +55,7 @@ export interface RecordingInfo {
   videoBytes: number;
   outputDir: string;
   videoPath?: string;
+  commentsPath?: string;
   /** 録画ファイルが保存先に残っているか (終了後に確認する) */
   videoExists?: boolean;
   error?: string;
@@ -93,12 +94,31 @@ export interface AppAlert {
   actionLabel: string;
 }
 
+export interface HistoryQuery {
+  query?: string;
+  provider?: string;
+  state?: '' | 'done' | 'failed';
+  offset?: number;
+  limit?: number;
+}
+
+export interface HistoryPage {
+  items: RecordingInfo[];
+  total: number;
+  totalBytes: number;
+  /** 絞り込み用の配信者名の一覧 */
+  providers: string[];
+}
+
 export interface AppStatus {
   version: string;
   auth: AuthStatus;
   push: PushStatusInfo;
   detectorRunning: boolean;
+  /** 録画中のものと、当日に終わったもの。それ以前は履歴 API で取る */
   recordings: RecordingInfo[];
+  /** 履歴が更新されるたびに増える (履歴タブの再取得のきっかけ) */
+  historyVersion: number;
   logs: LogEntry[];
   alerts: AppAlert[];
   logFilePath: string;
@@ -155,5 +175,8 @@ export const IPC = {
   logout: 'auth:logout',
   startRecording: 'recording:start',
   stopRecording: 'recording:stop',
+  listHistory: 'history:list',
+  removeHistory: 'history:remove',
+  historyContextMenu: 'history:contextMenu',
   statusChanged: 'app:statusChanged',
 } as const;

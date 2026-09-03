@@ -178,7 +178,7 @@ export function App(): ReactElement {
         )}
         {tab === 'history' && (
           <HistoryTab
-            recordings={status.recordings}
+            historyVersion={status.historyVersion}
             now={now}
             onShowFile={(path) => void window.api.openPath(path)}
             onShowLog={showLog}

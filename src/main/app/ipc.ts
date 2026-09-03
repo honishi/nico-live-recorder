@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import {
   codedError,
   ERROR_CODES,
@@ -6,6 +6,7 @@ import {
   type AppSettings,
   type AppStatus,
   type FollowCheckResult,
+  type HistoryQuery,
   type TargetAddResult,
   type TargetUser,
   type UiState,
@@ -29,13 +30,13 @@ const LOG_ENTRIES_FOR_UI = 1000;
 
 export async function buildStatus(ctx: IpcContext): Promise<AppStatus> {
   const loggedIn = await ctx.auth.isLoggedIn();
-  await ctx.manager.refreshVideoExistence();
   return {
     version: ctx.version,
     auth: { loggedIn },
     push: ctx.manager.getPushStatus(),
     detectorRunning: ctx.manager.detectorRunning,
-    recordings: ctx.manager.getRecordings(),
+    recordings: await ctx.manager.getRecordings(),
+    historyVersion: ctx.manager.historyVersion,
     logs: ctx.logger.recent(LOG_ENTRIES_FOR_UI),
     alerts: await ctx.manager.getAlerts(loggedIn),
     logFilePath: ctx.logger.logFilePath,
@@ -169,5 +170,41 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   });
   ipcMain.handle(IPC.stopRecording, (_event, programId: string) =>
     ctx.manager.stopRecording(String(programId)),
+  );
+
+  ipcMain.handle(IPC.listHistory, (_event, query: HistoryQuery) =>
+    ctx.manager.getHistoryPage({
+      query: typeof query?.query === 'string' ? query.query : undefined,
+      provider: typeof query?.provider === 'string' ? query.provider : undefined,
+      state: query?.state === 'done' || query?.state === 'failed' ? query.state : undefined,
+      offset: typeof query?.offset === 'number' ? query.offset : 0,
+      limit: typeof query?.limit === 'number' ? Math.min(200, query.limit) : undefined,
+    }),
+  );
+  ipcMain.handle(IPC.removeHistory, (_event, programId: string) =>
+    ctx.manager.removeHistory(String(programId)),
+  );
+  // 履歴行の右クリックメニュー。ファイル操作は main 側で行う
+  ipcMain.handle(
+    IPC.historyContextMenu,
+    (event, programId: string, videoPath?: string, commentsPath?: string) =>
+      new Promise<void>((resolve) => {
+        const menu = Menu.buildFromTemplate([
+          {
+            label: 'フォルダで表示',
+            enabled: typeof videoPath === 'string' && videoPath.length > 0,
+            click: () => shell.showItemInFolder(videoPath ?? ''),
+          },
+          {
+            label: 'コメントを開く',
+            enabled: typeof commentsPath === 'string' && commentsPath.length > 0,
+            click: () => void shell.openPath(commentsPath ?? ''),
+          },
+          { type: 'separator' },
+          { label: '履歴から削除', click: () => void ctx.manager.removeHistory(String(programId)) },
+        ]);
+        const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+        menu.popup({ window, callback: () => resolve() });
+      }),
   );
 }

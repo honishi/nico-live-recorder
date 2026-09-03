@@ -13,11 +13,14 @@ import {
   codedError,
   ERROR_CODES,
   type AppAlert,
+  type HistoryPage,
+  type HistoryQuery,
   type PushStatusInfo,
   type RecordingInfo,
   type RecordingSource,
 } from '../../shared/types';
 import type { NicoAuth } from './auth';
+import { HistoryStore } from './history-store';
 import type { SettingsStore } from './settings-store';
 
 interface ActiveRecording {
@@ -31,11 +34,11 @@ export interface RecordingManagerOptions {
   settings: SettingsStore;
   auth: NicoAuth;
   pushStore: PushStateStore;
+  history: HistoryStore;
   logger: Logger;
   ffmpegPath?: string;
 }
 
-const HISTORY_LIMIT = 50;
 const SIZE_POLL_MS = 1_000;
 const OUTPUT_DIR_CHECK_TTL_MS = 30_000;
 
@@ -53,7 +56,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private push?: WebPushManager;
   private detector?: ProgramDetector;
   private readonly active = new Map<string, ActiveRecording>();
-  private readonly history: RecordingInfo[] = [];
+  private readonly history: HistoryStore;
+  private historyVersionCounter = 0;
   private restarting?: Promise<void>;
   private stopped = false;
   /** ログイン cookie はあるのに API が認証エラーを返した (セッション切れ) */
@@ -65,6 +69,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.settings = options.settings;
     this.auth = options.auth;
     this.pushStore = options.pushStore;
+    this.history = options.history;
     this.logger = options.logger;
     this.ffmpegPath = options.ffmpegPath;
 
@@ -99,8 +104,35 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     };
   }
 
-  getRecordings(): RecordingInfo[] {
-    return [...[...this.active.values()].map((a) => a.info), ...this.history];
+  get historyVersion(): number {
+    return this.historyVersionCounter;
+  }
+
+  /** 録画中のものと、当日に終わったもの (ファイルの有無を確認して返す) */
+  async getRecordings(): Promise<RecordingInfo[]> {
+    const active = [...this.active.values()].map((a) => a.info);
+    return [...active, ...(await HistoryStore.checkExistence(this.history.finishedToday()))];
+  }
+
+  hasActiveRecordings(): boolean {
+    return [...this.active.values()].some(
+      (a) => a.info.state === 'recording' || a.info.state === 'starting',
+    );
+  }
+
+  /** 合計サイズから削除済みを除くため、条件に合う全件でファイルの有無を確認する */
+  async getHistoryPage(query: HistoryQuery): Promise<HistoryPage> {
+    const matched = await HistoryStore.checkExistence(this.history.match(query));
+    return HistoryStore.paginate(matched, query, this.history.providers());
+  }
+
+  removeHistory(programId: string): boolean {
+    const removed = this.history.remove(programId);
+    if (removed) {
+      this.historyVersionCounter += 1;
+      this.emitChange();
+    }
+    return removed;
   }
 
   /** ヘッダ直下のバナーに出す、解消するまで続く問題 (重い順に 1 件だけ) */
@@ -306,6 +338,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     const controller = new AbortController();
     const recording: ActiveRecording = { info, controller, done: Promise.resolve() };
     this.active.set(programId, recording);
+    // 開始時点で履歴に残す。途中でアプリが落ちても「中断」として復元できる
+    this.history.upsert(info);
     this.emitChange();
 
     recording.done = (async () => {
@@ -332,6 +366,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           controller.signal,
         );
         info.videoPath = result.videoPath;
+        info.commentsPath = result.commentsPath;
         await this.refreshSize(recording);
         const errorText = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
         if (result.errors.length > 0 && !result.video) {
@@ -361,8 +396,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         }
         info.endedAt = new Date().toISOString();
         this.active.delete(programId);
-        this.history.unshift(info);
-        this.history.splice(HISTORY_LIMIT);
+        this.history.upsert(info);
+        this.historyVersionCounter += 1;
         this.emitChange();
       }
     })();
@@ -379,24 +414,6 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.logger.info(`[rec] stop requested ${programId}`);
     this.emitChange();
     return true;
-  }
-
-  /** 終了した録画のファイルが残っているかを確認して埋める */
-  async refreshVideoExistence(): Promise<void> {
-    await Promise.all(
-      this.history.map(async (info) => {
-        if (!info.videoPath) {
-          info.videoExists = false;
-          return;
-        }
-        try {
-          await fs.access(info.videoPath);
-          info.videoExists = true;
-        } catch {
-          info.videoExists = false;
-        }
-      }),
-    );
   }
 
   private async isOutputDirWritable(dir: string): Promise<boolean> {
