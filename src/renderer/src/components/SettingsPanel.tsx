@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import type { AppSettings } from '@shared/types';
 
 interface Props {
@@ -5,7 +6,7 @@ interface Props {
   run: (task: () => Promise<unknown>) => Promise<void>;
 }
 
-export function SettingsPanel({ settings, run }: Props): JSX.Element {
+export function SettingsPanel({ settings, run }: Props): ReactElement {
   const toggle = (key: 'recordOngoingOnStart' | 'pushEnabled' | 'notificationsEnabled') =>
     void run(() => window.api.updateSettings({ [key]: !settings[key] }));
 

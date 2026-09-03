@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactElement } from 'react';
 import type { AppStatus, RecordingInfo } from '@shared/types';
 
 interface Props {
@@ -33,7 +33,7 @@ function formatDuration(start: string, end?: string): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-export function RecordingsPanel({ status, run }: Props): JSX.Element {
+export function RecordingsPanel({ status, run }: Props): ReactElement {
   const [manual, setManual] = useState('');
   return (
     <>

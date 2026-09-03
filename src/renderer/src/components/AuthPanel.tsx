@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react';
 import type { AppStatus } from '@shared/types';
 
 interface Props {
@@ -14,7 +15,7 @@ const PUSH_LABELS: Record<string, string> = {
   error: 'エラー',
 };
 
-export function AuthPanel({ status, run }: Props): JSX.Element {
+export function AuthPanel({ status, run }: Props): ReactElement {
   const { auth, push } = status;
   return (
     <>

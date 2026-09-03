@@ -15,6 +15,11 @@ let mainWindow: BrowserWindow | undefined;
 let tray: AppTray | undefined;
 let quitting = false;
 
+// 開発時に別の userData で 2 つ目のインスタンスを立てられるようにする (E2E 確認用)
+if (process.env['NLR_USER_DATA']) {
+  app.setPath('userData', process.env['NLR_USER_DATA']);
+}
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
