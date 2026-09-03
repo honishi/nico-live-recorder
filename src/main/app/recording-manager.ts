@@ -30,6 +30,8 @@ interface ActiveRecording {
   sizeTimer?: NodeJS.Timeout;
   /** 再開前に終わったファイルの合計サイズ */
   finishedPartBytes: number;
+  /** 履歴に途中経過を書いた時刻 (クラッシュ時の復元用) */
+  snapshotAt: number;
 }
 
 export interface RecordingManagerOptions {
@@ -48,6 +50,10 @@ const MAX_RECORD_ATTEMPTS = 10;
 /** 検知直後の開始 (番組情報の取得) が失敗したときの再試行 */
 const DETECT_START_ATTEMPTS = 3;
 const DETECT_START_RETRY_MS = 30_000;
+/** 録画中の途中経過を履歴に書く間隔 (クラッシュしても進捗が残るように) */
+const HISTORY_SNAPSHOT_MS = 30_000;
+/** 終了時に push の停止を待つ上限 (進行中の start の後ろに並ぶため) */
+const PUSH_STOP_TIMEOUT_MS = 3_000;
 const RETRY_BASE_DELAY_MS = 5_000;
 const RETRY_MAX_DELAY_MS = 60_000;
 
@@ -65,6 +71,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private push?: WebPushManager;
   private detector?: ProgramDetector;
   private readonly active = new Map<string, ActiveRecording>();
+  /** 開始処理中 (番組情報の取得など active に入る前) の番組。同じ番組の二重開始を防ぐ */
+  private readonly starting = new Map<string, Promise<RecordingInfo>>();
   private readonly history: HistoryStore;
   private historyVersionCounter = 0;
   private restarting?: Promise<void>;
@@ -183,8 +191,15 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.stopped = true;
     this.detector?.stop();
     this.detector = undefined;
-    await this.push?.stop().catch(() => undefined);
-    this.push = undefined;
+    // push の stop は進行中の start (ネットワークのタイムアウト待ち) の後ろに並ぶので、長くは待たない
+    if (this.push) {
+      const push = this.push;
+      this.push = undefined;
+      await Promise.race([
+        push.stop().catch(() => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, PUSH_STOP_TIMEOUT_MS)),
+      ]);
+    }
     for (const recording of this.active.values()) {
       recording.controller.abort();
     }
@@ -288,8 +303,25 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       `[detector] target program via ${program.source}: ${program.programId} "${program.title}" by ${target.name}`,
     );
     // 番組情報の取得などで一時的に失敗しても、放送中なら何度か開始を試みる。
-    // それでも駄目なら既知扱いを解除し、次のポーリングや push で拾い直せるようにする
+    // それでも駄目なら既知扱いを解除し、次のポーリングや push で拾い直せるようにする。
+    // 待っている間に設定が変わったり検知器が作り直されたりしたら、古い判断で続けずに抜ける
+    const detector = this.detector;
     for (let attempt = 1; attempt <= DETECT_START_ATTEMPTS; attempt += 1) {
+      if (attempt > 1) {
+        if (this.stopped || this.detector !== detector) {
+          this.logger.info(
+            `[rec] detection changed while waiting, dropping retry of ${program.programId}`,
+          );
+          return;
+        }
+        const stillTarget = this.settings
+          .get()
+          .targets.some((t) => t.enabled && t.userId === program.providerId);
+        if (!stillTarget) {
+          this.logger.info(`[rec] ${program.programId} is no longer a target, not retrying`);
+          return;
+        }
+      }
       try {
         await this.startRecording(program.programId, program.source, {
           title: program.title,
@@ -312,22 +344,39 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       }
     }
     this.logger.error(`[rec] giving up on ${program.programId} for now; it may be detected again`);
-    this.detector?.unmarkSeen(program.programId);
+    detector?.unmarkSeen(program.programId);
   }
 
   /**
    * 録画を開始する。番組情報を先に取得し、取得できない番組は例外にする
    * (手動録画の入力エラーを呼び出し側で表示するため)
    */
-  async startRecording(
+  startRecording(
     programId: string,
     source: RecordingSource,
     meta: { title?: string; providerId?: string; providerName?: string } = {},
   ): Promise<RecordingInfo> {
     const existing = this.active.get(programId);
     if (existing) {
-      return existing.info;
+      return Promise.resolve(existing.info);
     }
+    // active に入るまでの非同期区間 (番組情報の取得など) でも二重開始しないよう、最初の await より前に予約する
+    const pending = this.starting.get(programId);
+    if (pending) {
+      return pending;
+    }
+    const promise = this.doStartRecording(programId, source, meta).finally(() => {
+      this.starting.delete(programId);
+    });
+    this.starting.set(programId, promise);
+    return promise;
+  }
+
+  private async doStartRecording(
+    programId: string,
+    source: RecordingSource,
+    meta: { title?: string; providerId?: string; providerName?: string },
+  ): Promise<RecordingInfo> {
     const settings = this.settings.get();
     const cookies = await this.auth.getCookieRecord();
 
@@ -350,7 +399,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     );
     // 同じ番組を録り直す場合 (クラッシュ後の再起動など) は、前回のファイルとコメント数を引き継ぐ
     const previous = this.history.get(programId);
-    const previousPaths = previous?.videoPaths ?? [];
+    const previousPaths = previous?.videoPaths ?? (previous?.videoPath ? [previous.videoPath] : []);
     const previousBytes = await sumFileSizes(previousPaths);
     const info: RecordingInfo = {
       programId,
@@ -372,6 +421,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       controller,
       done: Promise.resolve(),
       finishedPartBytes: previousBytes,
+      snapshotAt: Date.now(),
     };
     this.active.set(programId, recording);
     // 開始時点で履歴に残す。途中でアプリが落ちても「中断」として復元できる
@@ -408,11 +458,16 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               onPaths: (paths) => {
                 info.attempt = paths.attempt;
                 info.videoPath = paths.videoPath;
+                info.videoPaths = [...(info.videoPaths ?? []), paths.videoPath];
                 info.commentsPath ??= paths.commentsPath;
+                // クラッシュしてもこのパートのファイルが履歴から辿れるように、決まった時点で書く
+                this.history.upsert(info);
+                recording.snapshotAt = Date.now();
               },
               // コメントは最初のパートのファイルに追記し続ける
               commentsPath: info.commentsPath,
-              prefetchBackwardComments: attempt === 1 && !previous,
+              // 前回のコメントファイルに追記する場合だけ過去分の取得を抑止する (重複を避ける)
+              prefetchBackwardComments: attempt === 1 && !previous?.commentsPath,
               onComment: (_comment, count) => {
                 info.commentCount = countBefore + count;
               },
@@ -420,9 +475,13 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
             controller.signal,
           );
           info.videoPath = result.videoPath;
-          info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
+          if (!info.videoPaths?.includes(result.videoPath)) {
+            info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
+          }
           await this.refreshSize(recording);
           recording.finishedPartBytes = info.videoBytes;
+          this.history.upsert(info);
+          recording.snapshotAt = Date.now();
 
           const errorText = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
           lastReason = result.video?.reason ?? 'no video';
@@ -553,6 +612,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         info.videoBytes = total;
         info.videoPath = videoPath;
         this.emitChange();
+      }
+      if (Date.now() - recording.snapshotAt >= HISTORY_SNAPSHOT_MS) {
+        this.history.upsert(info);
+        recording.snapshotAt = Date.now();
       }
     } catch {
       // まだファイルが無い
