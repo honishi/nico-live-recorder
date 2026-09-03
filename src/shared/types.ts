@@ -8,6 +8,24 @@ export interface TargetUser {
   addedAt: string;
 }
 
+export type TabId = 'recordings' | 'targets' | 'history' | 'log' | 'settings';
+
+/** ウィンドウを閉じても保持する UI の状態 */
+export interface UiState {
+  tab: TabId;
+  showDebug: boolean;
+  autoScroll: boolean;
+  /** 最後にログタブを開いた時刻 (ISO)。未読 WARN / ERROR の起点 */
+  logSeenAt?: string;
+}
+
+export interface WindowBounds {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+}
+
 export interface AppSettings {
   outputDir: string;
   targets: TargetUser[];
@@ -16,6 +34,8 @@ export interface AppSettings {
   recordOngoingOnStart: boolean;
   pushEnabled: boolean;
   notificationsEnabled: boolean;
+  ui: UiState;
+  window?: WindowBounds;
 }
 
 export type RecordingState = 'starting' | 'recording' | 'finishing' | 'done' | 'failed';
@@ -35,14 +55,20 @@ export interface RecordingInfo {
   videoBytes: number;
   outputDir: string;
   videoPath?: string;
+  /** 録画ファイルが保存先に残っているか (終了後に確認する) */
+  videoExists?: boolean;
   error?: string;
 }
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+/** ログの出所。表示上の色分けに使う (rec は録画の開始・終了) */
+export type LogCategory = 'app' | 'push' | 'rec' | 'poll' | 'comments';
+
 export interface LogEntry {
   ts: string;
   level: LogLevel;
+  category: LogCategory;
   message: string;
 }
 
@@ -57,6 +83,16 @@ export interface PushStatusInfo {
   lastError?: string;
 }
 
+export type AlertKind = 'output-dir' | 'auth-expired' | 'push-unavailable';
+
+/** ヘッダ直下のバナーに出す、解消するまで続く問題 */
+export interface AppAlert {
+  kind: AlertKind;
+  severity: 'warn' | 'error';
+  message: string;
+  actionLabel: string;
+}
+
 export interface AppStatus {
   version: string;
   auth: AuthStatus;
@@ -64,6 +100,8 @@ export interface AppStatus {
   detectorRunning: boolean;
   recordings: RecordingInfo[];
   logs: LogEntry[];
+  alerts: AppAlert[];
+  logFilePath: string;
 }
 
 export type FollowCheckResult = 'following' | 'not-following' | 'unknown';
@@ -71,16 +109,45 @@ export type FollowCheckResult = 'following' | 'not-following' | 'unknown';
 export interface TargetAddResult {
   target: TargetUser;
   follow: FollowCheckResult;
+  /** 既に登録済みだった (追加はしていない) */
+  alreadyExists: boolean;
+}
+
+/**
+ * IPC の失敗理由。Error の message の先頭に `E_XXX:` として載せる
+ * (IPC では Error のプロパティが落ちるため)
+ */
+export const ERROR_CODES = {
+  invalidInput: 'E_INVALID_INPUT',
+  userNotFound: 'E_USER_NOT_FOUND',
+  invalidProgram: 'E_INVALID_PROGRAM',
+  programUnavailable: 'E_PROGRAM_UNAVAILABLE',
+  network: 'E_NETWORK',
+} as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
+
+export function codedError(code: ErrorCode, detail?: string): Error {
+  return new Error(detail ? `${code}: ${detail}` : code);
+}
+
+export function parseErrorCode(message: string): ErrorCode | undefined {
+  const match = message.match(/^(E_[A-Z_]+)/);
+  return match ? (match[1] as ErrorCode) : undefined;
 }
 
 export const IPC = {
   getStatus: 'app:getStatus',
   getSettings: 'app:getSettings',
   updateSettings: 'app:updateSettings',
+  updateUi: 'app:updateUi',
   chooseOutputDir: 'app:chooseOutputDir',
   openOutputDir: 'app:openOutputDir',
   openPath: 'app:openPath',
+  openLogFile: 'app:openLogFile',
+  reconnectPush: 'app:reconnectPush',
   addTarget: 'targets:add',
+  restoreTarget: 'targets:restore',
   removeTarget: 'targets:remove',
   setTargetEnabled: 'targets:setEnabled',
   checkFollow: 'targets:checkFollow',

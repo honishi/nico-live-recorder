@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { Logger } from '../core/logger';
-import type { LogEntry, LogLevel } from '../../shared/types';
+import type { LogCategory, LogEntry, LogLevel } from '../../shared/types';
 
 const MAX_LOG_FILE_BYTES = 5 * 1024 * 1024;
-const RING_BUFFER_SIZE = 500;
+const RING_BUFFER_SIZE = 2000;
 
 function formatArg(arg: unknown): string {
   if (arg instanceof Error) {
@@ -19,6 +19,28 @@ function formatArg(arg: unknown): string {
   } catch {
     return String(arg);
   }
+}
+
+/** 先頭の `[tag]` 列から出所を判定する (例: `[lv123] [comments] ...` → comments) */
+export function categorize(message: string): LogCategory {
+  const tags = [...message.matchAll(/^\s*(?:\[([^\]]+)\]\s*)+/g)].flatMap((m) =>
+    [...m[0].matchAll(/\[([^\]]+)\]/g)].map((t) => t[1].toLowerCase()),
+  );
+  for (const tag of tags) {
+    if (tag === 'push' || tag === 'autopush') {
+      return 'push';
+    }
+    if (tag === 'rec') {
+      return 'rec';
+    }
+    if (tag === 'detector' || tag === 'poll') {
+      return 'poll';
+    }
+    if (tag === 'comments') {
+      return 'comments';
+    }
+  }
+  return 'app';
 }
 
 /**
@@ -48,8 +70,8 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
     this.minLevel = level;
   }
 
-  recent(): LogEntry[] {
-    return [...this.entries];
+  recent(limit = RING_BUFFER_SIZE): LogEntry[] {
+    return this.entries.slice(-limit);
   }
 
   debug(...args: unknown[]): void {
@@ -78,10 +100,12 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
     if (order.indexOf(level) < order.indexOf(this.minLevel)) {
       return;
     }
+    const message = args.map(formatArg).join(' ');
     const entry: LogEntry = {
       ts: new Date().toISOString(),
       level,
-      message: args.map(formatArg).join(' '),
+      category: categorize(message),
+      message,
     };
     const line = `${entry.ts} ${level.toUpperCase().padEnd(5)} ${entry.message}\n`;
     if (level === 'error') {

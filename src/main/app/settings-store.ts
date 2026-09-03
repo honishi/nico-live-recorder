@@ -1,7 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import type { AppSettings, TargetUser } from '../../shared/types';
+import type { AppSettings, TargetUser, UiState, WindowBounds } from '../../shared/types';
+
+export function defaultUiState(): UiState {
+  return { tab: 'recordings', showDebug: false, autoScroll: true };
+}
 
 export function defaultSettings(defaultOutputDir: string): AppSettings {
   return {
@@ -11,6 +15,7 @@ export function defaultSettings(defaultOutputDir: string): AppSettings {
     recordOngoingOnStart: true,
     pushEnabled: true,
     notificationsEnabled: true,
+    ui: defaultUiState(),
   };
 }
 
@@ -39,6 +44,18 @@ export class SettingsStore extends EventEmitter<{ change: [settings: AppSettings
     return this.get();
   }
 
+  /** UI 状態とウィンドウ位置は検知の再起動に関係ないので change を出さずに保存する */
+  updateUi(patch: Partial<UiState>): AppSettings {
+    this.settings = { ...this.settings, ui: { ...this.settings.ui, ...patch } };
+    this.persist();
+    return this.get();
+  }
+
+  setWindowBounds(bounds: WindowBounds): void {
+    this.settings = { ...this.settings, window: bounds };
+    this.persist();
+  }
+
   upsertTarget(target: TargetUser): AppSettings {
     const targets = this.settings.targets.filter((t) => t.userId !== target.userId);
     targets.push(target);
@@ -64,6 +81,7 @@ export class SettingsStore extends EventEmitter<{ change: [settings: AppSettings
         ...defaults,
         ...raw,
         targets: Array.isArray(raw.targets) ? raw.targets : [],
+        ui: { ...defaults.ui, ...(typeof raw.ui === 'object' && raw.ui !== null ? raw.ui : {}) },
       };
     } catch {
       return defaults;

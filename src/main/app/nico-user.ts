@@ -1,5 +1,5 @@
 import { DEFAULT_USER_AGENT } from '../vendor/nico-client/internal/userAgent';
-import type { FollowCheckResult } from '../../shared/types';
+import { codedError, ERROR_CODES, type FollowCheckResult } from '../../shared/types';
 
 const NICKNAME_API = 'https://api.live2.nicovideo.jp/api/v1/user/nickname';
 const FOLLOW_STATUS_API = 'https://user-follow-api.nicovideo.jp/v1/user/followees/niconico-users';
@@ -22,13 +22,18 @@ export async function resolveUserNickname(userId: string): Promise<string> {
     headers: { 'user-agent': DEFAULT_USER_AGENT, accept: 'application/json' },
     signal: AbortSignal.timeout(15_000),
   });
+  if (response.status === 404) {
+    await response.text().catch(() => '');
+    throw codedError(ERROR_CODES.userNotFound);
+  }
   if (!response.ok) {
-    throw new Error(`ユーザー情報の取得に失敗しました (HTTP ${response.status})`);
+    await response.text().catch(() => '');
+    throw codedError(ERROR_CODES.network, `HTTP ${response.status}`);
   }
   const json = (await response.json()) as { data?: { nickname?: string } };
   const nickname = json.data?.nickname;
   if (!nickname) {
-    throw new Error('ユーザーが見つかりませんでした');
+    throw codedError(ERROR_CODES.userNotFound);
   }
   return nickname;
 }
