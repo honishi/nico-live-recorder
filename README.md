@@ -39,6 +39,7 @@ Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` など�
 ```bash
 npm install
 npm run dev          # electron-vite の開発モードで起動
+npm run lint         # eslint (型情報を使うルールを含む)
 npm run typecheck
 npm test             # vitest
 npm run build        # out/ に成果物を出力

@@ -343,7 +343,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
 function sanitizeDirName(name: string): string {
   const cleaned = name
-    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+    .replace(/[\\/:*?"<>|\p{Cc}]/gu, '_')
     .trim()
     .replace(/[. ]+$/g, '');
   return cleaned.length > 0 ? cleaned : 'unknown';

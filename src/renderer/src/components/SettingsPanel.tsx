@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import type { AppSettings } from '@shared/types';
 
 interface Props {
@@ -7,9 +6,6 @@ interface Props {
 }
 
 export function SettingsPanel({ settings, run }: Props): JSX.Element {
-  const [pollInterval, setPollInterval] = useState(String(settings.pollIntervalSec));
-  useEffect(() => setPollInterval(String(settings.pollIntervalSec)), [settings.pollIntervalSec]);
-
   const toggle = (key: 'recordOngoingOnStart' | 'pushEnabled' | 'notificationsEnabled') =>
     void run(() => window.api.updateSettings({ [key]: !settings[key] }));
 
@@ -34,14 +30,15 @@ export function SettingsPanel({ settings, run }: Props): JSX.Element {
         </dd>
         <dt>ポーリング間隔</dt>
         <dd>
+          {/* 設定値が外から変わったら key で入力欄を作り直して同期する */}
           <input
             type="number"
             min={10}
             max={600}
-            value={pollInterval}
-            onChange={(e) => setPollInterval(e.target.value)}
-            onBlur={() => {
-              const value = Number(pollInterval);
+            key={settings.pollIntervalSec}
+            defaultValue={settings.pollIntervalSec}
+            onBlur={(e) => {
+              const value = Number(e.target.value);
               if (Number.isFinite(value) && value !== settings.pollIntervalSec) {
                 void run(() => window.api.updateSettings({ pollIntervalSec: value }));
               }

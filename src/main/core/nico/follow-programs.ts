@@ -1,4 +1,5 @@
 import { DEFAULT_USER_AGENT } from '../../nico-client/internal/userAgent';
+import { asString } from '../util';
 
 /** フォロー中の放送一覧 API (要ログイン) から得られる放送 */
 export interface FollowingProgram {
@@ -73,15 +74,15 @@ function toFollowingProgram(raw: unknown): FollowingProgram | undefined {
         : undefined;
   return {
     id,
-    title: String(program['title'] ?? ''),
+    title: asString(program['title']),
     watchPageUrl:
       typeof program['watchPageUrl'] === 'string'
         ? program['watchPageUrl']
         : `https://live.nicovideo.jp/watch/${id}`,
-    providerId: provider['id'] !== undefined ? String(provider['id']) : undefined,
+    providerId: asString(provider['id']) || undefined,
     providerName: typeof provider['name'] === 'string' ? provider['name'] : undefined,
     providerIcon: typeof provider['icon'] === 'string' ? provider['icon'] : undefined,
-    socialGroupId: socialGroup['id'] !== undefined ? String(socialGroup['id']) : undefined,
+    socialGroupId: asString(socialGroup['id']) || undefined,
     socialGroupName: typeof socialGroup['name'] === 'string' ? socialGroup['name'] : undefined,
     beginAt: beginAt && !Number.isNaN(beginAt.getTime()) ? beginAt : undefined,
     isFollowerOnly: program['isFollowerOnly'] === true,

@@ -11,23 +11,26 @@ export function App(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings>();
   const [error, setError] = useState<string>();
 
-  const refresh = useCallback(async () => {
-    const [nextStatus, nextSettings] = await Promise.all([
-      window.api.getStatus(),
-      window.api.getSettings(),
-    ]);
-    setStatus(nextStatus);
-    setSettings(nextSettings);
-  }, []);
-
+  // 初期状態の取得と、main からの更新通知の購読
   useEffect(() => {
-    void refresh();
+    let cancelled = false;
+    void Promise.all([window.api.getStatus(), window.api.getSettings()]).then(
+      ([nextStatus, nextSettings]) => {
+        if (!cancelled) {
+          setStatus(nextStatus);
+          setSettings(nextSettings);
+        }
+      },
+    );
     const unsubscribe = window.api.onStatusChanged((next) => {
       setStatus(next);
       void window.api.getSettings().then(setSettings);
     });
-    return unsubscribe;
-  }, [refresh]);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   const run = useCallback(async (task: () => Promise<unknown>) => {
     setError(undefined);

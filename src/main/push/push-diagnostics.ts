@@ -42,7 +42,7 @@ export function shortVersion(version: unknown): string | undefined {
   if (version === undefined || version === null) {
     return undefined;
   }
-  const text = String(version);
+  const text = typeof version === 'string' || typeof version === 'number' ? String(version) : '?';
   return text.length > 12 ? `${text.slice(0, 12)}…` : text;
 }
 

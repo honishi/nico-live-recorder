@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events';
-import WebSocket from 'ws';
+import WebSocket, { type RawData } from 'ws';
 import { DEFAULT_USER_AGENT } from '../../nico-client/internal/userAgent';
 import { silentLogger, type Logger } from '../logger';
+import { asString } from '../util';
 
 /** 視聴セッションが配る HLS 用 cookie。パス単位で同名の cookie が複数配られる */
 export interface StreamCookie {
@@ -137,7 +138,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
         this.send({ type: 'getAkashic', data: { chasePlay: false } });
         resolve();
       });
-      ws.on('message', (raw) => this.handleMessage(raw.toString()));
+      ws.on('message', (raw) => this.handleMessage(rawDataToString(raw)));
       ws.on('error', (error) => {
         this.logger.warn('watch ws error', error);
         if (!opened) {
@@ -244,7 +245,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
   private handleMessage(text: string): void {
     let message: { type?: string; data?: Record<string, unknown> };
     try {
-      message = JSON.parse(text);
+      message = JSON.parse(text) as { type?: string; data?: Record<string, unknown> };
     } catch (error) {
       this.logger.warn('watch ws: failed to parse message', error);
       return;
@@ -284,7 +285,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
         this.handleReconnect(data);
         break;
       case 'disconnect': {
-        const reason = String(data['reason'] ?? 'UNKNOWN');
+        const reason = asString(data['reason'], 'UNKNOWN');
         this.logger.info(`watch ws disconnect requested: ${reason}`);
         if (reason === END_PROGRAM_REASON) {
           this.emit('ended', reason);
@@ -305,24 +306,28 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
     if (data['protocol'] !== 'hls' || typeof data['uri'] !== 'string') {
       return;
     }
-    const rawCookies = Array.isArray(data['cookies']) ? data['cookies'] : [];
+    const rawCookies: unknown[] = Array.isArray(data['cookies'])
+      ? (data['cookies'] as unknown[])
+      : [];
     const cookies: StreamCookie[] = rawCookies
       .filter(
         (c): c is Record<string, unknown> =>
-          typeof c === 'object' && c !== null && typeof c['name'] === 'string',
+          typeof c === 'object' &&
+          c !== null &&
+          typeof (c as Record<string, unknown>)['name'] === 'string',
       )
       .map((c) => ({
-        name: String(c['name']),
-        value: String(c['value'] ?? ''),
-        domain: String(c['domain'] ?? 'nicovideo.jp'),
-        path: String(c['path'] ?? '/'),
+        name: asString(c['name']),
+        value: asString(c['value']),
+        domain: asString(c['domain'], 'nicovideo.jp'),
+        path: asString(c['path'], '/'),
         secure: c['secure'] === true,
         expires: typeof c['expires'] === 'string' ? c['expires'] : undefined,
       }));
     const info: HlsStreamInfo = {
       uri: data['uri'],
       syncUri: typeof data['syncUri'] === 'string' ? data['syncUri'] : undefined,
-      quality: String(data['quality'] ?? ''),
+      quality: asString(data['quality']),
       availableQualities: Array.isArray(data['availableQualities'])
         ? data['availableQualities'].map(String)
         : [],
@@ -358,4 +363,12 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
       Math.max(0, waitSec) * 1000,
     );
   }
+}
+
+/** ws の受信データ (Buffer / ArrayBuffer / Buffer[]) を UTF-8 文字列にする */
+function rawDataToString(raw: RawData): string {
+  if (Array.isArray(raw)) {
+    return Buffer.concat(raw).toString('utf8');
+  }
+  return Buffer.from(raw as ArrayBuffer).toString('utf8');
 }
