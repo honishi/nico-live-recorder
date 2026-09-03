@@ -46,18 +46,20 @@ export function categorize(message: string): LogCategory {
 /**
  * アプリ全体のロガー。標準出力、ファイル (userData/logs/app.log)、
  * UI 表示用のリングバッファに書く。
+ * リングバッファは debug も含めて常に保持し (UI の「debug を表示」で出し分ける)、
+ * 標準出力とファイルは outputLevel 以上だけを書く。
  */
 export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implements Logger {
   private readonly filePath: string;
   private readonly entries: LogEntry[] = [];
   private stream?: fs.WriteStream;
-  private minLevel: LogLevel;
+  private outputLevel: LogLevel;
 
-  constructor(logDir: string, minLevel: LogLevel = 'info') {
+  constructor(logDir: string, outputLevel: LogLevel = 'info') {
     super();
     fs.mkdirSync(logDir, { recursive: true });
     this.filePath = path.join(logDir, 'app.log');
-    this.minLevel = minLevel;
+    this.outputLevel = outputLevel;
     this.rotateIfNeeded();
     this.stream = fs.createWriteStream(this.filePath, { flags: 'a', encoding: 'utf8' });
   }
@@ -66,8 +68,13 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
     return this.filePath;
   }
 
-  setLevel(level: LogLevel): void {
-    this.minLevel = level;
+  /** 標準出力とファイルに書く最低レベル (リングバッファには影響しない) */
+  setOutputLevel(level: LogLevel): void {
+    this.outputLevel = level;
+  }
+
+  getOutputLevel(): LogLevel {
+    return this.outputLevel;
   }
 
   recent(limit = RING_BUFFER_SIZE): LogEntry[] {
@@ -97,9 +104,6 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
 
   private write(level: LogLevel, args: unknown[]): void {
     const order: LogLevel[] = ['debug', 'info', 'warn', 'error'];
-    if (order.indexOf(level) < order.indexOf(this.minLevel)) {
-      return;
-    }
     const message = args.map(formatArg).join(' ');
     const entry: LogEntry = {
       ts: new Date().toISOString(),
@@ -107,13 +111,15 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
       category: categorize(message),
       message,
     };
-    const line = `${entry.ts} ${level.toUpperCase().padEnd(5)} ${entry.message}\n`;
-    if (level === 'error') {
-      process.stderr.write(line);
-    } else {
-      process.stdout.write(line);
+    if (order.indexOf(level) >= order.indexOf(this.outputLevel)) {
+      const line = `${entry.ts} ${level.toUpperCase().padEnd(5)} ${entry.message}\n`;
+      if (level === 'error') {
+        process.stderr.write(line);
+      } else {
+        process.stdout.write(line);
+      }
+      this.stream?.write(line);
     }
-    this.stream?.write(line);
     this.entries.push(entry);
     if (this.entries.length > RING_BUFFER_SIZE) {
       this.entries.splice(0, this.entries.length - RING_BUFFER_SIZE);

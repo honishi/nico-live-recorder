@@ -122,6 +122,12 @@ async function bootstrap(): Promise<void> {
     path.join(userData, 'settings.json'),
     path.join(app.getPath('videos'), 'NicoLiveRecorder'),
   );
+  // ファイル出力のレベルは「debug を表示」に連動させる (開発時は常に debug)
+  const applyLogLevel = (): void => {
+    logger.setOutputLevel(!app.isPackaged || settings.get().ui.showDebug ? 'debug' : 'info');
+  };
+  applyLogLevel();
+  settings.on('ui', applyLogLevel);
   const auth = new NicoAuth(logger);
   const pushStore = new FilePushStateStore(path.join(userData, 'push-subscription.json'));
 
