@@ -6,3 +6,4 @@ release/
 *.log
 .claude/settings.local.json
 .codex/
+*.tsbuildinfo
