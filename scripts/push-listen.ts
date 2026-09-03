@@ -5,12 +5,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createConsoleLogger } from '../src/main/core/logger';
 import { ProgramDetector } from '../src/main/core/detector/program-detector';
-import { setPushLogger } from '../src/main/push/push-diagnostics';
+import { setPushLogger } from '../src/main/vendor/web-push/push-diagnostics';
 import {
   WebPushManager,
   type PushStateStore,
   type PushSubscriptionState,
-} from '../src/main/push/web-push-manager';
+} from '../src/main/core/push/web-push-manager';
 
 const statePath = path.resolve(process.argv[2] ?? './recordings/push-state.json');
 const userSession = process.env['NICO_USER_SESSION'];

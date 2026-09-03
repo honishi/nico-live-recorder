@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
-import { DEFAULT_USER_AGENT } from '../../nico-client/internal/userAgent';
+import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
 import { silentLogger, type Logger } from '../logger';
 import type { StreamCookie } from './watch-session';
 

@@ -3,7 +3,7 @@
 import path from 'node:path';
 import { createConsoleLogger } from '../src/main/core/logger';
 import { recordComments } from '../src/main/core/recorder/comment-recorder';
-import { NicoClient } from '../src/main/nico-client/NicoClient';
+import { NicoClient } from '../src/main/vendor/nico-client/NicoClient';
 
 const RECENT_URL = 'https://live.nicovideo.jp/front/api/pages/recent/v1/programs';
 

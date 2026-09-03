@@ -9,7 +9,7 @@ import { RecordingManager } from './app/recording-manager';
 import { SettingsStore } from './app/settings-store';
 import { AppTray } from './app/tray';
 import { resolveFfmpegPath } from './core/nico/ffmpeg';
-import { configureProtoRootDir } from './nico-client/internal/protoLoader';
+import { configureProtoRootDir } from './vendor/nico-client/internal/protoLoader';
 
 let mainWindow: BrowserWindow | undefined;
 let tray: AppTray | undefined;
