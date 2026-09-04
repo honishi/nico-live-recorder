@@ -1,0 +1,13 @@
+# エディタ側でも改行を LF に固定する (Windows で CRLF を書き込まないように)
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 2
+trim_trailing_whitespace = true
+
+[*.md]
+trim_trailing_whitespace = false
