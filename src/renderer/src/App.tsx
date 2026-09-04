@@ -89,7 +89,7 @@ export function App(): ReactElement {
 
   const onAlertAction = useCallback(
     (alert: AppAlert) => {
-      if (alert.kind === 'output-dir') {
+      if (alert.kind === 'output-dir' || alert.kind === 'disk-space') {
         void chooseOutputDir();
       } else if (alert.kind === 'auth-expired') {
         void login();

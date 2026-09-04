@@ -1027,6 +1027,14 @@ select {
   gap: var(--sp-2);
 }
 
+.setting-row .help {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: var(--fs-sub);
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
 .divider {
   height: 1px;
   background: var(--border);

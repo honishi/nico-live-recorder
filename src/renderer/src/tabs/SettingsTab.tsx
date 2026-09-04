@@ -82,6 +82,34 @@ export function SettingsTab({
             </span>
             <span />
           </div>
+          <div className="divider" />
+          <div className="setting-row">
+            <span className="label">空き容量の警告</span>
+            <span className="value">
+              <input
+                type="number"
+                className="input num"
+                min={0}
+                max={10000}
+                key={settings.minFreeSpaceGb}
+                defaultValue={settings.minFreeSpaceGb}
+                onBlur={(e) => {
+                  const value = Number(e.target.value);
+                  if (Number.isFinite(value) && value !== settings.minFreeSpaceGb) {
+                    void window.api.updateSettings({ minFreeSpaceGb: value });
+                  }
+                }}
+              />{' '}
+              GB を下回ったら警告
+              <span className="help">
+                {status.diskFreeBytes === undefined
+                  ? '空き容量を取得できません'
+                  : `現在の空き: ${(status.diskFreeBytes / 1024 ** 3).toFixed(1)} GB`}
+                {settings.minFreeSpaceGb === 0 && ' (0 は確認しない)'}
+              </span>
+            </span>
+            <span />
+          </div>
         </div>
       </section>
 

@@ -47,12 +47,17 @@ export interface RecordingManagerOptions {
   history: HistoryStore;
   logger: Logger;
   ffmpegPath?: string;
+  /** 保存先の空き容量 (バイト) を返す。テストで差し替える。取得できなければ undefined */
+  diskProbe?: (dir: string) => Promise<number | undefined>;
 }
 
 const SIZE_POLL_MS = 1_000;
 const OUTPUT_DIR_CHECK_TTL_MS = 30_000;
 /** 録画が途中で止まったときの再開の上限と待ち時間 */
 const MAX_RECORD_ATTEMPTS = 10;
+/** 保存先の空き容量を確認する間隔 */
+const DISK_CHECK_MS = 60_000;
+const GIB = 1024 ** 3;
 /** 検知直後の開始 (番組情報の取得) が失敗したときの再試行 */
 const DETECT_START_ATTEMPTS = 3;
 const DETECT_START_RETRY_MS = 30_000;
@@ -73,6 +78,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private readonly pushStore: PushStateStore;
   private readonly logger: Logger;
   private readonly ffmpegPath?: string;
+  private readonly diskProbe: (dir: string) => Promise<number | undefined>;
+  private diskTimer?: NodeJS.Timeout;
+  private diskFree?: number;
+  /** 空き容量がしきい値を下回っている (切り替わったときだけ通知する) */
+  private diskLow = false;
 
   private push?: WebPushManager;
   private detector?: ProgramDetector;
@@ -95,6 +105,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.history = options.history;
     this.logger = options.logger;
     this.ffmpegPath = options.ffmpegPath;
+    this.diskProbe = options.diskProbe ?? freeSpaceOf;
 
     const pushLogger = prefixLogger(this.logger, 'autopush');
     setPushLogger({
@@ -108,7 +119,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       this.authExpired = false;
       void this.restartDetection();
     });
-    this.settings.on('change', () => void this.restartDetection());
+    this.settings.on('change', () => {
+      void this.restartDetection();
+      void this.refreshDiskSpace();
+    });
   }
 
   get detectorRunning(): boolean {
@@ -178,6 +192,14 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         actionLabel: 'ログイン',
       });
     }
+    if (this.diskLow && this.diskFree !== undefined) {
+      alerts.push({
+        kind: 'disk-space',
+        severity: 'warn',
+        message: `保存先の空き容量が ${formatGb(this.diskFree)} GB です (しきい値 ${settings.minFreeSpaceGb} GB)`,
+        actionLabel: '保存先を変更',
+      });
+    }
     if (loggedIn && settings.pushEnabled && this.push?.getStatus().state === 'error') {
       alerts.push({
         kind: 'push-unavailable',
@@ -192,12 +214,51 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
   async start(): Promise<void> {
     await this.restartDetection();
+    await this.refreshDiskSpace();
+    this.diskTimer = setInterval(() => void this.refreshDiskSpace(), DISK_CHECK_MS);
+  }
+
+  /** 最後に確認した保存先の空き容量 (バイト) */
+  get diskFreeBytes(): number | undefined {
+    return this.diskFree;
+  }
+
+  /**
+   * 保存先の空き容量を確認し、しきい値を下回った/回復したときだけログと通知を出す。
+   * 録画は止めない (取りこぼしより、少しでも録れている方がよい)
+   */
+  async refreshDiskSpace(): Promise<void> {
+    const settings = this.settings.get();
+    const free = await this.diskProbe(settings.outputDir).catch(() => undefined);
+    const threshold = settings.minFreeSpaceGb * GIB;
+    const low = threshold > 0 && free !== undefined && free < threshold;
+    const changed = free !== this.diskFree || low !== this.diskLow;
+    this.diskFree = free;
+    if (low !== this.diskLow) {
+      this.diskLow = low;
+      if (low) {
+        const message = `保存先の空き容量が少なくなっています (残り ${formatGb(free)} GB、しきい値 ${settings.minFreeSpaceGb} GB)`;
+        this.logger.warn(`[rec] ${message}: ${settings.outputDir}`);
+        this.notify('保存先の空き容量が少なくなっています', message);
+      } else {
+        this.logger.info(
+          `[rec] 保存先の空き容量が回復しました (残り ${formatGb(free)} GB): ${settings.outputDir}`,
+        );
+      }
+    }
+    if (changed) {
+      this.emitChange();
+    }
   }
 
   async shutdown(): Promise<void> {
     this.stopped = true;
     this.detector?.stop();
     this.detector = undefined;
+    if (this.diskTimer) {
+      clearInterval(this.diskTimer);
+      this.diskTimer = undefined;
+    }
     // push の stop は進行中の start (ネットワークのタイムアウト待ち) の後ろに並ぶので、長くは待たない
     if (this.push) {
       const push = this.push;
@@ -403,6 +464,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       throw new Error('shutting down');
     }
     this.detector?.markSeen(programId);
+    if (this.diskLow) {
+      this.logger.warn(`[rec] starting ${programId} although disk space is low`);
+    }
 
     const providerName = meta.providerName ?? programInfo.providerName;
     const providerId = meta.providerId ?? programInfo.providerId;
@@ -702,6 +766,29 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private emitChange(): void {
     this.emit('change');
   }
+}
+
+/**
+ * ディレクトリのあるボリュームの空き容量 (バイト)。まだ無いディレクトリなら存在する親で調べる
+ */
+async function freeSpaceOf(dir: string): Promise<number | undefined> {
+  let current = path.resolve(dir);
+  for (;;) {
+    try {
+      const stat = await fs.statfs(current);
+      return Number(stat.bavail) * Number(stat.bsize);
+    } catch (error) {
+      const parent = path.dirname(current);
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === current) {
+        return undefined;
+      }
+      current = parent;
+    }
+  }
+}
+
+function formatGb(bytes: number | undefined): string {
+  return bytes === undefined ? '?' : (bytes / GIB).toFixed(1);
 }
 
 async function fileExists(filePath: string): Promise<boolean> {

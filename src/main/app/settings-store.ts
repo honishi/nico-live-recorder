@@ -15,6 +15,7 @@ export function defaultSettings(defaultOutputDir: string): AppSettings {
     recordOngoingOnStart: true,
     pushEnabled: true,
     notificationsEnabled: true,
+    minFreeSpaceGb: 5,
     ui: defaultUiState(),
   };
 }
