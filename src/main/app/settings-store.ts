@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import type { AppSettings, TargetUser, UiState, WindowBounds } from '../../shared/types';
+import { MIN_FREE_SPACE_GB, numberInRange, POLL_INTERVAL_SEC } from '../../shared/limits';
 
 export function defaultUiState(): UiState {
   return { tab: 'recordings', showDebug: false, autoScroll: true };
@@ -11,11 +12,11 @@ export function defaultSettings(defaultOutputDir: string): AppSettings {
   return {
     outputDir: defaultOutputDir,
     targets: [],
-    pollIntervalSec: 30,
+    pollIntervalSec: POLL_INTERVAL_SEC.default,
     recordOngoingOnStart: true,
     pushEnabled: true,
     notificationsEnabled: true,
-    minFreeSpaceGb: 5,
+    minFreeSpaceGb: MIN_FREE_SPACE_GB.default,
     ui: defaultUiState(),
   };
 }
@@ -82,11 +83,29 @@ export class SettingsStore extends EventEmitter<{
   private load(defaultOutputDir: string): AppSettings {
     const defaults = defaultSettings(defaultOutputDir);
     try {
-      const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as Partial<AppSettings>;
+      const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf8')) as Partial<
+        Record<keyof AppSettings, unknown>
+      >;
+      // 手で編集されたり壊れたりした値は既定値に戻す。特にポーリング間隔が NaN になると
+      // setInterval が 1ms 扱いになり、API を連続で叩いてしまう
       return {
         ...defaults,
-        ...raw,
-        targets: Array.isArray(raw.targets) ? raw.targets : [],
+        outputDir:
+          typeof raw.outputDir === 'string' && raw.outputDir.trim()
+            ? raw.outputDir
+            : defaults.outputDir,
+        targets: Array.isArray(raw.targets) ? (raw.targets as TargetUser[]) : [],
+        pollIntervalSec:
+          numberInRange(raw.pollIntervalSec, POLL_INTERVAL_SEC) ?? defaults.pollIntervalSec,
+        minFreeSpaceGb:
+          numberInRange(raw.minFreeSpaceGb, MIN_FREE_SPACE_GB) ?? defaults.minFreeSpaceGb,
+        recordOngoingOnStart: booleanOr(raw.recordOngoingOnStart, defaults.recordOngoingOnStart),
+        pushEnabled: booleanOr(raw.pushEnabled, defaults.pushEnabled),
+        notificationsEnabled: booleanOr(raw.notificationsEnabled, defaults.notificationsEnabled),
+        window:
+          typeof raw.window === 'object' && raw.window !== null
+            ? (raw.window as WindowBounds)
+            : undefined,
         ui: { ...defaults.ui, ...(typeof raw.ui === 'object' && raw.ui !== null ? raw.ui : {}) },
       };
     } catch {
@@ -100,4 +119,8 @@ export class SettingsStore extends EventEmitter<{
     fs.writeFileSync(tmp, JSON.stringify(this.settings, null, 2), 'utf8');
     fs.renameSync(tmp, this.filePath);
   }
+}
+
+function booleanOr(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
 }

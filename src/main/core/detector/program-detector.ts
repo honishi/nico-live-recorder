@@ -4,6 +4,7 @@ import { NicoLiveProgramStatus } from '../../vendor/nico-client/types';
 import type { WebPushManager, PushProgram } from '../push/web-push-manager';
 import { silentLogger, type Logger } from '../logger';
 import { fetchFollowingOnAirPrograms, NotAuthenticatedError } from '../nico/follow-programs';
+import { numberInRange, POLL_INTERVAL_SEC } from '../../../shared/limits';
 
 export type DetectionSource = 'push' | 'poll';
 
@@ -38,7 +39,12 @@ export interface ProgramDetectorEvents {
   pollError: [error: Error];
 }
 
-const DEFAULT_POLL_INTERVAL_MS = 30_000;
+/** ポーリング間隔の許容範囲 (ms)。設定と同じ範囲で、外れた値は既定に戻す */
+const POLL_INTERVAL_MS = {
+  min: POLL_INTERVAL_SEC.min * 1000,
+  max: POLL_INTERVAL_SEC.max * 1000,
+  default: POLL_INTERVAL_SEC.default * 1000,
+};
 const DEFAULT_MAX_PUSH_AGE_MS = 10 * 60 * 1000;
 const SEEN_HISTORY_LIMIT = 5_000;
 
@@ -68,8 +74,15 @@ export class ProgramDetector extends EventEmitter<ProgramDetectorEvents> {
     super();
     this.push = options.push;
     this.cookieHeader = options.cookieHeader;
-    this.pollIntervalMs = Math.max(5_000, options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
     this.logger = options.logger ?? silentLogger;
+    // NaN や短すぎる間隔をそのまま setInterval に渡すと API を連続で叩くので、ここでも範囲を確かめる
+    const requested = options.pollIntervalMs;
+    this.pollIntervalMs = numberInRange(requested, POLL_INTERVAL_MS) ?? POLL_INTERVAL_MS.default;
+    if (requested !== undefined && this.pollIntervalMs !== requested) {
+      this.logger.warn(
+        `[detector] invalid poll interval ${String(requested)}ms, using ${POLL_INTERVAL_MS.default}ms`,
+      );
+    }
     this.userAgent = options.userAgent;
     this.maxPushAgeMs = options.maxPushAgeMs ?? DEFAULT_MAX_PUSH_AGE_MS;
   }

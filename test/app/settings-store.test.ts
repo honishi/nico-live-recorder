@@ -82,4 +82,33 @@ describe('SettingsStore', () => {
     const store = new SettingsStore(filePath, '/videos');
     expect(store.get()).toMatchObject({ pollIntervalSec: 60, targets: [], pushEnabled: true });
   });
+
+  test('型や範囲が合わない値は既定値に戻す (ポーリング間隔が NaN になると API を連続で叩くため)', () => {
+    const cases: unknown[] = ['30', NaN, 1, 0, -30, 100_000, null, true];
+    for (const value of cases) {
+      fs.writeFileSync(filePath, JSON.stringify({ pollIntervalSec: value }), 'utf8');
+      expect(new SettingsStore(filePath, '/videos').get().pollIntervalSec, String(value)).toBe(30);
+    }
+
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        pollIntervalSec: 15,
+        minFreeSpaceGb: 'lots',
+        pushEnabled: 'yes',
+        notificationsEnabled: 0,
+        outputDir: '',
+        window: 'no',
+      }),
+      'utf8',
+    );
+    expect(new SettingsStore(filePath, '/videos').get()).toMatchObject({
+      pollIntervalSec: 15,
+      minFreeSpaceGb: 5,
+      pushEnabled: true,
+      notificationsEnabled: true,
+      outputDir: '/videos',
+      window: undefined,
+    });
+  });
 });
