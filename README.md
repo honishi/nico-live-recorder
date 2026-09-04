@@ -1,98 +1,80 @@
-# nico-live-recorder
+# NicoLiveRecorder
 
-ニコニコ生放送の放送開始を検知して、映像 (MPEG-TS) とコメント (JSON Lines) を自動録画する Electron アプリです。
-Windows と macOS で動作します。streamlink は使わず、ffmpeg だけを同梱します。
+ニコニコ生放送の放送開始を自動で検知して、映像とコメントを録画するデスクトップアプリです。
+録画したい配信者を登録しておくと、放送が始まったときに自動で録画を始め、終わるまで残します。
+Windows と macOS で動きます。
 
-## 仕組み
+## できること
 
-```
-放送開始の検知
-  ├─ Web Push (Mozilla AutoPush 経由、ニコニコの push 通知を購読)   ... 主
-  └─ フォロー中番組 API の 30 秒ポーリング                          ... 副 (取りこぼし防止)
-        ↓ 対象配信者の放送なら
-録画
-  ├─ 視聴 WebSocket (startWatching) → HLS の URI と cookie を取得
-  ├─ 映像・音声の playlist を追跡し、セグメントを取得して AES-128 を復号
-  ├─ ffmpeg に 2 本のパイプで渡し、1 本の .ts に多重化
-  └─ NDGR からコメントを受信し .comments.jsonl に追記
-```
+- 登録した配信者の放送を、開始を検知して自動で録画する (push 通知と定期確認の 2 段構え)
+- 映像 (MPEG-TS) とコメント (1 行 1 件のテキスト) を放送ごとに保存する
+- 放送中の番組 ID や URL を入れて、手動で録画を始める
+- 録画中の一覧、過去の履歴、動作ログを画面で確認する
+- 常駐して動き、ウィンドウを閉じても録画と検知は続く
 
-- push 通知は **ログイン中のアカウントがフォローしている配信者** の放送開始にだけ届きます。録画したい配信者はニコニコ側でフォローしておいてください。アプリはフォロー状態の確認だけを行い、フォロー操作はしません。
-- HLS を ffmpeg に直接渡さないのは、ニコニコが同名の CloudFront cookie をパス別に複数配るためです (ffmpeg の cookie 管理は名前単位で、正しく送れません)。
-- 放送検知の実装は [chrome-nico-alert](https://github.com/honishi/chrome-nico-alert)、コメント取得は stream-journal の nico-client を元にしています。
+## 必要なもの
 
-## 出力ファイル
+- ニコニコのアカウント。放送開始の通知はログイン中のアカウントがフォローしている配信者の分だけ届くので、録画したい配信者はニコニコ側で **フォロー** しておいてください。アプリはフォロー状態を確認するだけで、フォローの操作はしません。
+- 十分な空き容量。画質によりますが、1 時間の放送でおおむね 1〜2 GB です。
 
-`保存先/配信者名/日時_lv番号_タイトル.*`
+## インストール
 
-| ファイル          | 内容                                                   |
-| ----------------- | ------------------------------------------------------ |
-| `.ts`             | 映像 + 音声 (h264 / AAC, 最高画質)                     |
-| `.comments.jsonl` | コメント。1 行 1 件の JSON (投稿時刻, vpos, 本文 など) |
-| `.json`           | 番組情報と録画結果のメタデータ                         |
+[Releases](https://github.com/honishi/nico-live-recorder/releases) から、お使いの OS 向けのファイルをダウンロードしてください。
 
-## 開発
+| OS      | ファイル                                                  |
+| ------- | --------------------------------------------------------- |
+| macOS   | `NicoLiveRecorder-<バージョン>-arm64.dmg` (Apple Silicon) |
+| Windows | `NicoLiveRecorder.Setup.<バージョン>.exe`                 |
 
-Node のバージョンは `.node-version` に固定しています (nodenv などで自動的に切り替わります)。
-Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` などに使う npm 11 が同梱されます。
+現在は開発者の署名を付けていないため、初回起動時に警告が出ます。
 
-```bash
-npm install
-npm run dev          # electron-vite の開発モードで起動
-npm run lint         # eslint (型情報を使うルールを含む)
-npm run typecheck
-npm test             # vitest
-npm run build        # out/ に成果物を出力
-```
+- **macOS**: 「開発元を確認できないため開けません」と出た場合は、アプリを右クリック (または control + クリック) して「開く」を選んでください。1 度開けば次回からは警告なしに起動します。
+- **Windows**: 「Windows によって PC が保護されました」と出た場合は、「詳細情報」→「実行」を選んでください。
 
-Electron を起動せずに録画部分だけを試すスクリプトもあります。
+## 使い方
 
-```bash
-npx tsx scripts/record.ts lv123456789 30 ./recordings      # 30 秒だけ録画
-npx tsx scripts/record-comments.ts                          # コメント取得のみ
-NICO_USER_SESSION=... npx tsx scripts/push-listen.ts        # push 購読の疎通確認
-npm run build && npx tsx scripts/e2e-screenshots.ts         # アプリを起動して各タブのスクリーンショット
-```
+1. **ログイン**: アプリを起動し、画面上部の「未ログイン」からニコニコにログインします。ログイン情報はこのアプリの中だけに保存されます。
+2. **録画対象を登録**: 「対象」タブで、配信者のユーザー ID かユーザーページの URL (`https://www.nicovideo.jp/user/12345`) を入力して追加します。一覧にはフォロー中かどうかも表示されます。フォローしていない配信者は push 通知が届かないので、ニコニコ側でフォローしてください。
+3. **待つだけ**: 対象の放送が始まると自動で録画が始まり、「録画」タブに表示されます。放送が終わると自動で止まります。
+4. **録画を見る**: 「履歴」タブや、トレイ (メニューバー) の「録画フォルダを開く」から保存先を開けます。
 
-検証用に起動するときは `NLR_USER_DATA` (設定の置き場所) と `NLR_OUTPUT_DIR` (保存先の既定値) で本番と分けられます。
+### 設定
 
-```bash
+「設定」タブで次を変えられます。
 
-```
+- **保存先**: 録画を置くフォルダ。既定は macOS が `ムービー/NicoLiveRecorder`、Windows が `ビデオ\NicoLiveRecorder` です。
+- **確認の間隔**: push 通知の取りこぼしに備えて、フォロー中の放送を定期的に確認する間隔 (15〜300 秒、既定 30 秒)。
+- **空き容量の警告**: 保存先の空き容量がこの値を下回ったら警告します (0 で無効)。録画は止めません。
+- **push 通知で放送開始を検知する**: 切ると定期確認だけになり、最大で間隔ぶん検知が遅れます。
+- **起動時に放送中だった対象も録画する**: アプリ起動時に既に放送中の対象を途中から録画するかどうか。
+- **録画の開始・終了をデスクトップ通知する**
 
-画面のデザインは `docs/design/` (Claude Design のハンドオフ) を正としています。
+### 常駐とトレイ
 
-### コード構成
+ウィンドウを閉じてもアプリは終了せず、トレイ (macOS ではメニューバー) に残って検知と録画を続けます。トレイのアイコンから、録画中の一覧と停止、ウィンドウを開く、録画フォルダを開く、終了ができます。
 
-```
-src/main/core/nico/        視聴 WebSocket、HLS 取得・復号、ffmpeg 多重化、フォロー中番組 API
-src/main/core/recorder/    映像録画・コメント録画・番組単位の録画まとめ
-src/main/core/detector/    push + ポーリングの放送検知
-src/main/core/push/        Web Push の購読管理 (ニコニコ push API への登録、通知の復号)
-src/main/vendor/web-push/  AutoPush クライアントと RFC8291 復号 (chrome-nico-alert 由来)
-src/main/vendor/nico-client/  NDGR コメントクライアント (stream-journal 由来)
-src/main/app/              Electron 側: 設定、ログイン、録画マネージャ、トレイ、IPC
-src/renderer/              React の設定ウィンドウ
-resources/proto/           NDGR の protobuf 定義
-```
+## 出力されるファイル
 
-## CI とリリース
+録画は `保存先/配信者名/放送開始日時_lv番号_タイトル` の名前で、次の 3 つを 1 組として保存します。
 
-- PR と main への push で GitHub Actions (`.github/workflows/ci.yml`) が format / lint / typecheck / test / build を実行します。
-- `v0.1.0` のような `v` 始まりのタグを push すると、macOS (Apple Silicon) と Windows (x64) のパッケージを作り、下書きのリリースに添付します (`release.yml`)。内容を確認してから公開してください。署名と公証は行っていません。
+| ファイル          | 内容                                                 |
+| ----------------- | ---------------------------------------------------- |
+| `.ts`             | 映像と音声。動画プレイヤー (VLC など) で再生できます |
+| `.comments.jsonl` | コメント。1 行 1 件のテキスト                        |
+| `.json`           | 番組情報と録画結果                                   |
 
-## パッケージング
+映像が途中で止まって再開した場合は `_2.ts`, `_3.ts` のように分かれます。
+設定やログの置き場所を含めた一覧は [docs/files.md](docs/files.md) にあります。
 
-```bash
-npm run package:mac   # release/ に dmg / zip
-npm run package:win   # release/ に nsis インストーラ
-```
+## うまくいかないとき
 
-ffmpeg は `ffmpeg-static` から取り込みます。この npm パッケージはインストール時に実行環境向けのバイナリだけを取得するため、別プラットフォーム向けにビルドする場合は次のように対象を指定して `npm install` し直してください。
+- 「ログ」タブに検知や録画の経過とエラーが出ます。「ファイルを開く」でログファイルを開けます。
+- 放送が検知されないときは、その配信者をフォローしているか、「対象」タブで有効になっているか、画面上部が「監視中」になっているかを確認してください。有効な対象が 0 件のときは監視を止めます。
+- ログインが切れると画面上部にバナーが出ます。もう一度ログインしてください。
 
-```bash
-npm_config_platform=win32 npm_config_arch=x64 npm install
-```
+## 開発者向け
+
+仕組み、開発環境、コード構成、リリースの手順は [docs/development.md](docs/development.md) にまとめています。
 
 ## ライセンス
 

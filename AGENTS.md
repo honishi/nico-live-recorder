@@ -1,7 +1,7 @@
 # AGENTS.md
 
 nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業するときの規約。
-仕組みやコード構成は [README.md](README.md) を参照すること。
+仕組みやコード構成は [docs/development.md](docs/development.md)、出力するファイルは [docs/files.md](docs/files.md) を参照すること。README.md は一般の利用者向けなので、開発者向けの内容は docs/ に書く。
 
 ## Issue と作業の流れ
 
