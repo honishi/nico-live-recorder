@@ -39,6 +39,7 @@ export interface VideoRecordResult {
 const WS_RECONNECT_ATTEMPTS = 5;
 const WS_RECONNECT_BASE_DELAY_MS = 2_000;
 const GRACE_AFTER_END_MS = 5_000;
+const REFRESH_COOLDOWN_MS = 2_000;
 
 function cookieHeaderOf(cookies?: Record<string, string>): string | undefined {
   if (!cookies) {
@@ -108,9 +109,14 @@ export async function recordVideo(
   });
   const pipes = muxer.start();
 
-  // 403 時の cookie 更新は single-flight にする (映像・音声から同時に呼ばれる)
+  // 403 時の cookie 更新は single-flight にする (映像・音声から同時に呼ばれる)。
+  // 更新直後にもう一方のトラックが古い cookie で 403 になっても、張り直しは繰り返さない
   let refreshing: Promise<void> | undefined;
+  let refreshedAt = 0;
   const refreshCredentials = (): Promise<void> => {
+    if (!refreshing && Date.now() - refreshedAt < REFRESH_COOLDOWN_MS) {
+      return Promise.resolve();
+    }
     if (!refreshing) {
       refreshing = (async () => {
         const stream = await session.refreshStream();
@@ -121,6 +127,7 @@ export async function recordVideo(
         }
       })().finally(() => {
         refreshing = undefined;
+        refreshedAt = Date.now();
       });
     }
     return refreshing;
