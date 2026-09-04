@@ -306,6 +306,102 @@ describe('RecordingManager', () => {
     expect(history.get('lv1')?.videoPaths).toEqual([`${second.options.outputDir}/rec_2.ts`]);
   });
 
+  /** 1 パート目を実ファイル付きで終わらせ、再開後の 2 パート目の呼び出しを返す */
+  async function startSecondPart(): Promise<{
+    firstPath: string;
+    secondPath: string;
+    second: RecordCall;
+  }> {
+    await manager.startRecording('lv1', 'manual');
+    const first = await nextRecordCall(0);
+    const firstPath = path.join(first.options.outputDir, 'rec.ts');
+    fs.mkdirSync(first.options.outputDir, { recursive: true });
+    fs.writeFileSync(firstPath, 'x'.repeat(100));
+    first.options.onPaths?.({
+      attempt: 1,
+      videoPath: firstPath,
+      commentsPath: `${firstPath}.jsonl`,
+    });
+    first.pathsSent = true;
+    await waitFor(async () => (await manager.getRecordings())[0]?.videoBytes === 100, 5000);
+    first.resolve(
+      finishedResult(first, { video: { reason: 'idle', video: {} }, videoPath: firstPath }),
+    );
+
+    // 再開待ちの間もサイズ監視は動くが、完了済みのパートを二重に数えない
+    await vi.advanceTimersByTimeAsync(5_500);
+    const second = await nextRecordCall(1);
+    expect(second.options.attempt).toBe(2);
+    expect((await manager.getRecordings())[0]?.videoBytes).toBe(100);
+
+    const secondPath = path.join(second.options.outputDir, 'rec_2.ts');
+    fs.writeFileSync(secondPath, 'y'.repeat(50));
+    second.options.onPaths?.({
+      attempt: 2,
+      videoPath: secondPath,
+      commentsPath: `${firstPath}.jsonl`,
+    });
+    second.pathsSent = true;
+    await waitFor(async () => (await manager.getRecordings())[0]?.videoBytes === 150, 5000);
+    return { firstPath, secondPath, second };
+  }
+
+  test(
+    '2 パート目のファイルだけが消えても、残った 1 パート目を二重に数えない',
+    { timeout: 15_000 },
+    async () => {
+      const { firstPath, secondPath, second } = await startSecondPart();
+      fs.rmSync(secondPath);
+
+      await waitFor(() => second.signal?.aborted === true, 5000);
+      const active = (await manager.getRecordings())[0];
+      expect(active.videoBytes).toBe(100);
+      expect(active.videoPaths).toEqual([firstPath]);
+
+      // 再開待ちの間に 1 パート目が finishedPartBytes と stat の両方で数えられないこと
+      second.resolve(
+        finishedResult(second, { video: { reason: 'aborted', video: {} }, videoPath: secondPath }),
+      );
+      // 2 回目の再開は待ち時間が倍 (10 秒) になる
+      await vi.advanceTimersByTimeAsync(10_500);
+      const third = await nextRecordCall(2);
+      expect(third.options.attempt).toBe(3);
+      expect((await manager.getRecordings())[0]?.videoBytes).toBe(100);
+      expect(history.get('lv1')?.videoPath).toBe(firstPath);
+      expect(history.get('lv1')?.videoBytes).toBe(100);
+    },
+  );
+
+  test(
+    '2 パート目の録画中にフォルダごと消えたら、以前のパートも一覧と容量から外す',
+    { timeout: 15_000 },
+    async () => {
+      const { firstPath, secondPath, second } = await startSecondPart();
+      fs.rmSync(second.options.outputDir, { recursive: true, force: true });
+
+      await waitFor(() => second.signal?.aborted === true, 5000);
+      const active = (await manager.getRecordings())[0];
+      expect(active.videoBytes).toBe(0);
+      expect(active.videoPaths ?? []).toEqual([]);
+
+      // 代表パスが消えたファイルを指さない
+      second.resolve(
+        finishedResult(second, { video: { reason: 'aborted', video: {} }, videoPath: secondPath }),
+      );
+      // 2 回目の再開は待ち時間が倍 (10 秒) になる
+      await vi.advanceTimersByTimeAsync(10_500);
+      const third = await nextRecordCall(2);
+      expect(third.options.attempt).toBe(3);
+      expect(history.get('lv1')?.videoPath).toBeUndefined();
+      expect(history.get('lv1')?.videoPaths ?? []).not.toContain(firstPath);
+      expect(history.get('lv1')?.videoBytes).toBe(0);
+
+      third.resolve(finishedResult(third));
+      await waitFor(() => history.get('lv1')?.state === 'done');
+      expect(history.get('lv1')?.videoPaths).toEqual([`${third.options.outputDir}/rec_3.ts`]);
+    },
+  );
+
   test('番組が終わっていたら、そこまでの録画で完了にする', async () => {
     await manager.startRecording('lv1', 'manual');
     const first = await nextRecordCall(0);
@@ -394,6 +490,59 @@ describe('RecordingManager', () => {
       expect(probeCalls).toBe(callsBefore);
     } finally {
       await lowManager.shutdown();
+    }
+  });
+
+  test('空き容量の取得に失敗したとき、直前の値を使うのは同じ保存先のときだけ', async () => {
+    let free = 1 * 1024 ** 3;
+    let probeFails = false;
+    settings.update({ minFreeSpaceGb: 5 });
+    const ctxManager = new RecordingManager({
+      settings,
+      auth: fakeAuth(),
+      pushStore: {
+        load: async () => undefined,
+        save: async () => undefined,
+        clear: async () => undefined,
+      },
+      history,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      ffmpegPath: '/bin/false',
+      diskProbe: async () => {
+        if (probeFails) {
+          throw new Error('statfs failed');
+        }
+        return free;
+      },
+    });
+    try {
+      await ctxManager.refreshDiskSpace();
+      expect((await ctxManager.getAlerts(true)).map((a) => a.kind)).toEqual(['disk-space']);
+
+      // 同じ保存先でしきい値だけ下がり、取得に失敗しても、わかっている空き容量で判定し直す
+      probeFails = true;
+      settings.update({ minFreeSpaceGb: 0.5 });
+      await ctxManager.refreshDiskSpace();
+      expect(ctxManager.diskFreeBytes).toBe(free);
+      expect(await ctxManager.getAlerts(true)).toEqual([]);
+      settings.update({ minFreeSpaceGb: 5 });
+      await ctxManager.refreshDiskSpace();
+      expect((await ctxManager.getAlerts(true)).map((a) => a.kind)).toEqual(['disk-space']);
+
+      // 保存先が変わって取得に失敗したら、古い保存先の警告は引き継がず不明に戻す
+      settings.update({ outputDir: path.join(dir, 'other') });
+      await ctxManager.refreshDiskSpace();
+      expect(ctxManager.diskFreeBytes).toBeUndefined();
+      expect(await ctxManager.getAlerts(true)).toEqual([]);
+
+      // 取得できるようになれば新しい保存先の値で判定する
+      probeFails = false;
+      free = 50 * 1024 ** 3;
+      await ctxManager.refreshDiskSpace();
+      expect(ctxManager.diskFreeBytes).toBe(free);
+      expect(await ctxManager.getAlerts(true)).toEqual([]);
+    } finally {
+      await ctxManager.shutdown();
     }
   });
 
