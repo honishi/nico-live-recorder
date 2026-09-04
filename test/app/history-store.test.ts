@@ -153,4 +153,18 @@ describe('HistoryStore', () => {
     ]);
     expect(checked.map((e) => e.videoExists)).toEqual([true, false, false, undefined]);
   });
+
+  test('checkExistence はパートのどれかが残っていれば実在とし、代表パスを実在する最後のパートにする', async () => {
+    const part1 = path.join(dir, 'p1.ts');
+    fs.writeFileSync(part1, '');
+    const [checked] = await HistoryStore.checkExistence([
+      entry({
+        programId: 'lv1',
+        videoPath: path.join(dir, 'p2-never-created.ts'),
+        videoPaths: [part1, path.join(dir, 'p2-never-created.ts')],
+      }),
+    ]);
+    expect(checked.videoExists).toBe(true);
+    expect(checked.videoPath).toBe(part1);
+  });
 });

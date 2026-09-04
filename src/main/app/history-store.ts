@@ -156,22 +156,33 @@ export class HistoryStore {
     }
   }
 
-  /** 録画ファイルが残っているかを確認して videoExists を埋める */
+  /**
+   * 録画ファイルが残っているかを確認して videoExists を埋める。
+   * 再開したものはパートが複数あるので、どれか 1 つでも残っていれば「残っている」とし、
+   * 代表の videoPath も実在する最後のパートにする (最新の候補が生成前に落ちた場合の保険)
+   */
   static async checkExistence(items: RecordingInfo[]): Promise<RecordingInfo[]> {
     return Promise.all(
       items.map(async (info) => {
         if (IN_PROGRESS.has(info.state)) {
           return info;
         }
-        if (!info.videoPath) {
+        const candidates = [
+          ...new Set([...(info.videoPaths ?? []), ...(info.videoPath ? [info.videoPath] : [])]),
+        ];
+        const existing: string[] = [];
+        for (const candidate of candidates) {
+          try {
+            await fsp.access(candidate);
+            existing.push(candidate);
+          } catch {
+            // 消えたパートは数えない
+          }
+        }
+        if (existing.length === 0) {
           return { ...info, videoExists: false };
         }
-        try {
-          await fsp.access(info.videoPath);
-          return { ...info, videoExists: true };
-        } catch {
-          return { ...info, videoExists: false };
-        }
+        return { ...info, videoExists: true, videoPath: existing[existing.length - 1] };
       }),
     );
   }
