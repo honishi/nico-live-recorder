@@ -40,6 +40,8 @@ interface ActiveRecording {
   partAbortReason?: 'output-missing';
   /** 現在書き込み中のファイル。パートが終わったら外す (完了済みのパートを二重に数えないため) */
   currentPartPath?: string;
+  /** 消えたパートを一覧と容量から外す処理。録画本体が先に終わっても、これを待ってから状態を確定する */
+  partCleanup?: Promise<void>;
 }
 
 export interface RecordingManagerOptions {
@@ -621,6 +623,12 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
             AbortSignal.any([controller.signal, partController.signal]),
           );
           recording.partController = undefined;
+          // 消失の後始末が走っている途中で録画本体が自然終了することがあるので、終わるまで待つ
+          // (待たずに確定すると、古い一覧や容量を履歴に書いてしまう)
+          if (recording.partCleanup) {
+            await recording.partCleanup;
+            recording.partCleanup = undefined;
+          }
           const outputMissing = recording.partAbortReason === 'output-missing';
           if (outputMissing) {
             // 消えたパートのファイルは採用せず、代表パスは残っているパートにする
@@ -800,23 +808,29 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         );
         recording.partAbortReason = 'output-missing';
         recording.partFileSeen = false;
-        // フォルダごと消された場合は以前のパートも無いので、残っているものだけを数え直す
-        const survivors = await existingFiles(
-          (info.videoPaths ?? []).filter((p) => p !== videoPath),
-        );
-        info.videoPaths = survivors.length > 0 ? survivors : undefined;
-        recording.finishedPartBytes = await sumFileSizes(survivors);
-        info.videoBytes = recording.finishedPartBytes;
-        // コメントファイルも一緒に消えていれば、次のパートで作り直して過去分を取り直す
-        if (info.commentsPath && !(await fileExists(info.commentsPath))) {
-          this.logger.warn(`[rec] comment file disappeared too: ${info.commentsPath}`);
-          info.commentsPath = undefined;
-          info.commentCount = 0;
-        }
+        // 先に書き込みを止め、残ったファイルの数え直しは録画ループが待ち合わせる
         part.abort();
-        this.emitChange();
+        recording.partCleanup = this.discardLostPart(recording, videoPath);
+        await recording.partCleanup;
       }
     }
+  }
+
+  /** 消えたパートを一覧と容量から外し、残っているパートだけで数え直す */
+  private async discardLostPart(recording: ActiveRecording, lostPath: string): Promise<void> {
+    const info = recording.info;
+    // フォルダごと消された場合は以前のパートも無いので、残っているものだけを数え直す
+    const survivors = await existingFiles((info.videoPaths ?? []).filter((p) => p !== lostPath));
+    info.videoPaths = survivors.length > 0 ? survivors : undefined;
+    recording.finishedPartBytes = await sumFileSizes(survivors);
+    info.videoBytes = recording.finishedPartBytes;
+    // コメントファイルも一緒に消えていれば、次のパートで作り直して過去分を取り直す
+    if (info.commentsPath && !(await fileExists(info.commentsPath))) {
+      this.logger.warn(`[rec] comment file disappeared too: ${info.commentsPath}`);
+      info.commentsPath = undefined;
+      info.commentCount = 0;
+    }
+    this.emitChange();
   }
 
   private notify(title: string, body: string): void {

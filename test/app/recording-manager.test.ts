@@ -402,6 +402,43 @@ describe('RecordingManager', () => {
     },
   );
 
+  test(
+    '消失の後始末より先に録画本体が終わっても、後始末を待ってから状態を確定する',
+    { timeout: 15_000 },
+    async () => {
+      const { firstPath, secondPath, second } = await startSecondPart();
+      // パート停止の abort と同時に (後始末の実在確認が終わる前に) 録画本体が自然終了する
+      second.signal?.addEventListener('abort', () => {
+        second.resolve(
+          finishedResult(second, {
+            video: { reason: 'endlist', video: {} },
+            videoPath: secondPath,
+          }),
+        );
+      });
+      fs.rmSync(secondPath);
+
+      // 再開待ちに入った時点で、後始末が反映された一覧と容量で履歴が確定している
+      await waitFor(async () => (await manager.getRecordings())[0]?.state === 'starting', 5000);
+      expect(history.get('lv1')?.videoPath).toBe(firstPath);
+      expect(history.get('lv1')?.videoPaths).toEqual([firstPath]);
+      expect(history.get('lv1')?.videoBytes).toBe(100);
+
+      // 完了済みの合計も古い値 (消えたパート込み) になっていない
+      await vi.advanceTimersByTimeAsync(10_500);
+      const third = await nextRecordCall(2);
+      const thirdPath = path.join(third.options.outputDir, 'rec_3.ts');
+      fs.writeFileSync(thirdPath, 'z'.repeat(30));
+      third.options.onPaths?.({
+        attempt: 3,
+        videoPath: thirdPath,
+        commentsPath: `${firstPath}.jsonl`,
+      });
+      third.pathsSent = true;
+      await waitFor(async () => (await manager.getRecordings())[0]?.videoBytes === 130, 5000);
+    },
+  );
+
   test('番組が終わっていたら、そこまでの録画で完了にする', async () => {
     await manager.startRecording('lv1', 'manual');
     const first = await nextRecordCall(0);
