@@ -305,12 +305,6 @@ export class AutoPushClient {
             clearInterval(this.stateCheckInterval);
           }
           this.stateCheckInterval = setInterval(() => {
-            if (this.ws) {
-              const state = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][this.ws.readyState];
-              pushLog.debug(
-                `[AutoPush] WebSocket state check: ${state} (${new Date().toISOString()})`,
-              );
-            }
             this.checkLiveness();
           }, 30000); // Every 30 seconds
 
@@ -595,9 +589,6 @@ export class AutoPushClient {
   private handleMessage(message: MessageData): void {
     const messageType =
       message.messageType || (Object.keys(message).length === 0 ? 'pong' : 'ping');
-
-    pushLog.debug('[AutoPush] Processing message type:', messageType);
-    pushLog.debug('[AutoPush] Message keys:', Object.keys(message));
 
     // Internal processing
     switch (messageType) {

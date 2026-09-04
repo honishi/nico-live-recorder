@@ -37,7 +37,8 @@ export async function buildStatus(ctx: IpcContext): Promise<AppStatus> {
     detectorRunning: ctx.manager.detectorRunning,
     recordings: await ctx.manager.getRecordings(),
     historyVersion: ctx.manager.historyVersion,
-    logs: ctx.logger.recent(LOG_ENTRIES_FOR_UI),
+    // debug は「debug を表示」のときだけ渡す (量が多いので、毎回の status に載せない)
+    logs: ctx.logger.recent(LOG_ENTRIES_FOR_UI, ctx.settings.get().ui.showDebug),
     alerts: await ctx.manager.getAlerts(loggedIn),
     logFilePath: ctx.logger.logFilePath,
     diskFreeBytes: ctx.manager.diskFreeBytes,

@@ -44,6 +44,45 @@ describe('AppLogger', () => {
     expect(stdout).toHaveBeenCalledTimes(1);
   });
 
+  test('debug が大量に出ても info 以上は押し出されず、debug 抜きでも取り出せる', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const logger = new AppLogger(dir, 'info');
+    logger.info('[rec] first');
+    for (let i = 0; i < 2500; i += 1) {
+      logger.debug(`[lv1] [comments] chunk ${i}`);
+    }
+    logger.warn('[rec] last');
+    await logger.close();
+
+    const withoutDebug = logger.recent(1000, false);
+    expect(withoutDebug.map((e) => e.message)).toEqual(['[rec] first', '[rec] last']);
+    // debug 込みでも info 以上は全部残り、時刻順に並ぶ
+    const withDebug = logger.recent(1000);
+    expect(withDebug[0].message).toBe('[rec] first');
+    expect(withDebug.at(-1)?.message).toBe('[rec] last');
+    expect(withDebug.filter((e) => e.level === 'debug')).toHaveLength(1000);
+    expect(withDebug[1].message).toBe('[lv1] [comments] chunk 1500');
+  });
+
+  test('ファイルが上限を超えたら書き込み中でも .1 に退避して続ける', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const logger = new AppLogger(dir, 'info', 200);
+    for (let i = 0; i < 10; i += 1) {
+      logger.info(`[rec] line ${i} ${'x'.repeat(40)}`);
+      // 退避はストリームを閉じてから行うので、1 行ごとに待つ
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await logger.close();
+
+    // 上限 200 バイトなので途中で何度か退避され、最後の分だけが app.log に残る
+    const rotated = fs.readFileSync(path.join(dir, 'app.log.1'), 'utf8');
+    const current = fs.readFileSync(path.join(dir, 'app.log'), 'utf8');
+    expect(current).toContain('line 9');
+    expect(current).not.toContain('line 0');
+    expect(rotated).not.toContain('line 9');
+    expect(Buffer.byteLength(current)).toBeLessThan(400);
+  });
+
   test('出力レベルを debug に下げるとファイルにも debug が書かれる', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const logger = new AppLogger(dir, 'info');
