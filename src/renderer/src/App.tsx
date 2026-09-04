@@ -175,6 +175,8 @@ export function App(): ReactElement {
         )}
         {tab === 'targets' && (
           <TargetsTab
+            // 再ログインしたら確認済みのフォロー状態を捨てて取り直す (key で作り直す)
+            key={status.auth.loggedIn ? 'in' : 'out'}
             targets={settings.targets}
             loggedIn={status.auth.loggedIn}
             onRemoved={onTargetRemoved}

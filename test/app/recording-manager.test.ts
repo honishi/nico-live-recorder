@@ -629,6 +629,32 @@ describe('RecordingManager', () => {
     expect(pushManagers.at(-1)?.started).toBe(false);
   });
 
+  test('検知の再起動中に来た設定変更は、終わってから最新の設定で反映する', async () => {
+    // ログイン確認を遅らせて、再起動の途中で対象を追加する
+    let release: ((loggedIn: boolean) => void) | undefined;
+    const auth = fakeAuth();
+    Object.assign(auth, {
+      isLoggedIn: () => new Promise<boolean>((resolve) => (release = resolve)),
+    });
+    const slowManager = createManager({ auth });
+    try {
+      const started = slowManager.start();
+      await waitFor(() => release !== undefined);
+      settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+      const first = release!;
+      release = undefined;
+      first(true);
+      // 2 周目のログイン確認が始まったら、対象ありとして検知器が動く
+      await waitFor(() => release !== undefined);
+      release!(true);
+      await started;
+      await waitFor(() => slowManager.detectorRunning);
+      expect(detectors.at(-1)?.running).toBe(true);
+    } finally {
+      await slowManager.shutdown();
+    }
+  });
+
   test('検知した放送は対象の配信者のときだけ録画する', async () => {
     settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
     await manager.start();

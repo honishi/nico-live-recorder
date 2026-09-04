@@ -27,7 +27,12 @@ export class FollowStatusCache {
   private readonly unknownTtlMs: number;
   private readonly maxConcurrent: number;
   private readonly results = new Map<string, { result: FollowCheckResult; expiresAt: number }>();
-  private readonly inFlight = new Map<string, Promise<FollowCheckResult>>();
+  private readonly inFlight = new Map<
+    string,
+    { generation: number; promise: Promise<FollowCheckResult> }
+  >();
+  /** clear のたびに進める。古い世代 (別のログイン状態) の問い合わせ結果は保存しない */
+  private generation = 0;
   private running = 0;
   private readonly waiting: Array<() => void> = [];
 
@@ -45,27 +50,35 @@ export class FollowStatusCache {
     if (cached && cached.expiresAt > this.now()) {
       return Promise.resolve(cached.result);
     }
-    // 同じユーザーの問い合わせが進行中なら、その結果を待つ
+    // 同じユーザーの問い合わせが同じ世代で進行中なら、その結果を待つ
+    const generation = this.generation;
     const pending = this.inFlight.get(userId);
-    if (pending) {
-      return pending;
+    if (pending && pending.generation === generation) {
+      return pending.promise;
     }
-    const task = this.withSlot(() => this.check(userId, cookieHeader))
+    const promise = this.withSlot(() => this.check(userId, cookieHeader))
       .then((result) => {
-        const ttl = result === 'unknown' ? this.unknownTtlMs : this.resultTtlMs;
-        this.results.set(userId, { result, expiresAt: this.now() + ttl });
+        // 途中でログイン状態が変わっていたら、古いアカウントの結果なので保存しない
+        if (generation === this.generation) {
+          const ttl = result === 'unknown' ? this.unknownTtlMs : this.resultTtlMs;
+          this.results.set(userId, { result, expiresAt: this.now() + ttl });
+        }
         return result;
       })
       .finally(() => {
-        this.inFlight.delete(userId);
+        if (this.inFlight.get(userId)?.promise === promise) {
+          this.inFlight.delete(userId);
+        }
       });
-    this.inFlight.set(userId, task);
-    return task;
+    this.inFlight.set(userId, { generation, promise });
+    return promise;
   }
 
-  /** ログイン状態が変わったときなど、保持している結果をすべて捨てる */
+  /** ログイン状態が変わったときなど、保持している結果をすべて捨て、進行中の結果も採用しない */
   clear(): void {
+    this.generation += 1;
     this.results.clear();
+    this.inFlight.clear();
   }
 
   /** 同時実行数の枠が空くのを待ってから実行する */

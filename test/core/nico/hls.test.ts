@@ -249,8 +249,8 @@ https://cdn.test/seg/11.cmfv
         `#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:${segments[0]}\n` +
         segments.map((seq) => `#EXTINF:3,\nhttps://cdn.test/plain/${seq}.cmfv\n`).join('') +
         (end ? '#EXT-X-ENDLIST\n' : '');
-      // 1 回目は新着あり、2 回目は変化なし、3 回目で終了
-      const playlists = [live([10]), live([10]), live([10, 11], true)];
+      // 1 回目は初回、2 回目は古いセグメントが消えただけ (新着なしでも本文は変化)、3 回目は変化なし、4 回目で終了
+      const playlists = [live([9, 10]), live([10]), live([10]), live([10, 11], true)];
       const fetchedAt: number[] = [];
       const fetchImpl = vi.fn(async (input: string | URL | Request) => {
         const url =
@@ -275,7 +275,7 @@ https://cdn.test/seg/11.cmfv
 
       expect(result.reason).toBe('endlist');
       const start = fetchedAt[0];
-      expect(fetchedAt.map((t) => t - start)).toEqual([0, 3000, 4500]);
+      expect(fetchedAt.map((t) => t - start)).toEqual([0, 3000, 6000, 7500]);
     } finally {
       vi.useRealTimers();
     }

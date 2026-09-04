@@ -83,6 +83,23 @@ describe('FollowStatusCache', () => {
     fake.resolveAll();
   });
 
+  test('clear の後は進行中の問い合わせに合流せず、その結果も保存しない', async () => {
+    const fake = fakeCheck();
+    const cache = new FollowStatusCache({ check: fake.check });
+    const old = cache.get('1', 'old-cookie');
+    cache.clear();
+    // 新しいログイン状態の問い合わせは別に始まる
+    const fresh = cache.get('1', 'new-cookie');
+    expect(fake.calls).toEqual(['1', '1']);
+    fake.resolveAll('following');
+    expect(await old).toBe('following');
+    expect(await fresh).toBe('following');
+
+    // 旧世代の結果は保存されず、新世代の結果だけがキャッシュに残る
+    expect(await cache.get('1', 'new-cookie')).toBe('following');
+    expect(fake.calls).toHaveLength(2);
+  });
+
   test('同時に問い合わせるのは上限までで、残りは順番待ちする', async () => {
     const fake = fakeCheck();
     const cache = new FollowStatusCache({ check: fake.check, maxConcurrent: 3 });

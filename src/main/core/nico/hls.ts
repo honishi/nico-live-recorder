@@ -300,6 +300,7 @@ export class HlsTrackDownloader {
   async run(sink: Writable, signal?: AbortSignal): Promise<TrackResult> {
     const result: TrackResult = { reason: 'stopped', segments: 0, bytes: 0 };
     let lastSeq: number | undefined;
+    let lastPlaylistText: string | undefined;
     let sentMapUri: string | undefined;
     let lastProgressAt = Date.now();
 
@@ -321,14 +322,13 @@ export class HlsTrackDownloader {
         const finalPass = this.stopRequested;
         // 次回の取得間隔は「取得を始めた時刻」から数える (RFC 8216 6.3.4)
         const fetchStartedAt = Date.now();
-        const playlist = parseMediaPlaylist(
-          (await this.fetchWithRetry(this.playlistUrl, signal)).toString('utf8'),
-          this.playlistUrl,
-        );
+        const playlistText = (await this.fetchWithRetry(this.playlistUrl, signal)).toString('utf8');
+        // RFC 8216 の「変化した」は本文の変化 (古いセグメントの削除や属性の変更も含む)
+        const changed = playlistText !== lastPlaylistText;
+        lastPlaylistText = playlistText;
+        const playlist = parseMediaPlaylist(playlistText, this.playlistUrl);
 
         let fresh = playlist.segments.filter((s) => lastSeq === undefined || s.seq > lastSeq);
-        // playlist の内容が変わったか (blank を除く前の新着で判定する)
-        const changed = lastSeq === undefined || fresh.length > 0;
         if (lastSeq === undefined && !this.startFromBeginning) {
           fresh = fresh.slice(-LIVE_EDGE_SEGMENTS);
         }

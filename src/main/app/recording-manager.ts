@@ -112,6 +112,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private readonly history: HistoryStore;
   private historyVersionCounter = 0;
   private restarting?: Promise<void>;
+  /** 再起動の実行中に別の変更が来た (終わってから最新の設定でもう一度回す) */
+  private restartAgain = false;
   private stopped = false;
   /** ログイン cookie はあるのに API が認証エラーを返した (セッション切れ) */
   private authExpired = false;
@@ -335,9 +337,16 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   /** ログイン状態や設定の変更を反映して検知を組み直す */
   restartDetection(): Promise<void> {
     if (this.restarting) {
+      // 設定は実行の先頭で読むので、途中で来た変更は合流させるだけでは反映されない
+      this.restartAgain = true;
       return this.restarting;
     }
-    this.restarting = this.doRestartDetection().finally(() => {
+    this.restarting = (async () => {
+      do {
+        this.restartAgain = false;
+        await this.doRestartDetection();
+      } while (this.restartAgain && !this.stopped);
+    })().finally(() => {
       this.restarting = undefined;
     });
     return this.restarting;
