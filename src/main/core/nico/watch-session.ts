@@ -77,7 +77,8 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
 
   private keepSeatTimer?: NodeJS.Timeout;
   private latestStream?: HlsStreamInfo;
-  private intentionalClose = false;
+  /** 自分で閉じたソケット。close イベントで「意図した切断か」を判定するのに使う */
+  private readonly intentionallyClosed = new WeakSet<WebSocket>();
   private closedForever = false;
 
   constructor(webSocketUrl: string, options: WatchSessionOptions = {}) {
@@ -105,7 +106,6 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
       return Promise.reject(new Error('WatchSession は既に close されています'));
     }
     this.disposeSocket();
-    this.intentionalClose = false;
 
     return new Promise<void>((resolve, reject) => {
       const headers: Record<string, string> = {
@@ -157,7 +157,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
         if (!opened) {
           reject(new Error(`watch ws closed before open (code=${code})`));
         }
-        this.emit('close', { code, reason, intentional: this.intentionalClose });
+        this.emit('close', { code, reason, intentional: this.intentionallyClosed.has(ws) });
       });
     });
   }
@@ -181,6 +181,10 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
         resolve(info);
       };
       const onClose = (info: WatchSessionCloseInfo): void => {
+        // 張り直しで自分が閉じた古いソケットの close は、新しい接続の stream 待ちを妨げない
+        if (info.intentional && !this.closedForever) {
+          return;
+        }
         cleanup();
         reject(new Error(`stream 待機中に WebSocket が閉じました (code=${info.code})`));
       };
@@ -200,15 +204,12 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
    */
   async refreshStream(): Promise<HlsStreamInfo> {
     this.logger.info('watch ws reconnecting to refresh stream credentials');
-    this.intentionalClose = true;
-    this.disposeSocket();
     await this.connect();
     return this.waitForStream(true);
   }
 
   close(): void {
     this.closedForever = true;
-    this.intentionalClose = true;
     this.disposeSocket();
   }
 
@@ -219,6 +220,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
     if (!ws) {
       return;
     }
+    this.intentionallyClosed.add(ws);
     if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
       ws.close();
     }
@@ -351,7 +353,6 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
       this.url = url.toString();
     }
     this.logger.info(`watch ws reconnect requested (wait ${waitSec}s)`);
-    this.intentionalClose = true;
     this.disposeSocket();
     setTimeout(
       () => {
