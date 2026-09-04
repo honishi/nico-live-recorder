@@ -33,7 +33,12 @@ async function main(): Promise<void> {
   const userData = path.join(outDir, 'userdata');
   const log = fs.createWriteStream(path.join(outDir, 'electron.log'));
   const child = spawn('npx', ['electron', '.', `--remote-debugging-port=${PORT}`], {
-    env: { ...process.env, NLR_USER_DATA: userData },
+    // 設定も保存先も出力ディレクトリの中に閉じ込め、本番の録画に触らない
+    env: {
+      ...process.env,
+      NLR_USER_DATA: userData,
+      NLR_OUTPUT_DIR: path.join(outDir, 'recordings'),
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   child.stdout.pipe(log);

@@ -141,7 +141,12 @@ export async function recordProgram(
       },
       errors: result.errors,
     };
-    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+    try {
+      await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+    } catch (error) {
+      // メタデータは補助情報なので、書けなくても録画そのものを失敗にしない
+      logger.warn(`メタデータを書き込めませんでした: ${metadataPath}`, error);
+    }
   };
   await writeMetadata();
 

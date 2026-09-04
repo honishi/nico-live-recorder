@@ -121,10 +121,10 @@ async function bootstrap(): Promise<void> {
       : path.join(app.getAppPath(), 'resources', 'proto'),
   );
 
-  const settings = new SettingsStore(
-    path.join(userData, 'settings.json'),
-    path.join(app.getPath('videos'), 'NicoLiveRecorder'),
-  );
+  // 保存先の既定値。検証用のインスタンスが本番の保存先に書かないよう、NLR_OUTPUT_DIR で差し替えられる
+  const defaultOutputDir =
+    process.env['NLR_OUTPUT_DIR'] ?? path.join(app.getPath('videos'), 'NicoLiveRecorder');
+  const settings = new SettingsStore(path.join(userData, 'settings.json'), defaultOutputDir);
   // ファイル出力のレベルは「debug を表示」に連動させる (開発時は常に debug)
   const applyLogLevel = (): void => {
     logger.setOutputLevel(!app.isPackaged || settings.get().ui.showDebug ? 'debug' : 'info');

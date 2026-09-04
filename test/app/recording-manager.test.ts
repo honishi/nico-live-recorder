@@ -265,6 +265,33 @@ describe('RecordingManager', () => {
     expect(history.get('lv1')?.state).not.toBe('done');
   });
 
+  test('録画中に出力ファイルが消えたら、そのパートを止めて別ファイルで再開する', async () => {
+    await manager.startRecording('lv1', 'manual');
+    const first = await nextRecordCall(0);
+    const videoPath = path.join(first.options.outputDir, 'rec.ts');
+    fs.mkdirSync(first.options.outputDir, { recursive: true });
+    fs.writeFileSync(videoPath, 'x'.repeat(100));
+    first.options.onPaths?.({ attempt: 1, videoPath, commentsPath: `${videoPath}.jsonl` });
+
+    // 1 秒ごとのサイズ監視でファイルを観測してから、フォルダごと消す (stat は実 I/O なので完了を待つ)
+    await waitFor(async () => (await manager.getRecordings())[0]?.videoBytes === 100, 5000);
+    fs.rmSync(first.options.outputDir, { recursive: true, force: true });
+
+    // パートだけが abort され、録画全体の停止ではない
+    await waitFor(() => first.signal?.aborted === true, 5000);
+    expect(manager.hasActiveRecordings()).toBe(true);
+    const active = (await manager.getRecordings())[0];
+    expect(active.videoBytes).toBe(0);
+    expect(active.videoPaths ?? []).not.toContain(videoPath);
+
+    first.resolve(finishedResult(first, { video: { reason: 'aborted', video: {} } }));
+    await vi.advanceTimersByTimeAsync(5_500);
+    const second = await nextRecordCall(1);
+    expect(second.options.attempt).toBe(2);
+    second.resolve(finishedResult(second));
+    await waitFor(() => history.get('lv1')?.state === 'done');
+  });
+
   test('番組が終わっていたら、そこまでの録画で完了にする', async () => {
     await manager.startRecording('lv1', 'manual');
     const first = await nextRecordCall(0);
