@@ -22,6 +22,8 @@ export interface VideoRecorderOptions {
   logger?: Logger;
   /** 取得済みの番組情報があれば渡す (視聴ページの再取得を省く) */
   programInfo?: NicoLiveProgramInfo;
+  /** 視聴 WebSocket の再接続待ちの基準 (テストで短くする) */
+  reconnectBaseDelayMs?: number;
 }
 
 export type VideoStopReason = 'program-ended' | 'endlist' | 'aborted' | 'idle' | 'disconnected';
@@ -38,6 +40,8 @@ export interface VideoRecordResult {
 
 const WS_RECONNECT_ATTEMPTS = 5;
 const WS_RECONNECT_BASE_DELAY_MS = 2_000;
+/** 再接続後にこれだけ切れずに続いたら、試行回数を数え直す */
+const WS_RECONNECT_STABLE_MS = 5 * 60 * 1000;
 const GRACE_AFTER_END_MS = 5_000;
 const REFRESH_COOLDOWN_MS = 2_000;
 
@@ -168,35 +172,58 @@ export async function recordVideo(
     logger.warn(`watch session disconnected by server: ${why}`);
   });
   session.on('error', (error) => logger.warn('watch session error', error));
+
+  // 再接続は録画全体で 1 つだけ動かし、試行回数も全体で数える。再接続したソケットがすぐ切れても
+  // 別のループを起こさない (障害中に接続が束になって増えるのを防ぐ)。
+  // 再接続後にしばらく安定して続いたときだけ回数を戻し、長い録画で散発的な切断に耐えられるようにする
+  const reconnectBaseDelayMs = options.reconnectBaseDelayMs ?? WS_RECONNECT_BASE_DELAY_MS;
+  let reconnectTask: Promise<void> | undefined;
+  let reconnectAttempts = 0;
+  let stableTimer: NodeJS.Timeout | undefined;
+  const reconnect = async (): Promise<void> => {
+    while (reconnectAttempts < WS_RECONNECT_ATTEMPTS) {
+      reconnectAttempts += 1;
+      await delay(reconnectBaseDelayMs * reconnectAttempts);
+      if (finishing || signal?.aborted) {
+        return;
+      }
+      try {
+        await session.connect();
+        await session.waitForStream(true);
+        logger.info(
+          `watch session reconnected (attempt ${reconnectAttempts}/${WS_RECONNECT_ATTEMPTS})`,
+        );
+        stableTimer = setTimeout(() => {
+          reconnectAttempts = 0;
+        }, WS_RECONNECT_STABLE_MS);
+        stableTimer.unref();
+        return;
+      } catch (error) {
+        logger.warn(
+          `watch session reconnect ${reconnectAttempts}/${WS_RECONNECT_ATTEMPTS} failed`,
+          error,
+        );
+      }
+    }
+    // 上限に達したら、番組が終わったかを確認して止める
+    try {
+      const latest = await client.getProgramInfo();
+      stopTracks(latest.status === NicoLiveProgramStatus.ended ? 'program-ended' : 'disconnected');
+    } catch {
+      stopTracks('disconnected');
+    }
+  };
   session.on('close', ({ intentional }) => {
-    if (intentional || finishing || signal?.aborted) {
+    if (stableTimer) {
+      clearTimeout(stableTimer);
+      stableTimer = undefined;
+    }
+    if (intentional || finishing || signal?.aborted || reconnectTask) {
       return;
     }
-    void (async () => {
-      for (let attempt = 1; attempt <= WS_RECONNECT_ATTEMPTS; attempt += 1) {
-        if (finishing || signal?.aborted) {
-          return;
-        }
-        await delay(WS_RECONNECT_BASE_DELAY_MS * attempt);
-        try {
-          await session.connect();
-          await session.waitForStream(true);
-          logger.info('watch session reconnected');
-          return;
-        } catch (error) {
-          logger.warn(`watch session reconnect ${attempt}/${WS_RECONNECT_ATTEMPTS} failed`, error);
-        }
-      }
-      // 再接続できない場合は番組が終わったかを確認して止める
-      try {
-        const latest = await client.getProgramInfo();
-        stopTracks(
-          latest.status === NicoLiveProgramStatus.ended ? 'program-ended' : 'disconnected',
-        );
-      } catch {
-        stopTracks('disconnected');
-      }
-    })();
+    reconnectTask = reconnect().finally(() => {
+      reconnectTask = undefined;
+    });
   });
 
   const onAbort = (): void => {
@@ -253,6 +280,9 @@ export async function recordVideo(
     throw error;
   } finally {
     signal?.removeEventListener('abort', onAbort);
+    if (stableTimer) {
+      clearTimeout(stableTimer);
+    }
     if (devFailTimer) {
       clearTimeout(devFailTimer);
     }
