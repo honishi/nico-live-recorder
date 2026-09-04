@@ -49,18 +49,21 @@ export function shortVersion(version: unknown): string | undefined {
 /** AutoPush クライアントのログ出力先。既定は何も出さない。アプリ側で差し替える */
 export interface PushLogger {
   debug(...args: unknown[]): void;
+  info(...args: unknown[]): void;
   warn(...args: unknown[]): void;
   error(...args: unknown[]): void;
 }
 
 let currentLogger: PushLogger = {
   debug: () => undefined,
+  info: () => undefined,
   warn: () => undefined,
   error: () => undefined,
 };
 
 export const pushLog: PushLogger = {
   debug: (...args) => currentLogger.debug(...args),
+  info: (...args) => currentLogger.info(...args),
   warn: (...args) => currentLogger.warn(...args),
   error: (...args) => currentLogger.error(...args),
 };

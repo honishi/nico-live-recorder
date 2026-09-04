@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import util from 'node:util';
 import { EventEmitter } from 'node:events';
 import type { Logger } from '../core/logger';
 import type { LogCategory, LogEntry, LogLevel } from '../../shared/types';
@@ -14,11 +15,40 @@ function formatArg(arg: unknown): string {
   if (typeof arg === 'string') {
     return arg;
   }
+  let json: string | undefined;
   try {
-    return JSON.stringify(arg);
+    json = JSON.stringify(arg);
   } catch {
+    json = undefined;
+  }
+  if (json !== undefined && json !== '{}') {
+    return json;
+  }
+  if (typeof arg !== 'object' || arg === null) {
     return String(arg);
   }
+  // Event のように列挙されるプロパティを持たないものは、inspect の結果に
+  // getter で取れる message / code を添えて、{} で情報が消えないようにする
+  const hints = describeHiddenFields(arg);
+  const inspected = util.inspect(arg, { depth: 3, breakLength: Infinity });
+  if (inspected === '{}') {
+    return hints || inspected;
+  }
+  return hints ? `${inspected} ${hints}` : inspected;
+}
+
+function describeHiddenFields(value: object): string {
+  const source = value as { message?: unknown; code?: unknown; error?: unknown };
+  const inner = source.error as { message?: unknown; code?: unknown } | undefined;
+  const fields: Array<[string, unknown]> = [
+    ['message', source.message],
+    ['code', source.code],
+    ['error', inner?.message ?? inner?.code],
+  ];
+  return fields
+    .filter(([, v]) => (typeof v === 'string' && v.length > 0) || typeof v === 'number')
+    .map(([k, v]) => `${k}=${String(v)}`)
+    .join(' ');
 }
 
 /** 先頭の `[tag]` 列から出所を判定する (例: `[lv123] [comments] ...` → comments) */

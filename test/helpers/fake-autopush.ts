@@ -14,6 +14,8 @@ export interface FakeAutoPush {
   acks: Record<string, unknown>[];
   /** 通知を最新の接続に送る */
   notify(channelId: string, data: string): void;
+  /** 最新の接続を close フレーム無しで切る (サーバー側の異常切断を真似る) */
+  drop(): void;
   close(): Promise<void>;
 }
 
@@ -79,6 +81,7 @@ export async function startFakeAutoPush(): Promise<FakeAutoPush> {
         JSON.stringify({ messageType: 'notification', channelID: channelId, version: 'v1', data }),
       );
     },
+    drop: () => latest?.terminate(),
     close: async () => {
       for (const client of wss.clients) {
         client.terminate();
