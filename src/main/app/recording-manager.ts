@@ -200,6 +200,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         new Promise<void>((resolve) => setTimeout(resolve, PUSH_STOP_TIMEOUT_MS)),
       ]);
     }
+    // 開始処理中 (番組情報の取得など) のものは、active に入るか失敗するまで待ってから止める
+    await Promise.allSettled([...this.starting.values()]);
     for (const recording of this.active.values()) {
       recording.controller.abort();
     }
@@ -389,6 +391,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     if (programInfo.status === NicoLiveProgramStatus.ended || !programInfo.webSocketUrl) {
       throw codedError(ERROR_CODES.programUnavailable, programInfo.status);
     }
+    // 終了処理が始まっていたら、ここで新しい録画を立ち上げない
+    if (this.stopped) {
+      throw new Error('shutting down');
+    }
     this.detector?.markSeen(programId);
 
     const providerName = meta.providerName ?? programInfo.providerName;
@@ -397,10 +403,17 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       settings.outputDir,
       sanitizeDirName(providerName ?? providerId ?? 'unknown'),
     );
-    // 同じ番組を録り直す場合 (クラッシュ後の再起動など) は、前回のファイルとコメント数を引き継ぐ
+    // 同じ番組を録り直す場合 (クラッシュ後の再起動など) は、前回のファイルとコメント数を引き継ぐ。
+    // 履歴にはファイル生成前の候補パスも残り得るので、実在するものだけを対象にする
     const previous = this.history.get(programId);
-    const previousPaths = previous?.videoPaths ?? (previous?.videoPath ? [previous.videoPath] : []);
+    const previousPaths = await existingFiles(
+      previous?.videoPaths ?? (previous?.videoPath ? [previous.videoPath] : []),
+    );
     const previousBytes = await sumFileSizes(previousPaths);
+    const previousCommentsPath =
+      previous?.commentsPath && (await fileExists(previous.commentsPath))
+        ? previous.commentsPath
+        : undefined;
     const info: RecordingInfo = {
       programId,
       title: programInfo.title || meta.title || programId,
@@ -409,11 +422,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       source,
       state: 'starting',
       startedAt: new Date().toISOString(),
-      commentCount: previous?.commentCount ?? 0,
+      commentCount: previousCommentsPath ? (previous?.commentCount ?? 0) : 0,
       videoBytes: previousBytes,
       outputDir,
       videoPaths: previousPaths.length > 0 ? previousPaths : undefined,
-      commentsPath: previous?.commentsPath,
+      commentsPath: previousCommentsPath,
     };
     const controller = new AbortController();
     const recording: ActiveRecording = {
@@ -458,7 +471,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               onPaths: (paths) => {
                 info.attempt = paths.attempt;
                 info.videoPath = paths.videoPath;
-                info.videoPaths = [...(info.videoPaths ?? []), paths.videoPath];
+                if (!info.videoPaths?.includes(paths.videoPath)) {
+                  info.videoPaths = [...(info.videoPaths ?? []), paths.videoPath];
+                }
                 info.commentsPath ??= paths.commentsPath;
                 // クラッシュしてもこのパートのファイルが履歴から辿れるように、決まった時点で書く
                 this.history.upsert(info);
@@ -467,7 +482,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               // コメントは最初のパートのファイルに追記し続ける
               commentsPath: info.commentsPath,
               // 前回のコメントファイルに追記する場合だけ過去分の取得を抑止する (重複を避ける)
-              prefetchBackwardComments: attempt === 1 && !previous?.commentsPath,
+              prefetchBackwardComments: attempt === 1 && !previousCommentsPath,
               onComment: (_comment, count) => {
                 info.commentCount = countBefore + count;
               },
@@ -655,9 +670,29 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   }
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 重複を除き、実在するファイルだけを順序を保って返す */
+async function existingFiles(paths: string[]): Promise<string[]> {
+  const result: string[] = [];
+  for (const filePath of new Set(paths)) {
+    if (await fileExists(filePath)) {
+      result.push(filePath);
+    }
+  }
+  return result;
+}
+
 async function sumFileSizes(paths: string[]): Promise<number> {
   let total = 0;
-  for (const filePath of paths) {
+  for (const filePath of new Set(paths)) {
     try {
       total += (await fs.stat(filePath)).size;
     } catch {
