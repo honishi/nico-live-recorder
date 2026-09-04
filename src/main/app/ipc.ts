@@ -50,10 +50,10 @@ function pickSettingsPatch(patch: Partial<AppSettings>): Partial<AppSettings> {
     allowed.outputDir = patch.outputDir.trim();
   }
   if (typeof patch.pollIntervalSec === 'number' && Number.isFinite(patch.pollIntervalSec)) {
-    allowed.pollIntervalSec = Math.min(300, Math.max(15, Math.round(patch.pollIntervalSec)));
+    allowed.pollIntervalSec = clampInt(patch.pollIntervalSec, 15, 300);
   }
   if (typeof patch.minFreeSpaceGb === 'number' && Number.isFinite(patch.minFreeSpaceGb)) {
-    allowed.minFreeSpaceGb = Math.min(10_000, Math.max(0, Math.round(patch.minFreeSpaceGb)));
+    allowed.minFreeSpaceGb = clampInt(patch.minFreeSpaceGb, 0, 10_000);
   }
   for (const key of ['recordOngoingOnStart', 'pushEnabled', 'notificationsEnabled'] as const) {
     if (typeof patch[key] === 'boolean') {
@@ -211,4 +211,8 @@ export function registerIpcHandlers(ctx: IpcContext): void {
         menu.popup({ window, callback: () => resolve() });
       }),
   );
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
 }

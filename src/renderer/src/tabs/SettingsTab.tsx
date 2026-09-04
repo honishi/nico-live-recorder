@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
 import type { AppSettings, AppStatus } from '@shared/types';
+import { formatBytes } from '@shared/format';
 import { formatClock } from '../lib/format';
 
 interface Props {
@@ -104,7 +105,7 @@ export function SettingsTab({
               <span className="help">
                 {status.diskFreeBytes === undefined
                   ? '空き容量を取得できません'
-                  : `現在の空き: ${(status.diskFreeBytes / 1024 ** 3).toFixed(1)} GB`}
+                  : `現在の空き: ${formatBytes(status.diskFreeBytes)}`}
                 {settings.minFreeSpaceGb === 0 && ' (0 は確認しない)'}
               </span>
             </span>
