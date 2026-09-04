@@ -4,6 +4,7 @@ import {
   type PushStateStore,
   type PushSubscriptionState,
 } from '../../../src/main/core/push/web-push-manager';
+import { setPushLogger } from '../../../src/main/vendor/web-push/push-diagnostics';
 import { encryptWebPush, startFakeAutoPush, type FakeAutoPush } from '../../helpers/fake-autopush';
 import { waitFor } from '../../helpers/fake-watch-server';
 
@@ -207,6 +208,48 @@ describe('WebPushManager', () => {
     expect(autopush.channels).toHaveLength(2);
     expect(log.filter((l) => l.url.includes('api.push.nicovideo.jp')).length).toBe(registrations);
     expect(manager.getStatus().state).toBe('connected');
+  });
+
+  test('サーバーから切られても再接続して同じ購読を復元し、error や warn は出さない', async () => {
+    installFetch();
+    const store = memoryStore();
+    const logs: { level: string; text: string }[] = [];
+    setPushLogger({
+      debug: (...args) => logs.push({ level: 'debug', text: args.map(String).join(' ') }),
+      info: (...args) => logs.push({ level: 'info', text: args.map(String).join(' ') }),
+      warn: (...args) => logs.push({ level: 'warn', text: args.map(String).join(' ') }),
+      error: (...args) => logs.push({ level: 'error', text: args.map(String).join(' ') }),
+    });
+    try {
+      manager = new WebPushManager({
+        store,
+        cookieHeader: async () => 'user_session=abc',
+        autoPushEndpoint: autopush.url,
+      });
+      await manager.start();
+      const uaid = store.state!.uaid;
+
+      autopush.drop();
+      // 1 秒後に再接続し、保存済みの uaid で hello する
+      await waitFor(() => autopush.hellos.length === 2, 5000);
+      expect(autopush.hellos[1]).toMatchObject({ uaid });
+      await waitFor(() => manager!.getStatus().state === 'connected', 5000);
+
+      expect(logs.filter((l) => l.level !== 'debug')).toEqual([]);
+      expect(
+        logs.some((l) =>
+          /WebSocket closed: code=1006 .*connectedFor=\d+s idleFor=\d+s/.test(l.text),
+        ),
+      ).toBe(true);
+      expect(logs.some((l) => /reconnected after \d+s/.test(l.text))).toBe(true);
+    } finally {
+      setPushLogger({
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: () => undefined,
+      });
+    }
   });
 
   test('ニコニコへの登録に失敗したら start は失敗し、未登録として保存する', async () => {

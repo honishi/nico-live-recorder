@@ -1,6 +1,9 @@
 import { pushDiagnostics, pushLog, shortVersion } from './push-diagnostics';
 
 // Type definitions
+/** 切断がこの秒数を超えて続いたら warn を 1 回出す (それまでは debug) */
+const OUTAGE_WARN_AFTER_SEC = 60;
+
 interface HelloResponse {
   messageType: string;
   status: number;
@@ -69,6 +72,12 @@ export class AutoPushClient {
 
   // Liveness watchdog (half-open connection detection)
   private lastActivityAt = Date.now();
+  /** 現在のソケットが開いた時刻 (切断ログに接続時間を出すため) */
+  private connectedAt = 0;
+  /** 切断が続いている間の開始時刻。復旧したら消す */
+  private outageStartedAt?: number;
+  /** 長い切断を一度だけ warn したか (復旧時に info を出す判断にも使う) */
+  private outageWarned = false;
   private lastLivenessPingAt = 0;
   private pongTimer?: NodeJS.Timeout;
   private readonly idlePingThresholdMs = 2 * 60 * 1000; // ping after 2 min without inbound traffic
@@ -283,6 +292,7 @@ export class AutoPushClient {
             reject(new Error('WebSocket superseded during connect'));
             return;
           }
+          this.connectedAt = Date.now();
           pushLog.debug('[AutoPush] ✅ WebSocket OPENED');
           pushLog.debug('[AutoPush] Connected to:', this.endpoint);
           pushDiagnostics.record('ws_open');
@@ -331,7 +341,8 @@ export class AutoPushClient {
 
         socket.onerror = (error) => {
           clearTimeout(connectTimer);
-          pushLog.error('[AutoPush] ❌ WebSocket ERROR:', error);
+          // ソケットの切断は次の close で詳細を出し、再接続で回復する。ここでは debug に留める
+          pushLog.debug('[AutoPush] WebSocket error:', describeErrorEvent(error));
           pushDiagnostics.record('ws_error');
           if (this.ws === socket) {
             this.isConnected = false;
@@ -349,12 +360,13 @@ export class AutoPushClient {
           if (this.ws !== socket) {
             return;
           }
-          pushLog.debug('[AutoPush] ❌ WebSocket CLOSED');
-          pushLog.debug('[AutoPush] Close details:', {
-            code: event.code,
-            reason: event.reason || '(no reason provided)',
-            wasClean: event.wasClean,
-          });
+          // 20 分ごとの切断 (code 1006) など、外から切られた事情が追えるよう接続時間と無通信時間を添える
+          const connectedForSec =
+            this.connectedAt > 0 ? Math.round((Date.now() - this.connectedAt) / 1000) : undefined;
+          const idleForSec = Math.round((Date.now() - this.lastActivityAt) / 1000);
+          pushLog.debug(
+            `[AutoPush] WebSocket closed: code=${event.code} reason=${event.reason || '(none)'} clean=${event.wasClean} connectedFor=${connectedForSec ?? '?'}s idleFor=${idleForSec}s`,
+          );
           pushDiagnostics.record('ws_close', {
             code: event.code,
             reason: event.reason || undefined,
@@ -707,6 +719,16 @@ export class AutoPushClient {
 
     // Consider the connection stable only after successful HELLO
     this.reconnectAttempts = 0;
+    if (this.outageStartedAt !== undefined) {
+      const outageSec = Math.round((Date.now() - this.outageStartedAt) / 1000);
+      if (this.outageWarned) {
+        pushLog.info(`[AutoPush] push connection recovered after ${outageSec}s`);
+      } else {
+        pushLog.debug(`[AutoPush] reconnected after ${outageSec}s`);
+      }
+      this.outageStartedAt = undefined;
+      this.outageWarned = false;
+    }
 
     // Watch the fresh session for routing desync
     if (!this.subscriptionRepairRequired) {
@@ -1153,6 +1175,15 @@ export class AutoPushClient {
       pushLog.debug(
         `[AutoPush] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`,
       );
+      // 通常の切断は 1 回目の再接続で復旧する。復旧しないまま時間が経ったときだけ 1 度 warn する
+      this.outageStartedAt ??= Date.now();
+      const outageSec = Math.round((Date.now() - this.outageStartedAt) / 1000);
+      if (!this.outageWarned && outageSec >= OUTAGE_WARN_AFTER_SEC) {
+        this.outageWarned = true;
+        pushLog.warn(
+          `[AutoPush] push connection has been down for ${outageSec}s (attempt ${this.reconnectAttempts}); still retrying`,
+        );
+      }
       pushDiagnostics.record('reconnect_scheduled', {
         attempt: this.reconnectAttempts,
         delayMs: delay,
@@ -1230,4 +1261,32 @@ export class AutoPushClient {
       }
     }
   }
+}
+
+/**
+ * WebSocket の ErrorEvent は列挙されるプロパティを持たず JSON にすると {} になるので、
+ * 取れる範囲で message / code / cause を文字列にする
+ */
+function describeErrorEvent(event: unknown): string {
+  if (typeof event !== 'object' || event === null) {
+    return String(event);
+  }
+  const outer = event as { message?: unknown; error?: unknown };
+  const inner = outer.error as
+    | { message?: unknown; code?: unknown; cause?: { message?: unknown; code?: unknown } }
+    | undefined;
+  const parts = [
+    outer.message,
+    inner?.message,
+    inner?.code,
+    inner?.cause?.message,
+    inner?.cause?.code,
+  ]
+    .filter(
+      (v): v is string | number => (typeof v === 'string' && v.length > 0) || typeof v === 'number',
+    )
+    .map(String);
+  return parts.length > 0
+    ? [...new Set(parts)].join(' / ')
+    : '(no details; the peer or the network dropped the connection)';
 }

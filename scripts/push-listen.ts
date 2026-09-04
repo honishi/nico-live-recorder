@@ -22,6 +22,7 @@ if (!userSession) {
 const logger = createConsoleLogger('push');
 setPushLogger({
   debug: (...args) => logger.debug('[autopush]', ...args),
+  info: (...args) => logger.info('[autopush]', ...args),
   warn: (...args) => logger.warn('[autopush]', ...args),
   error: (...args) => logger.error('[autopush]', ...args),
 });

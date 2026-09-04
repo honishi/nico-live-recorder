@@ -93,6 +93,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     const pushLogger = prefixLogger(this.logger, 'autopush');
     setPushLogger({
       debug: (...args) => pushLogger.debug(...args),
+      info: (...args) => pushLogger.info(...args),
       warn: (...args) => pushLogger.warn(...args),
       error: (...args) => pushLogger.error(...args),
     });

@@ -64,3 +64,39 @@ describe('AppLogger', () => {
     expect(listener.mock.calls[0][0]).toMatchObject({ level: 'warn', message: 'something' });
   });
 });
+
+describe('AppLogger のオブジェクト整形', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nlr-logger-'));
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('列挙されないプロパティしか無いオブジェクトも {} にせず、message や code を残す', async () => {
+    const logger = new AppLogger(dir, 'info');
+    // WebSocket の ErrorEvent と同じく、message が prototype の getter で本体は空
+    const event = Object.create({
+      get message() {
+        return 'connection reset';
+      },
+      get error() {
+        return { code: 'ECONNRESET' };
+      },
+    }) as object;
+    logger.warn('[autopush] WebSocket error:', event);
+    logger.info('plain', { a: 1 });
+    await logger.close();
+
+    const [first, second] = logger.recent();
+    expect(first.message).toContain('message=connection reset');
+    expect(first.message).toContain('error=ECONNRESET');
+    expect(first.message).not.toContain('{}');
+    expect(second.message).toBe('plain {"a":1}');
+  });
+});
