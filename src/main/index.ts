@@ -130,7 +130,15 @@ async function bootstrap(): Promise<void> {
     logger.setOutputLevel(!app.isPackaged || settings.get().ui.showDebug ? 'debug' : 'info');
   };
   applyLogLevel();
-  settings.on('ui', applyLogLevel);
+  let showDebug = settings.get().ui.showDebug;
+  settings.on('ui', (ui) => {
+    applyLogLevel();
+    // debug の表示を切り替えたら、debug 込み/抜きのログを載せ直すために status を送り直す
+    if (ui.showDebug !== showDebug) {
+      showDebug = ui.showDebug;
+      scheduleBroadcast();
+    }
+  });
   const auth = new NicoAuth(logger);
   const pushStore = new FilePushStateStore(path.join(userData, 'push-subscription.json'));
 

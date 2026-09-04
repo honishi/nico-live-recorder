@@ -50,11 +50,8 @@ export function LogTab({
     }
     return !filter || entry.message.includes(filter);
   });
-  const hiddenByDebug =
-    filter !== undefined &&
-    visible.length === 0 &&
-    !ui.showDebug &&
-    logs.some((entry) => entry.level === 'debug' && entry.message.includes(filter));
+  // debug は表示中のときしか受け取らないので、絞り込みで何も無ければ debug 側にある可能性を案内する
+  const hiddenByDebug = filter !== undefined && visible.length === 0 && !ui.showDebug;
 
   // 自動スクロールが有効なら末尾に追従する
   useEffect(() => {
@@ -143,7 +140,7 @@ export function LogTab({
             <div className="log-empty">
               {hiddenByDebug ? (
                 <>
-                  この放送のログは debug 表示に含まれています
+                  この放送のログは debug 表示に含まれているかもしれません
                   <button className="link" onClick={() => onUpdateUi({ showDebug: true })}>
                     debug を表示
                   </button>

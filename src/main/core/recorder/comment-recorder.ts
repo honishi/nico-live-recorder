@@ -48,6 +48,8 @@ export async function recordComments(
     cookies: options.cookies,
     userAgent: options.userAgent,
     logger: {
+      // セグメントや chunk ごとの verbose は録画中に 1 時間で数千行になるので落とす (debug に流さない)
+      verbose: () => {},
       debug: (...args) => logger.debug(...args),
       info: (...args) => logger.info(...args),
       warn: (...args) => logger.warn(...args),

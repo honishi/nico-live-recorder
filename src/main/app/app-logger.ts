@@ -6,6 +6,7 @@ import type { Logger } from '../core/logger';
 import type { LogCategory, LogEntry, LogLevel } from '../../shared/types';
 
 const MAX_LOG_FILE_BYTES = 5 * 1024 * 1024;
+/** info 以上と debug をそれぞれ何件まで保持するか。debug は録画中に 1 時間で数千件出るので、別枠にして info を押し出さない */
 const RING_BUFFER_SIZE = 2000;
 
 function formatArg(arg: unknown): string {
@@ -81,17 +82,27 @@ export function categorize(message: string): LogCategory {
  */
 export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implements Logger {
   private readonly filePath: string;
-  private readonly entries: LogEntry[] = [];
+  /** info 以上のログ (ユーザーが見るもの) */
+  private readonly entries: Numbered[] = [];
+  /** debug のログ。量が多いので別に持ち、「debug を表示」のときだけ合流させる */
+  private readonly debugEntries: Numbered[] = [];
+  /** 2 つのバッファを出た順に合流させるための連番 (同じミリ秒でも順序が崩れない) */
+  private seq = 0;
   private stream?: fs.WriteStream;
+  private fileBytes = 0;
   private outputLevel: LogLevel;
+  private closed = false;
 
-  constructor(logDir: string, outputLevel: LogLevel = 'info') {
+  constructor(
+    logDir: string,
+    outputLevel: LogLevel = 'info',
+    private readonly maxFileBytes = MAX_LOG_FILE_BYTES,
+  ) {
     super();
     fs.mkdirSync(logDir, { recursive: true });
     this.filePath = path.join(logDir, 'app.log');
     this.outputLevel = outputLevel;
-    this.rotateIfNeeded();
-    this.stream = fs.createWriteStream(this.filePath, { flags: 'a', encoding: 'utf8' });
+    this.openStream();
   }
 
   get logFilePath(): string {
@@ -107,8 +118,14 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
     return this.outputLevel;
   }
 
-  recent(limit = RING_BUFFER_SIZE): LogEntry[] {
-    return this.entries.slice(-limit);
+  /**
+   * 直近のログを時刻順に返す。limit は info 以上と debug のそれぞれに掛かるので、
+   * debug を含めても info 以上のログが直近の debug に押し出されて見えなくなることはない
+   */
+  recent(limit = RING_BUFFER_SIZE, includeDebug = true): LogEntry[] {
+    const main = this.entries.slice(-limit);
+    const merged = includeDebug ? mergeBySeq(main, this.debugEntries.slice(-limit)) : main;
+    return merged.map((n) => n.entry);
   }
 
   debug(...args: unknown[]): void {
@@ -129,15 +146,8 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
 
   /** ファイルへの書き込みを終えるまで待つ */
   close(): Promise<void> {
-    const stream = this.stream;
-    this.stream = undefined;
-    if (!stream) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      stream.once('error', () => resolve());
-      stream.end(() => resolve());
-    });
+    this.closed = true;
+    return this.closeStream();
   }
 
   private write(level: LogLevel, args: unknown[]): void {
@@ -156,23 +166,77 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
       } else {
         process.stdout.write(line);
       }
-      this.stream?.write(line);
+      this.writeFile(line);
     }
-    this.entries.push(entry);
-    if (this.entries.length > RING_BUFFER_SIZE) {
-      this.entries.splice(0, this.entries.length - RING_BUFFER_SIZE);
+    const ring = level === 'debug' ? this.debugEntries : this.entries;
+    ring.push({ seq: (this.seq += 1), entry });
+    if (ring.length > RING_BUFFER_SIZE) {
+      ring.splice(0, ring.length - RING_BUFFER_SIZE);
     }
     this.emit('entry', entry);
   }
 
-  private rotateIfNeeded(): void {
-    try {
-      const stat = fs.statSync(this.filePath);
-      if (stat.size > MAX_LOG_FILE_BYTES) {
-        fs.renameSync(this.filePath, `${this.filePath}.1`);
-      }
-    } catch {
-      // ファイルが無ければ何もしない
+  /** ファイルに追記し、上限を超えたら .1 に退避して新しいファイルに切り替える */
+  private writeFile(line: string): void {
+    if (!this.stream) {
+      return;
+    }
+    this.stream.write(line);
+    this.fileBytes += Buffer.byteLength(line);
+    if (this.fileBytes > this.maxFileBytes) {
+      const stream = this.stream;
+      this.stream = undefined;
+      stream.end(() => {
+        try {
+          fs.renameSync(this.filePath, `${this.filePath}.1`);
+        } catch {
+          // 退避できなくても書き続ける
+        }
+        if (!this.closed) {
+          this.openStream();
+        }
+      });
     }
   }
+
+  private openStream(): void {
+    try {
+      this.fileBytes = fs.statSync(this.filePath).size;
+    } catch {
+      this.fileBytes = 0;
+    }
+    this.stream = fs.createWriteStream(this.filePath, { flags: 'a', encoding: 'utf8' });
+  }
+
+  private closeStream(): Promise<void> {
+    const stream = this.stream;
+    this.stream = undefined;
+    if (!stream) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      stream.once('error', () => resolve());
+      stream.end(() => resolve());
+    });
+  }
+}
+
+interface Numbered {
+  seq: number;
+  entry: LogEntry;
+}
+
+/** 連番順の 2 つの列を、出た順のまま 1 つにまとめる */
+function mergeBySeq(a: Numbered[], b: Numbered[]): Numbered[] {
+  const merged: Numbered[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (j >= b.length || (i < a.length && a[i].seq < b[j].seq)) {
+      merged.push(a[i++]);
+    } else {
+      merged.push(b[j++]);
+    }
+  }
+  return merged;
 }
