@@ -34,6 +34,7 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 - 本番の保存先 (既定は `~/Movies/NicoLiveRecorder`) と userData の中身は、検証の後始末でも消さない。録画中のフォルダを消すと録画が失われる。
 - 失敗後の再開処理は `NLR_DEV_FAIL_VIDEO_AFTER_MS=8000` のように設定して起動すると、映像を強制的に失敗させて確認できる。
 - ログインが必要な経路 (push 登録、フォロー中番組のポーリング、フォロー状態確認) はエージェントでは検証できない。変更したら人間側の確認を依頼する。
+- 改行は LF に固定する (`.gitattributes` と `.editorconfig`)。CI は ubuntu と windows の両方でチェックを回すので、Windows で落ちる書き方 (shell script の spawn、実時間に依存する待ち) をテストに入れない。
 
 ## 依存パッケージ
 

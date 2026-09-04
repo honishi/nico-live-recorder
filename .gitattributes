@@ -1,0 +1,10 @@
+# checkout 時の改行を OS に依らず LF にする (Windows の autocrlf で CRLF になると prettier --check が全ファイルで落ちる)
+* text=auto eol=lf
+
+# 画像やアイコンなどは変換しない
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
