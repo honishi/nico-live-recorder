@@ -1,3 +1,4 @@
+import { formatBytes } from '../../shared/format';
 import { app, Menu, nativeImage, nativeTheme, Tray, type NativeImage } from 'electron';
 import type { RecordingInfo } from '../../shared/types';
 
@@ -71,16 +72,6 @@ export class AppTray {
       { label: '終了', click: () => this.callbacks.quit() },
     ]);
   }
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) {
-    return `${Math.round(bytes / 1024)} KB`;
-  }
-  if (bytes < 1024 * 1024 * 1024) {
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 /**

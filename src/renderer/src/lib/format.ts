@@ -1,12 +1,4 @@
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) {
-    return `${Math.round(bytes / 1024)} KB`;
-  }
-  if (bytes < 1024 * 1024 * 1024) {
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  }
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
+export { formatBytes } from '@shared/format';
 
 export function formatDuration(start: string, end: string | undefined, now: number): string {
   const ms = (end ? new Date(end).getTime() : now) - new Date(start).getTime();

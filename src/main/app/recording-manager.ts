@@ -20,28 +20,35 @@ import {
   type RecordingSource,
 } from '../../shared/types';
 import type { NicoAuth } from './auth';
+import { formatBytes } from '../../shared/format';
 import { HistoryStore } from './history-store';
 import type { SettingsStore } from './settings-store';
+
+/** 1 パート (1 つの出力ファイル) の進行状態。パートが終わったら丸ごと捨てる */
+interface RecordingPart {
+  /** このパートだけを止めるための controller (録画全体の停止とは別) */
+  controller: AbortController;
+  /** 書き込み中のファイル。recorder が連番を決めた時点 (onPaths) で分かる */
+  path?: string;
+  /** ファイルを一度でも観測したか (消えたことの判定に使う) */
+  fileSeen: boolean;
+  /** 出力ファイルの消失で止めた */
+  lost: boolean;
+  /** 消えたパートを一覧と容量から外す処理。録画本体が先に終わっても、これを待ってから状態を確定する */
+  cleanup?: Promise<void>;
+}
 
 interface ActiveRecording {
   info: RecordingInfo;
   controller: AbortController;
   done: Promise<void>;
   sizeTimer?: NodeJS.Timeout;
-  /** 再開前に終わったファイルの合計サイズ */
+  /** 終わったパートの合計サイズ */
   finishedPartBytes: number;
   /** 履歴に途中経過を書いた時刻 (クラッシュ時の復元用) */
   snapshotAt: number;
-  /** 現在のパートだけを止めるための controller (録画全体の停止とは別) */
-  partController?: AbortController;
-  /** 現在のパートのファイルを一度でも観測したか (消えたことの判定に使う) */
-  partFileSeen: boolean;
-  /** 現在のパートを止めた理由 (ファイル消失など)。再開の判断に使う */
-  partAbortReason?: 'output-missing';
-  /** 現在書き込み中のファイル。パートが終わったら外す (完了済みのパートを二重に数えないため) */
-  currentPartPath?: string;
-  /** 消えたパートを一覧と容量から外す処理。録画本体が先に終わっても、これを待ってから状態を確定する */
-  partCleanup?: Promise<void>;
+  /** 進行中のパート。再開待ちの間は undefined で、サイズ監視は何も数えない */
+  part?: RecordingPart;
 }
 
 export interface RecordingManagerOptions {
@@ -62,6 +69,8 @@ const MAX_RECORD_ATTEMPTS = 10;
 /** 保存先の空き容量を確認する間隔 */
 const DISK_CHECK_MS = 60_000;
 const GIB = 1024 ** 3;
+/** 空き容量の表示は 0.01 GB 単位なので、それより細かい変動では画面を更新しない */
+const DISK_SHOWN_UNIT = GIB / 100;
 /** 検知直後の開始 (番組情報の取得) が失敗したときの再試行 */
 const DETECT_START_ATTEMPTS = 3;
 const DETECT_START_RETRY_MS = 30_000;
@@ -84,12 +93,13 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private readonly ffmpegPath?: string;
   private readonly diskProbe: (dir: string) => Promise<number | undefined>;
   private diskTimer?: NodeJS.Timeout;
-  private diskFree?: number;
-  /** diskFree を測ったときの保存先としきい値。失敗時に直前の値を使ってよいかの判断に使う */
-  private diskContext?: { dir: string; threshold: number };
+  /** 最後に測れた空き容量。保存先が変わったら捨てる */
+  private diskSample?: { dir: string; free: number };
   private diskGeneration = 0;
-  /** 空き容量がしきい値を下回っている (切り替わったときだけ通知する) */
+  /** 最後に判定したとき空き容量が少なかったか (切り替わったときだけ通知する) */
   private diskLow = false;
+  /** 最後に画面へ出した空き容量 (表示の桁で丸めたもの)。変わらなければ change を出さない */
+  private diskShown?: number;
 
   private push?: WebPushManager;
   private detector?: ProgramDetector;
@@ -199,11 +209,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         actionLabel: 'ログイン',
       });
     }
-    if (this.diskLow && this.diskFree !== undefined) {
+    if (this.diskLow && this.diskSample) {
       alerts.push({
         kind: 'disk-space',
         severity: 'warn',
-        message: `保存先の空き容量が ${formatGb(this.diskFree)} GB です (しきい値 ${settings.minFreeSpaceGb} GB)`,
+        message: `保存先の空き容量が ${formatBytes(this.diskSample.free)} です (しきい値 ${settings.minFreeSpaceGb} GB)`,
         actionLabel: '保存先を変更',
       });
     }
@@ -227,11 +237,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
   /** 最後に確認した保存先の空き容量 (バイト) */
   get diskFreeBytes(): number | undefined {
-    return this.diskFree;
+    return this.diskSample?.free;
   }
 
   /**
-   * 保存先の空き容量を確認し、しきい値を下回った/回復したときだけログと通知を出す。
+   * 保存先の空き容量を測り直す。しきい値を下回った/回復したときだけログと通知を出し、
    * 録画は止めない (取りこぼしより、少しでも録れている方がよい)
    */
   async refreshDiskSpace(): Promise<void> {
@@ -239,67 +249,50 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.diskGeneration += 1;
     const generation = this.diskGeneration;
     const settings = this.settings.get();
-    const threshold = settings.minFreeSpaceGb * GIB;
-    if (threshold <= 0) {
-      // 0 は確認しない。保持していた警告と表示だけ解除する
-      this.clearDiskState();
+    if (settings.minFreeSpaceGb <= 0) {
+      // 0 は確認しない。測定値を捨てれば警告と表示も消える
+      this.diskSample = undefined;
+      this.evaluateDiskSpace();
       return;
     }
     const free = await this.diskProbe(settings.outputDir).catch(() => undefined);
     if (generation !== this.diskGeneration) {
       return;
     }
-    if (free === undefined) {
+    if (free !== undefined) {
+      this.diskSample = { dir: settings.outputDir, free };
+    } else {
+      // 取得できないのは回復ではない。同じ保存先の直前の測定値は使い続け、別の保存先のものなら捨てる
       this.logger.debug(`[rec] could not read the free space of ${settings.outputDir}`);
-      // 取得できないのは回復ではないが、直前の値を使ってよいのは同じ保存先を測ったときだけ。
-      // 保存先が変わっていれば別のディスクの値なので、不明に戻す
-      if (this.diskContext?.dir !== settings.outputDir) {
-        this.clearDiskState();
-        return;
+      if (this.diskSample?.dir !== settings.outputDir) {
+        this.diskSample = undefined;
       }
-      // 同じ保存先でしきい値だけ変わっていれば、わかっている空き容量で判定し直す
-      if (this.diskFree !== undefined && this.diskContext.threshold !== threshold) {
-        this.applyDiskSpace(this.diskFree, settings.outputDir, threshold, settings.minFreeSpaceGb);
-      }
-      return;
     }
-    this.applyDiskSpace(free, settings.outputDir, threshold, settings.minFreeSpaceGb);
+    this.evaluateDiskSpace();
   }
 
-  /** 測った空き容量を反映し、しきい値をまたいだときだけログと通知を出す */
-  private applyDiskSpace(
-    free: number,
-    outputDir: string,
-    threshold: number,
-    thresholdGb: number,
-  ): void {
-    const low = free < threshold;
-    const changed = free !== this.diskFree || low !== this.diskLow;
-    this.diskFree = free;
-    this.diskContext = { dir: outputDir, threshold };
-    if (low !== this.diskLow) {
-      this.diskLow = low;
+  /** 測定値を今の設定で判定し、しきい値をまたいだときだけログと通知を出す */
+  private evaluateDiskSpace(): void {
+    const settings = this.settings.get();
+    const sample = this.diskSample;
+    const low = sample !== undefined && sample.free < settings.minFreeSpaceGb * GIB;
+    const lowChanged = low !== this.diskLow;
+    this.diskLow = low;
+    if (lowChanged && sample) {
       if (low) {
-        const message = `保存先の空き容量が少なくなっています (残り ${formatGb(free)} GB、しきい値 ${thresholdGb} GB)`;
-        this.logger.warn(`[rec] ${message}: ${outputDir}`);
+        const message = `保存先の空き容量が少なくなっています (残り ${formatBytes(sample.free)}、しきい値 ${settings.minFreeSpaceGb} GB)`;
+        this.logger.warn(`[rec] ${message}: ${sample.dir}`);
         this.notify('保存先の空き容量が少なくなっています', message);
       } else {
         this.logger.info(
-          `[rec] 保存先の空き容量が回復しました (残り ${formatGb(free)} GB): ${outputDir}`,
+          `[rec] 保存先の空き容量が回復しました (残り ${formatBytes(sample.free)}): ${sample.dir}`,
         );
       }
     }
-    if (changed) {
-      this.emitChange();
-    }
-  }
-
-  /** 空き容量を不明に戻し、警告も解除する */
-  private clearDiskState(): void {
-    this.diskContext = undefined;
-    if (this.diskLow || this.diskFree !== undefined) {
-      this.diskLow = false;
-      this.diskFree = undefined;
+    // 空き容量は他のプロセスの書き込みで常に揺れるので、表示が変わるときだけ画面に知らせる
+    const shown = sample === undefined ? undefined : Math.round(sample.free / DISK_SHOWN_UNIT);
+    if (lowChanged || shown !== this.diskShown) {
+      this.diskShown = shown;
       this.emitChange();
     }
   }
@@ -530,10 +523,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     // 同じ番組を録り直す場合 (クラッシュ後の再起動など) は、前回のファイルとコメント数を引き継ぐ。
     // 履歴にはファイル生成前の候補パスも残り得るので、実在するものだけを対象にする
     const previous = this.history.get(programId);
-    const previousPaths = await existingFiles(
+    const previousParts = await statFiles(
       previous?.videoPaths ?? (previous?.videoPath ? [previous.videoPath] : []),
     );
-    const previousBytes = await sumFileSizes(previousPaths);
+    const previousPaths = previousParts.map((p) => p.path);
+    const previousBytes = sumSizes(previousParts);
     const previousCommentsPath =
       previous?.commentsPath && (await fileExists(previous.commentsPath))
         ? previous.commentsPath
@@ -559,7 +553,6 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       done: Promise.resolve(),
       finishedPartBytes: previousBytes,
       snapshotAt: Date.now(),
-      partFileSeen: false,
     };
     this.active.set(programId, recording);
     // 開始時点で履歴に残す。途中でアプリが落ちても「中断」として復元できる
@@ -573,7 +566,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         this.logger.info(`[rec] start ${programId} "${info.title}" by ${providerName ?? '?'}`);
         this.notify('録画を開始しました', `${providerName ?? ''} ${info.title}`);
 
-        recording.sizeTimer = setInterval(() => void this.refreshSize(recording), SIZE_POLL_MS);
+        recording.sizeTimer = setInterval(() => void this.pollSize(recording), SIZE_POLL_MS);
 
         // 映像が異常終了し、番組がまだ放送中なら、連番付きの別ファイルで録画を再開する
         let attempt = 1;
@@ -584,10 +577,12 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           // コメント件数はパートをまたいで累計する
           const countBefore = info.commentCount;
           // パート単位の停止 (出力ファイルの消失など) は録画全体の停止と分けて扱う
-          const partController = new AbortController();
-          recording.partController = partController;
-          recording.partFileSeen = false;
-          recording.partAbortReason = undefined;
+          const part: RecordingPart = {
+            controller: new AbortController(),
+            fileSeen: false,
+            lost: false,
+          };
+          recording.part = part;
           const result = await recordProgram(
             {
               programId,
@@ -605,47 +600,33 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
                   info.videoPaths = [...(info.videoPaths ?? []), paths.videoPath];
                 }
                 info.commentsPath ??= paths.commentsPath;
-                recording.currentPartPath = paths.videoPath;
-                recording.partFileSeen = false;
+                part.path = paths.videoPath;
                 // クラッシュしてもこのパートのファイルが履歴から辿れるように、決まった時点で書く
                 this.history.upsert(info);
                 recording.snapshotAt = Date.now();
               },
               // コメントは最初のパートのファイルに追記し続ける
               commentsPath: info.commentsPath,
-              // 前回のコメントファイルに追記する場合だけ過去分の取得を抑止する (重複を避ける)
               // コメントファイルを新しく作るときだけ過去分を取得する (既存ファイルへの追記では重複するため)
               prefetchBackwardComments: !info.commentsPath,
               onComment: (_comment, count) => {
                 info.commentCount = countBefore + count;
               },
             },
-            AbortSignal.any([controller.signal, partController.signal]),
+            AbortSignal.any([controller.signal, part.controller.signal]),
           );
           // パートのファイルを最終確認する。消えたのをサイズ監視が拾う前に録画本体が終わっていたら、
-          // ここで消失として扱う (partController がまだあるので消失分岐に入れる)
-          recording.currentPartPath ??= result.videoPath;
-          await this.refreshSize(recording);
-          recording.partController = undefined;
-          // 消失の後始末が走っている途中で録画本体が終わることがあるので、終わるまで待つ
+          // ここで消失として扱う。後始末が走っている途中なら、終わるまで待ってから確定する
           // (待たずに確定すると、古い一覧や容量を履歴に書いてしまう)
-          if (recording.partCleanup) {
-            await recording.partCleanup;
-            recording.partCleanup = undefined;
-          }
-          const outputMissing = recording.partAbortReason === 'output-missing';
-          if (outputMissing) {
-            // 消えたパートのファイルは採用せず、代表パスは残っているパートにする
-            // (一覧とサイズは後始末で実在するものだけに数え直してある)
-            info.videoPath = info.videoPaths?.at(-1);
-          } else {
-            info.videoPath = result.videoPath;
-            if (!info.videoPaths?.includes(result.videoPath)) {
-              info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
-            }
+          await this.refreshSize(recording);
+          if (part.cleanup) {
+            await part.cleanup;
           }
           // このパートは完了済みの合計に繰り入れる。再開待ちの間のサイズ監視は何も数えない
-          recording.currentPartPath = undefined;
+          recording.part = undefined;
+          const outputMissing = part.lost;
+          // 消えたパートは後始末で一覧から外してあるので、代表パスは残っている最後のパート
+          info.videoPath = info.videoPaths?.at(-1);
           recording.finishedPartBytes = info.videoBytes;
           this.history.upsert(info);
           recording.snapshotAt = Date.now();
@@ -767,64 +748,69 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     return writable;
   }
 
+  /** 1 秒ごとの監視: サイズを更新し、録画中の途中経過を定期的に履歴へ書く (クラッシュしても進捗が残るように) */
+  private async pollSize(recording: ActiveRecording): Promise<void> {
+    await this.refreshSize(recording);
+    if (recording.part && Date.now() - recording.snapshotAt >= HISTORY_SNAPSHOT_MS) {
+      this.history.upsert(recording.info);
+      recording.snapshotAt = Date.now();
+    }
+  }
+
   /**
-   * 書き込み中のファイルのサイズに、完了済みのパートの合計を足して videoBytes にする。
-   * 完了済みのパートは finishedPartBytes に含まれているので、現在のパート以外は見ない
+   * 書き込み中のファイルのサイズに、終わったパートの合計を足して videoBytes にする。
+   * 終わったパートは finishedPartBytes に含まれているので、進行中のパート以外は見ない
    */
   private async refreshSize(recording: ActiveRecording): Promise<void> {
     const info = recording.info;
-    const videoPath = recording.currentPartPath;
-    if (!videoPath) {
+    const part = recording.part;
+    const videoPath = part?.path;
+    if (!part || !videoPath) {
       return;
     }
+    let size: number | undefined;
     try {
-      const stat = await fs.stat(videoPath);
-      // stat を待つ間にパートが終わっていたら、完了済みの合計に足し込み済みなので何もしない
-      if (recording.currentPartPath !== videoPath) {
+      size = (await fs.stat(videoPath)).size;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         return;
       }
-      recording.partFileSeen = true;
-      const total = recording.finishedPartBytes + stat.size;
+    }
+    // stat を待つ間にパートが終わっていたら、完了済みの合計に足し込み済みなので何もしない
+    if (recording.part !== part) {
+      return;
+    }
+    if (size !== undefined) {
+      part.fileSeen = true;
+      const total = recording.finishedPartBytes + size;
       if (total !== info.videoBytes) {
         info.videoBytes = total;
         this.emitChange();
       }
-      if (Date.now() - recording.snapshotAt >= HISTORY_SNAPSHOT_MS) {
-        this.history.upsert(info);
-        recording.snapshotAt = Date.now();
-      }
-    } catch (error) {
-      // 一度は見えたファイルが無くなった = 録画中にファイルかフォルダが消された。
-      // ffmpeg は消えたファイルに書き続けて内容を失うので、このパートを止めて別ファイルで再開する
-      const missing = (error as NodeJS.ErrnoException).code === 'ENOENT';
-      const part = recording.partController;
-      if (
-        missing &&
-        recording.currentPartPath === videoPath &&
-        recording.partFileSeen &&
-        part &&
-        !part.signal.aborted
-      ) {
-        this.logger.error(
-          `[rec] output file disappeared while recording ${info.programId}: ${videoPath}. Restarting as a new part`,
-        );
-        recording.partAbortReason = 'output-missing';
-        recording.partFileSeen = false;
-        // 先に書き込みを止め、残ったファイルの数え直しは録画ループが待ち合わせる
-        part.abort();
-        recording.partCleanup = this.discardLostPart(recording, videoPath);
-        await recording.partCleanup;
-      }
+      return;
     }
+    // 一度は見えたファイルが無くなった = 録画中にファイルかフォルダが消された。
+    // ffmpeg は消えたファイルに書き続けて内容を失うので、このパートを止めて別ファイルで再開する
+    if (!part.fileSeen || part.lost) {
+      return;
+    }
+    this.logger.error(
+      `[rec] output file disappeared while recording ${info.programId}: ${videoPath}. Restarting as a new part`,
+    );
+    part.lost = true;
+    // 先に書き込みを止め、残ったファイルの数え直しは録画ループが待ち合わせる
+    part.controller.abort();
+    part.cleanup = this.discardLostPart(recording, videoPath);
+    await part.cleanup;
   }
 
   /** 消えたパートを一覧と容量から外し、残っているパートだけで数え直す */
   private async discardLostPart(recording: ActiveRecording, lostPath: string): Promise<void> {
     const info = recording.info;
     // フォルダごと消された場合は以前のパートも無いので、残っているものだけを数え直す
-    const survivors = await existingFiles((info.videoPaths ?? []).filter((p) => p !== lostPath));
-    info.videoPaths = survivors.length > 0 ? survivors : undefined;
-    recording.finishedPartBytes = await sumFileSizes(survivors);
+    const survivors = await statFiles((info.videoPaths ?? []).filter((p) => p !== lostPath));
+    info.videoPaths = survivors.length > 0 ? survivors.map((p) => p.path) : undefined;
+    recording.finishedPartBytes = sumSizes(survivors);
     info.videoBytes = recording.finishedPartBytes;
     // コメントファイルも一緒に消えていれば、次のパートで作り直して過去分を取り直す
     if (info.commentsPath && !(await fileExists(info.commentsPath))) {
@@ -870,10 +856,6 @@ async function freeSpaceOf(dir: string): Promise<number | undefined> {
   }
 }
 
-function formatGb(bytes: number | undefined): string {
-  return bytes === undefined ? '?' : (bytes / GIB).toFixed(1);
-}
-
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -883,27 +865,27 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-/** 重複を除き、実在するファイルだけを順序を保って返す */
-async function existingFiles(paths: string[]): Promise<string[]> {
-  const result: string[] = [];
-  for (const filePath of new Set(paths)) {
-    if (await fileExists(filePath)) {
-      result.push(filePath);
-    }
-  }
-  return result;
+interface FileSize {
+  path: string;
+  size: number;
 }
 
-async function sumFileSizes(paths: string[]): Promise<number> {
-  let total = 0;
-  for (const filePath of new Set(paths)) {
-    try {
-      total += (await fs.stat(filePath)).size;
-    } catch {
-      // 消されたファイルは数えない
-    }
-  }
-  return total;
+/** 重複を除き、実在するファイルだけをサイズ付きで順序を保って返す (消されたファイルは数えない) */
+async function statFiles(paths: string[]): Promise<FileSize[]> {
+  const results = await Promise.all(
+    [...new Set(paths)].map(async (filePath) => {
+      try {
+        return { path: filePath, size: (await fs.stat(filePath)).size };
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+  return results.filter((r) => r !== undefined);
+}
+
+function sumSizes(files: FileSize[]): number {
+  return files.reduce((total, f) => total + f.size, 0);
 }
 
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
