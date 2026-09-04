@@ -81,6 +81,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private readonly diskProbe: (dir: string) => Promise<number | undefined>;
   private diskTimer?: NodeJS.Timeout;
   private diskFree?: number;
+  private diskGeneration = 0;
   /** 空き容量がしきい値を下回っている (切り替わったときだけ通知する) */
   private diskLow = false;
 
@@ -228,10 +229,30 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
    * 録画は止めない (取りこぼしより、少しでも録れている方がよい)
    */
   async refreshDiskSpace(): Promise<void> {
+    // interval と設定変更から同時に走るので、最新の呼び出しの結果だけを反映する
+    this.diskGeneration += 1;
+    const generation = this.diskGeneration;
     const settings = this.settings.get();
-    const free = await this.diskProbe(settings.outputDir).catch(() => undefined);
     const threshold = settings.minFreeSpaceGb * GIB;
-    const low = threshold > 0 && free !== undefined && free < threshold;
+    if (threshold <= 0) {
+      // 0 は確認しない。保持していた警告と表示だけ解除する
+      if (this.diskLow || this.diskFree !== undefined) {
+        this.diskLow = false;
+        this.diskFree = undefined;
+        this.emitChange();
+      }
+      return;
+    }
+    const free = await this.diskProbe(settings.outputDir).catch(() => undefined);
+    if (generation !== this.diskGeneration) {
+      return;
+    }
+    if (free === undefined) {
+      // 取得できないのは回復ではない。直前の値と警告状態を維持する
+      this.logger.debug(`[rec] could not read the free space of ${settings.outputDir}`);
+      return;
+    }
+    const low = free < threshold;
     const changed = free !== this.diskFree || low !== this.diskLow;
     this.diskFree = free;
     if (low !== this.diskLow) {
@@ -560,7 +581,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               // コメントは最初のパートのファイルに追記し続ける
               commentsPath: info.commentsPath,
               // 前回のコメントファイルに追記する場合だけ過去分の取得を抑止する (重複を避ける)
-              prefetchBackwardComments: attempt === 1 && !previousCommentsPath,
+              // コメントファイルを新しく作るときだけ過去分を取得する (既存ファイルへの追記では重複するため)
+              prefetchBackwardComments: !info.commentsPath,
               onComment: (_comment, count) => {
                 info.commentCount = countBefore + count;
               },
@@ -568,17 +590,23 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
             AbortSignal.any([controller.signal, partController.signal]),
           );
           recording.partController = undefined;
-          info.videoPath = result.videoPath;
-          if (!info.videoPaths?.includes(result.videoPath)) {
-            info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
+          const outputMissing = recording.partAbortReason === 'output-missing';
+          if (outputMissing) {
+            // 消えたパートのファイルは採用せず、代表パスは残っているパートにする
+            // (サイズも消失検知の時点で巻き戻し済みなので、ここでは数え直さない)
+            info.videoPath = info.videoPaths?.at(-1);
+          } else {
+            info.videoPath = result.videoPath;
+            if (!info.videoPaths?.includes(result.videoPath)) {
+              info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
+            }
+            await this.refreshSize(recording);
           }
-          await this.refreshSize(recording);
           recording.finishedPartBytes = info.videoBytes;
           this.history.upsert(info);
           recording.snapshotAt = Date.now();
 
           const errorText = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
-          const outputMissing = recording.partAbortReason === 'output-missing';
           lastReason = outputMissing
             ? 'output file disappeared'
             : (result.video?.reason ?? 'no video');
@@ -729,6 +757,12 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         info.videoBytes = recording.finishedPartBytes;
         info.videoPaths = info.videoPaths?.filter((p) => p !== videoPath);
         recording.partFileSeen = false;
+        // コメントファイルも一緒に消えていれば、次のパートで作り直して過去分を取り直す
+        if (info.commentsPath && !(await fileExists(info.commentsPath))) {
+          this.logger.warn(`[rec] comment file disappeared too: ${info.commentsPath}`);
+          info.commentsPath = undefined;
+          info.commentCount = 0;
+        }
         part.abort();
         this.emitChange();
       }

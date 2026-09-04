@@ -28,6 +28,8 @@ type RecordCall = {
   options: ProgramRecorderOptions;
   signal?: AbortSignal;
   resolve: (result: unknown) => void;
+  /** onPaths を呼び済みか (実際の録画本体は開始時に 1 回だけ呼ぶ) */
+  pathsSent?: boolean;
 };
 const recordCalls = vi.hoisted(() => [] as RecordCall[]);
 vi.mock('../../src/main/core/recorder/program-recorder', () => ({
@@ -133,11 +135,14 @@ async function nextRecordCall(index: number): Promise<RecordCall> {
 function finishedResult(call: RecordCall, patch: Record<string, unknown> = {}): unknown {
   const attempt = call.options.attempt ?? 1;
   const base = `${call.options.outputDir}/rec${attempt > 1 ? `_${attempt}` : ''}`;
-  call.options.onPaths?.({
-    attempt,
-    videoPath: `${base}.ts`,
-    commentsPath: `${base}.comments.jsonl`,
-  });
+  if (!call.pathsSent) {
+    call.pathsSent = true;
+    call.options.onPaths?.({
+      attempt,
+      videoPath: `${base}.ts`,
+      commentsPath: `${base}.comments.jsonl`,
+    });
+  }
   return {
     programId: call.options.programId,
     programInfo: call.options.programInfo,
@@ -272,6 +277,7 @@ describe('RecordingManager', () => {
     fs.mkdirSync(first.options.outputDir, { recursive: true });
     fs.writeFileSync(videoPath, 'x'.repeat(100));
     first.options.onPaths?.({ attempt: 1, videoPath, commentsPath: `${videoPath}.jsonl` });
+    first.pathsSent = true;
 
     // 1 秒ごとのサイズ監視でファイルを観測してから、フォルダごと消す (stat は実 I/O なので完了を待つ)
     await waitFor(async () => (await manager.getRecordings())[0]?.videoBytes === 100, 5000);
@@ -284,12 +290,20 @@ describe('RecordingManager', () => {
     expect(active.videoBytes).toBe(0);
     expect(active.videoPaths ?? []).not.toContain(videoPath);
 
-    first.resolve(finishedResult(first, { video: { reason: 'aborted', video: {} } }));
+    // 消えたパートの結果は採用されず、コメントファイルも消えているので次のパートで作り直す
+    first.resolve(finishedResult(first, { video: { reason: 'aborted', video: {} }, videoPath }));
+    await waitFor(() => history.get('lv1')?.videoPaths !== undefined || true);
     await vi.advanceTimersByTimeAsync(5_500);
     const second = await nextRecordCall(1);
     expect(second.options.attempt).toBe(2);
+    expect(second.options.commentsPath).toBeUndefined();
+    expect(second.options.prefetchBackwardComments).toBe(true);
+    expect(history.get('lv1')?.videoPaths ?? []).not.toContain(videoPath);
+    expect(history.get('lv1')?.videoPath).not.toBe(videoPath);
+
     second.resolve(finishedResult(second));
     await waitFor(() => history.get('lv1')?.state === 'done');
+    expect(history.get('lv1')?.videoPaths).toEqual([`${second.options.outputDir}/rec_2.ts`]);
   });
 
   test('番組が終わっていたら、そこまでの録画で完了にする', async () => {
@@ -332,6 +346,8 @@ describe('RecordingManager', () => {
 
   test('空き容量がしきい値を下回るとバナー用の警告を出し、回復したら消す', async () => {
     let free = 1 * 1024 ** 3;
+    let probeFails = false;
+    let probeCalls = 0;
     const lowManager = new RecordingManager({
       settings,
       auth: fakeAuth(),
@@ -343,7 +359,13 @@ describe('RecordingManager', () => {
       history,
       logger: { debug() {}, info() {}, warn() {}, error() {} },
       ffmpegPath: '/bin/false',
-      diskProbe: async () => free,
+      diskProbe: async () => {
+        probeCalls += 1;
+        if (probeFails) {
+          throw new Error('statfs failed');
+        }
+        return free;
+      },
     });
     try {
       settings.update({ minFreeSpaceGb: 5 });
@@ -355,13 +377,58 @@ describe('RecordingManager', () => {
       await lowManager.refreshDiskSpace();
       expect(await lowManager.getAlerts(true)).toEqual([]);
 
-      // 0 にすると確認しない
-      free = 0;
+      // 取得に失敗しても回復とは見なさない
+      free = 1 * 1024 ** 3;
+      await lowManager.refreshDiskSpace();
+      expect((await lowManager.getAlerts(true)).map((a) => a.kind)).toEqual(['disk-space']);
+      probeFails = true;
+      await lowManager.refreshDiskSpace();
+      expect((await lowManager.getAlerts(true)).map((a) => a.kind)).toEqual(['disk-space']);
+      probeFails = false;
+
+      // 0 にすると確認しない (probe も呼ばない)
+      const callsBefore = probeCalls;
       settings.update({ minFreeSpaceGb: 0 });
       await lowManager.refreshDiskSpace();
       expect(await lowManager.getAlerts(true)).toEqual([]);
+      expect(probeCalls).toBe(callsBefore);
     } finally {
       await lowManager.shutdown();
+    }
+  });
+
+  test('空き容量の確認が重なっても、最新の呼び出しの結果だけを反映する', async () => {
+    let resolveSlow: ((value: number) => void) | undefined;
+    // 設定変更でも確認が走るので、しきい値は manager を作る前に決めておく
+    settings.update({ minFreeSpaceGb: 5 });
+    const probe = vi
+      .fn<() => Promise<number>>(async () => 50 * 1024 ** 3)
+      .mockImplementationOnce(() => new Promise((resolve) => (resolveSlow = resolve)))
+      .mockResolvedValueOnce(50 * 1024 ** 3);
+    const raceManager = new RecordingManager({
+      settings,
+      auth: fakeAuth(),
+      pushStore: {
+        load: async () => undefined,
+        save: async () => undefined,
+        clear: async () => undefined,
+      },
+      history,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      ffmpegPath: '/bin/false',
+      diskProbe: probe,
+    });
+    try {
+      // 古い保存先の遅い確認 (1 GiB) が、新しい保存先の速い確認 (50 GiB) の後に返る
+      const slow = raceManager.refreshDiskSpace();
+      await waitFor(() => resolveSlow !== undefined);
+      await raceManager.refreshDiskSpace();
+      resolveSlow!(1 * 1024 ** 3);
+      await slow;
+      expect(raceManager.diskFreeBytes).toBe(50 * 1024 ** 3);
+      expect(await raceManager.getAlerts(true)).toEqual([]);
+    } finally {
+      await raceManager.shutdown();
     }
   });
 
