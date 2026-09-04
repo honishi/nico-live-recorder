@@ -319,12 +319,16 @@ export class HlsTrackDownloader {
           break;
         }
         const finalPass = this.stopRequested;
+        // 次回の取得間隔は「取得を始めた時刻」から数える (RFC 8216 6.3.4)
+        const fetchStartedAt = Date.now();
         const playlist = parseMediaPlaylist(
           (await this.fetchWithRetry(this.playlistUrl, signal)).toString('utf8'),
           this.playlistUrl,
         );
 
         let fresh = playlist.segments.filter((s) => lastSeq === undefined || s.seq > lastSeq);
+        // playlist の内容が変わったか (blank を除く前の新着で判定する)
+        const changed = lastSeq === undefined || fresh.length > 0;
         if (lastSeq === undefined && !this.startFromBeginning) {
           fresh = fresh.slice(-LIVE_EDGE_SEGMENTS);
         }
@@ -375,10 +379,10 @@ export class HlsTrackDownloader {
           result.reason = 'idle';
           break;
         }
-        // 新規セグメントがあった直後は次がすぐ来る可能性があるので短めに待つ
-        const waitMs =
-          fresh.length > 0 ? playlist.targetDuration * 400 : playlist.targetDuration * 700;
-        await this.delay(Math.max(500, waitMs), signal);
+        // RFC 8216 6.3.4: 内容が変わった playlist は target duration、変わっていなければその半分以上あけてから
+        // 取り直す。セグメントの取得にかかった時間はその中に含める
+        const minIntervalMs = playlist.targetDuration * (changed ? 1000 : 500);
+        await this.delay(Math.max(0, fetchStartedAt + minIntervalMs - Date.now()), signal);
       }
     } catch (error) {
       if (signal?.aborted) {
