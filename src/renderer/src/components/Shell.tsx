@@ -9,11 +9,22 @@ import { formatClock } from '../lib/format';
 interface StatusBandProps {
   status: AppStatus;
   pollIntervalSec: number;
+  /** 有効な録画対象の数。0 件だと監視を止めるので、その理由を示す */
+  enabledTargets: number;
 }
 
-export function StatusBand({ status, pollIntervalSec }: StatusBandProps): ReactElement {
+export function StatusBand({
+  status,
+  pollIntervalSec,
+  enabledTargets,
+}: StatusBandProps): ReactElement {
   const { loggedIn } = status.auth;
   const pushConnected = status.push.state === 'connected';
+  const detection = status.detectorRunning
+    ? `監視中 ${pollIntervalSec} 秒`
+    : loggedIn && enabledTargets === 0
+      ? '監視停止 (対象なし)'
+      : '監視停止';
   return (
     <div className="status-band">
       <span className={`status-item ${loggedIn ? 'ok' : 'warn'}`}>
@@ -26,7 +37,7 @@ export function StatusBand({ status, pollIntervalSec }: StatusBandProps): ReactE
       </span>
       <span className={`status-item ${status.detectorRunning ? 'ok' : 'off'}`}>
         <span className="dot" />
-        {status.detectorRunning ? `監視中 ${pollIntervalSec} 秒` : '監視停止'}
+        {detection}
       </span>
     </div>
   );

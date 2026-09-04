@@ -151,7 +151,11 @@ export function App(): ReactElement {
 
   return (
     <div className="shell">
-      <StatusBand status={status} pollIntervalSec={settings.pollIntervalSec} />
+      <StatusBand
+        status={status}
+        pollIntervalSec={settings.pollIntervalSec}
+        enabledTargets={settings.targets.filter((t) => t.enabled).length}
+      />
       <AlertBanner alert={status.alerts[0]} onAction={onAlertAction} />
       <TabBar active={tab} badges={badges} onSelect={selectTab} />
       <main className={`content ${tab === 'settings' ? 'scroll' : ''}`}>
