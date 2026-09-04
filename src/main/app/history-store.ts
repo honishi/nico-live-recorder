@@ -159,7 +159,8 @@ export class HistoryStore {
   /**
    * 録画ファイルが残っているかを確認して videoExists を埋める。
    * 再開したものはパートが複数あるので、どれか 1 つでも残っていれば「残っている」とし、
-   * 代表の videoPath も実在する最後のパートにする (最新の候補が生成前に落ちた場合の保険)
+   * 代表の videoPath は実在する最後のパート、容量は実在するパートの合計にする
+   * (最新の候補が生成前に落ちた場合や、一部だけ消した場合の保険)
    */
   static async checkExistence(items: RecordingInfo[]): Promise<RecordingInfo[]> {
     return Promise.all(
@@ -171,9 +172,10 @@ export class HistoryStore {
           ...new Set([...(info.videoPaths ?? []), ...(info.videoPath ? [info.videoPath] : [])]),
         ];
         const existing: string[] = [];
+        let existingBytes = 0;
         for (const candidate of candidates) {
           try {
-            await fsp.access(candidate);
+            existingBytes += (await fsp.stat(candidate)).size;
             existing.push(candidate);
           } catch {
             // 消えたパートは数えない
@@ -182,7 +184,13 @@ export class HistoryStore {
         if (existing.length === 0) {
           return { ...info, videoExists: false };
         }
-        return { ...info, videoExists: true, videoPath: existing[existing.length - 1] };
+        // 一部のパートだけ消された場合も、容量は残っているファイルの合計にする (保存値は変えない)
+        return {
+          ...info,
+          videoExists: true,
+          videoPath: existing[existing.length - 1],
+          videoBytes: existingBytes,
+        };
       }),
     );
   }

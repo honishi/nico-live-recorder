@@ -154,17 +154,39 @@ describe('HistoryStore', () => {
     expect(checked.map((e) => e.videoExists)).toEqual([true, false, false, undefined]);
   });
 
-  test('checkExistence はパートのどれかが残っていれば実在とし、代表パスを実在する最後のパートにする', async () => {
+  test('checkExistence はパートのどれかが残っていれば実在とし、代表パスと容量を実在分で決める', async () => {
     const part1 = path.join(dir, 'p1.ts');
-    fs.writeFileSync(part1, '');
+    fs.writeFileSync(part1, 'x'.repeat(10));
     const [checked] = await HistoryStore.checkExistence([
       entry({
         programId: 'lv1',
-        videoPath: path.join(dir, 'p2-never-created.ts'),
-        videoPaths: [part1, path.join(dir, 'p2-never-created.ts')],
+        videoPath: path.join(dir, 'p2-deleted.ts'),
+        videoPaths: [part1, path.join(dir, 'p2-deleted.ts')],
+        videoBytes: 30,
       }),
     ]);
     expect(checked.videoExists).toBe(true);
     expect(checked.videoPath).toBe(part1);
+    expect(checked.videoBytes).toBe(10);
+  });
+
+  test('一部のパートを消した録画は、ページの合計にも残っている分だけを数える', async () => {
+    const part1 = path.join(dir, 'p1.ts');
+    fs.writeFileSync(part1, 'x'.repeat(10));
+    const store = new HistoryStore(filePath);
+    store.upsert(
+      entry({
+        programId: 'lv1',
+        videoPath: path.join(dir, 'p2-deleted.ts'),
+        videoPaths: [part1, path.join(dir, 'p2-deleted.ts')],
+        videoBytes: 30,
+      }),
+    );
+    store.upsert(entry({ programId: 'lv2', videoBytes: 5, endedAt: '2026-09-04T02:00:00.000Z' }));
+    const matched = await HistoryStore.checkExistence(store.match());
+    const page = HistoryStore.paginate(matched, {}, store.providers());
+    // lv2 はファイル無し (削除済) なので除外、lv1 は残っている 10B だけ
+    expect(page.totalBytes).toBe(10);
+    expect(page.items.find((e) => e.programId === 'lv1')?.videoBytes).toBe(10);
   });
 });
