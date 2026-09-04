@@ -10,7 +10,20 @@ import {
   NicoLiveProgramStatus,
   type NicoLiveProgramInfo,
 } from '../../../src/main/vendor/nico-client/types';
-import { startFakeWatchServer, type FakeWatchServer } from '../../helpers/fake-watch-server';
+import {
+  startFakeWatchServer,
+  waitFor,
+  type FakeWatchServer,
+} from '../../helpers/fake-watch-server';
+
+// 再接続を諦めたときの番組情報の確認は外に出さない (常に失敗させる)
+vi.mock('../../../src/main/vendor/nico-client/NicoClient', () => ({
+  NicoClient: class {
+    async getProgramInfo(): Promise<never> {
+      throw new Error('offline');
+    }
+  },
+}));
 
 // ---------------------------------------------------------------------------
 // 偽の HLS 配信 (暗号化した CMAF もどき) と偽の ffmpeg で、録画の一連の流れを通す
@@ -250,6 +263,56 @@ describe('recordVideo', () => {
     expect(result.ffmpegExitCode).toBe(0);
     expect(result.video.segments).toBe(2);
     expect(fs.existsSync(outputPath)).toBe(true);
+  });
+
+  test('視聴 WebSocket の再接続は 1 つだけ動かし、上限に達したら増やさない', async () => {
+    // 最初の接続だけ通し、再接続はすべて即座に切る
+    const streamData = (index: number): Record<string, unknown> => ({
+      protocol: 'hls',
+      uri: `${hls.origin}/mv.m3u8`,
+      quality: 'abr',
+      availableQualities: ['abr'],
+      cookies: [
+        {
+          name: 'session',
+          value: sessionValues[index] ?? 's1',
+          domain: '127.0.0.1',
+          path: '/keys',
+        },
+      ],
+    });
+    await watch.close();
+    watch = await startFakeWatchServer({ streamData, dropConnection: (index) => index > 0 });
+    hls.live = true;
+    const controller = new AbortController();
+    const warn = vi.fn();
+    const promise = recordVideo(
+      {
+        programId: 'lv1',
+        outputPath: path.join(dir, 'out.ts'),
+        ffmpegPath,
+        programInfo: programInfo(watch.url),
+        reconnectBaseDelayMs: 10,
+        logger: { debug() {}, info() {}, warn, error() {} },
+      },
+      controller.signal,
+    );
+    try {
+      // 録画が始まってからサーバー側で切る
+      await waitFor(() => watch.connections[0]?.received.length > 0);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      watch.connections[0].socket.terminate();
+
+      // 5 回試して諦める。切られた再接続が別のループを起こしていれば接続数が 6 を超える
+      await waitFor(() =>
+        warn.mock.calls.some((args) => String(args[0]).includes('reconnect 5/5 failed')),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(watch.connections).toHaveLength(6);
+    } finally {
+      controller.abort();
+      await promise;
+    }
   });
 
   test('番組が終了済みなら開始しない', async () => {

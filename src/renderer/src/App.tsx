@@ -151,7 +151,11 @@ export function App(): ReactElement {
 
   return (
     <div className="shell">
-      <StatusBand status={status} pollIntervalSec={settings.pollIntervalSec} />
+      <StatusBand
+        status={status}
+        pollIntervalSec={settings.pollIntervalSec}
+        enabledTargets={settings.targets.filter((t) => t.enabled).length}
+      />
       <AlertBanner alert={status.alerts[0]} onAction={onAlertAction} />
       <TabBar active={tab} badges={badges} onSelect={selectTab} />
       <main className={`content ${tab === 'settings' ? 'scroll' : ''}`}>
@@ -171,6 +175,8 @@ export function App(): ReactElement {
         )}
         {tab === 'targets' && (
           <TargetsTab
+            // 再ログインしたら確認済みのフォロー状態を捨てて取り直す (key で作り直す)
+            key={status.auth.loggedIn ? 'in' : 'out'}
             targets={settings.targets}
             loggedIn={status.auth.loggedIn}
             onRemoved={onTargetRemoved}

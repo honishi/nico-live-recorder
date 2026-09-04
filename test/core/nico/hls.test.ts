@@ -242,6 +242,48 @@ https://cdn.test/seg/11.cmfv
     expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
   });
 
+  test('playlist の取り直しは取得開始から target duration (変化なしなら半分) 以上あける', async () => {
+    vi.useFakeTimers();
+    try {
+      const live = (segments: number[], end = false): string =>
+        `#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:${segments[0]}\n` +
+        segments.map((seq) => `#EXTINF:3,\nhttps://cdn.test/plain/${seq}.cmfv\n`).join('') +
+        (end ? '#EXT-X-ENDLIST\n' : '');
+      // 1 回目は初回、2 回目は古いセグメントが消えただけ (新着なしでも本文は変化)、3 回目は変化なし、
+      // 4 回目は URL が変わっただけ (本文は同じ)、5 回目で終了
+      const playlists = [live([9, 10]), live([10]), live([10]), live([10]), live([10, 11], true)];
+      const fetchedAt: number[] = [];
+      const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.endsWith('.m3u8')) {
+          fetchedAt.push(Date.now());
+          return new Response(playlists.shift() ?? live([10, 11], true), { status: 200 });
+        }
+        return new Response(Buffer.from('seg'), { status: 200 });
+      }) as unknown as typeof fetch;
+      const { sink } = collect();
+      const downloader = new HlsTrackDownloader({
+        label: 'video',
+        playlistUrl: 'https://cdn.test/media.m3u8',
+        cookies: () => [],
+        fetchImpl,
+      });
+
+      const run = downloader.run(sink);
+      await vi.advanceTimersByTimeAsync(7_000);
+      downloader.updateSource('https://cdn.test/media2.m3u8');
+      await vi.advanceTimersByTimeAsync(20_000);
+      const result = await run;
+
+      expect(result.reason).toBe('endlist');
+      const start = fetchedAt[0];
+      expect(fetchedAt.map((t) => t - start)).toEqual([0, 3000, 6000, 7500, 10500]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test('abort されたら aborted で終わる', async () => {
     const { fetchImpl } = makeFetch(new Set());
     const { sink } = collect();

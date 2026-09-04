@@ -79,14 +79,25 @@ vi.mock('../../src/main/core/detector/program-detector', () => ({
   ProgramDetector: FakeDetector,
 }));
 
+// push は接続せず、起動・停止だけを記録する
+const pushManagers = vi.hoisted(() => [] as { started: boolean }[]);
 vi.mock('../../src/main/core/push/web-push-manager', async () => {
   const { EventEmitter: Emitter } = await import('node:events');
   return {
     WebPushManager: class extends Emitter {
-      async start(): Promise<void> {}
-      async stop(): Promise<void> {}
+      started = false;
+      constructor() {
+        super();
+        pushManagers.push(this);
+      }
+      async start(): Promise<void> {
+        this.started = true;
+      }
+      async stop(): Promise<void> {
+        this.started = false;
+      }
       getStatus(): unknown {
-        return { state: 'stopped', niconicoRegistered: false };
+        return { state: this.started ? 'connected' : 'stopped', niconicoRegistered: false };
       }
     },
   };
@@ -190,6 +201,7 @@ describe('RecordingManager', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nlr-manager-'));
     recordCalls.length = 0;
     detectors.length = 0;
+    pushManagers.length = 0;
     getProgramInfo.mockReset();
     getProgramInfo.mockResolvedValue(info());
     settings = new SettingsStore(path.join(dir, 'settings.json'), path.join(dir, 'out'));
@@ -596,6 +608,50 @@ describe('RecordingManager', () => {
       expect(await raceManager.getAlerts(true)).toEqual([]);
     } finally {
       await raceManager.shutdown();
+    }
+  });
+
+  test('有効な対象が 0 件なら検知器も push も動かさず、対象が増えたら動かす', async () => {
+    settings.update({ pushEnabled: true });
+    await manager.start();
+    expect(manager.detectorRunning).toBe(false);
+    expect(detectors).toHaveLength(0);
+    expect(pushManagers).toHaveLength(0);
+
+    // 対象を足すと動き出し、無効にすると止まる
+    settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    await waitFor(() => manager.detectorRunning);
+    expect(detectors.at(-1)?.running).toBe(true);
+    expect(pushManagers.at(-1)?.started).toBe(true);
+    settings.setTargetEnabled('100', false);
+    await waitFor(() => !manager.detectorRunning);
+    expect(detectors.at(-1)?.running).toBe(false);
+    expect(pushManagers.at(-1)?.started).toBe(false);
+  });
+
+  test('検知の再起動中に来た設定変更は、終わってから最新の設定で反映する', async () => {
+    // ログイン確認を遅らせて、再起動の途中で対象を追加する
+    let release: ((loggedIn: boolean) => void) | undefined;
+    const auth = fakeAuth();
+    Object.assign(auth, {
+      isLoggedIn: () => new Promise<boolean>((resolve) => (release = resolve)),
+    });
+    const slowManager = createManager({ auth });
+    try {
+      const started = slowManager.start();
+      await waitFor(() => release !== undefined);
+      settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+      const first = release!;
+      release = undefined;
+      first(true);
+      // 2 周目のログイン確認が始まったら、対象ありとして検知器が動く
+      await waitFor(() => release !== undefined);
+      release!(true);
+      await started;
+      await waitFor(() => slowManager.detectorRunning);
+      expect(detectors.at(-1)?.running).toBe(true);
+    } finally {
+      await slowManager.shutdown();
     }
   });
 

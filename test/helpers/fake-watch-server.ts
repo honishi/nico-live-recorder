@@ -6,6 +6,8 @@ export interface WatchServerOptions {
   /** startWatching を受けたときに返す stream メッセージの data */
   streamData: (connectionIndex: number) => Record<string, unknown>;
   keepIntervalSec?: number;
+  /** true を返した接続は何も送らずに即座に切る (障害の再現用) */
+  dropConnection?: (connectionIndex: number) => boolean;
 }
 
 export interface FakeWatchServer {
@@ -30,6 +32,10 @@ export async function startFakeWatchServer(options: WatchServerOptions): Promise
     const index = connections.length;
     const entry = { url: request.url ?? '', received: [] as Record<string, unknown>[], socket };
     connections.push(entry);
+    if (options.dropConnection?.(index)) {
+      socket.terminate();
+      return;
+    }
     socket.on('message', (raw: RawData) => {
       const message = JSON.parse(rawToString(raw)) as Record<string, unknown>;
       entry.received.push(message);

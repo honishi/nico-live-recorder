@@ -74,6 +74,29 @@ describe('ProgramDetector', () => {
     detector.stop();
   });
 
+  test('ポーリング間隔が NaN や短すぎるときは 30 秒に戻す', async () => {
+    for (const pollIntervalMs of [Number.NaN, 1_000, 0, 10 * 60 * 1000]) {
+      fetchFollowing.mockReset();
+      fetchFollowing.mockResolvedValue([]);
+      const warn = vi.fn();
+      const detector = new ProgramDetector({
+        cookieHeader: async () => 'user_session=dummy',
+        pollIntervalMs,
+        logger: { debug() {}, info() {}, warn, error() {} },
+      });
+      detector.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchFollowing).toHaveBeenCalledTimes(1);
+      // 1ms 間隔に丸められていれば、ここで何千回も呼ばれる
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(fetchFollowing, String(pollIntervalMs)).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fetchFollowing, String(pollIntervalMs)).toHaveBeenCalledTimes(2);
+      expect(warn).toHaveBeenCalledTimes(1);
+      detector.stop();
+    }
+  });
+
   test('markSeen した番組はポーリングで通知しない', async () => {
     fetchFollowing.mockResolvedValue([following('lv1', '100')]);
     const { detector, detected } = createDetector();

@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from 'react';
 import type { AppSettings, AppStatus } from '@shared/types';
 import { formatBytes } from '@shared/format';
+import { MIN_FREE_SPACE_GB, POLL_INTERVAL_SEC } from '@shared/limits';
 import { formatClock } from '../lib/format';
 
 interface Props {
@@ -68,8 +69,8 @@ export function SettingsTab({
               <input
                 type="number"
                 className="input num"
-                min={15}
-                max={300}
+                min={POLL_INTERVAL_SEC.min}
+                max={POLL_INTERVAL_SEC.max}
                 key={settings.pollIntervalSec}
                 defaultValue={settings.pollIntervalSec}
                 onBlur={(e) => {
@@ -90,8 +91,8 @@ export function SettingsTab({
               <input
                 type="number"
                 className="input num"
-                min={0}
-                max={10000}
+                min={MIN_FREE_SPACE_GB.min}
+                max={MIN_FREE_SPACE_GB.max}
                 key={settings.minFreeSpaceGb}
                 defaultValue={settings.minFreeSpaceGb}
                 onBlur={(e) => {

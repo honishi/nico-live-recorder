@@ -112,6 +112,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private readonly history: HistoryStore;
   private historyVersionCounter = 0;
   private restarting?: Promise<void>;
+  /** 再起動の実行中に別の変更が来た (終わってから最新の設定でもう一度回す) */
+  private restartAgain = false;
   private stopped = false;
   /** ログイン cookie はあるのに API が認証エラーを返した (セッション切れ) */
   private authExpired = false;
@@ -335,9 +337,16 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   /** ログイン状態や設定の変更を反映して検知を組み直す */
   restartDetection(): Promise<void> {
     if (this.restarting) {
+      // 設定は実行の先頭で読むので、途中で来た変更は合流させるだけでは反映されない
+      this.restartAgain = true;
       return this.restarting;
     }
-    this.restarting = this.doRestartDetection().finally(() => {
+    this.restarting = (async () => {
+      do {
+        this.restartAgain = false;
+        await this.doRestartDetection();
+      } while (this.restartAgain && !this.stopped);
+    })().finally(() => {
       this.restarting = undefined;
     });
     return this.restarting;
@@ -354,8 +363,15 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     const loggedIn = await this.auth.isLoggedIn();
     if (!loggedIn) {
       this.logger.info('detection paused: not logged in');
-      await this.push?.stop().catch(() => undefined);
-      this.push = undefined;
+      await this.stopPush();
+      this.emitChange();
+      return;
+    }
+    // 有効な対象が無ければ検知しても録画しないので、ポーリングも push も止めて外部にアクセスしない
+    const targetCount = settings.targets.filter((t) => t.enabled).length;
+    if (targetCount === 0) {
+      this.logger.info('detection paused: no enabled targets');
+      await this.stopPush();
       this.emitChange();
       return;
     }
@@ -374,9 +390,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         this.logger.error('push start failed (polling continues)', error);
         this.emitChange();
       });
-    } else if (this.push) {
-      await this.push.stop().catch(() => undefined);
-      this.push = undefined;
+    } else {
+      await this.stopPush();
     }
 
     const detector = new ProgramDetector({
@@ -405,9 +420,17 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     detector.start();
     this.detector = detector;
     this.logger.info(
-      `detection started: push=${settings.pushEnabled} poll=${settings.pollIntervalSec}s targets=${settings.targets.filter((t) => t.enabled).length}`,
+      `detection started: push=${settings.pushEnabled} poll=${settings.pollIntervalSec}s targets=${targetCount}`,
     );
     this.emitChange();
+  }
+
+  private async stopPush(): Promise<void> {
+    if (!this.push) {
+      return;
+    }
+    await this.push.stop().catch(() => undefined);
+    this.push = undefined;
   }
 
   private async handleDetected(program: DetectedProgram): Promise<void> {

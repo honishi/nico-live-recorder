@@ -13,9 +13,11 @@ import {
 } from '../../shared/types';
 import type { AppLogger } from './app-logger';
 import type { NicoAuth } from './auth';
-import { checkFollowing, parseUserIdInput, resolveUserNickname } from './nico-user';
+import { FollowStatusCache } from './follow-status';
+import { parseUserIdInput, resolveUserNickname } from './nico-user';
 import type { RecordingManager } from './recording-manager';
 import type { SettingsStore } from './settings-store';
+import { MIN_FREE_SPACE_GB, POLL_INTERVAL_SEC, type NumberRange } from '../../shared/limits';
 
 export interface IpcContext {
   version: string;
@@ -51,10 +53,10 @@ function pickSettingsPatch(patch: Partial<AppSettings>): Partial<AppSettings> {
     allowed.outputDir = patch.outputDir.trim();
   }
   if (typeof patch.pollIntervalSec === 'number' && Number.isFinite(patch.pollIntervalSec)) {
-    allowed.pollIntervalSec = clampInt(patch.pollIntervalSec, 15, 300);
+    allowed.pollIntervalSec = clampInt(patch.pollIntervalSec, POLL_INTERVAL_SEC);
   }
   if (typeof patch.minFreeSpaceGb === 'number' && Number.isFinite(patch.minFreeSpaceGb)) {
-    allowed.minFreeSpaceGb = clampInt(patch.minFreeSpaceGb, 0, 10_000);
+    allowed.minFreeSpaceGb = clampInt(patch.minFreeSpaceGb, MIN_FREE_SPACE_GB);
   }
   for (const key of ['recordOngoingOnStart', 'pushEnabled', 'notificationsEnabled'] as const) {
     if (typeof patch[key] === 'boolean') {
@@ -82,6 +84,10 @@ function pickUiPatch(patch: Partial<UiState>): Partial<UiState> {
 }
 
 export function registerIpcHandlers(ctx: IpcContext): void {
+  // フォロー状態は数分キャッシュし、ログイン状態が変わったら捨てる
+  const followStatus = new FollowStatusCache();
+  ctx.auth.on('change', () => followStatus.clear());
+
   ipcMain.handle(IPC.getStatus, () => buildStatus(ctx));
   ipcMain.handle(IPC.getSettings, () => ctx.settings.get());
   ipcMain.handle(IPC.updateSettings, (_event, patch: Partial<AppSettings>) =>
@@ -125,7 +131,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     if (existing) {
       return {
         target: existing,
-        follow: cookie ? await checkFollowing(userId, cookie) : 'unknown',
+        follow: cookie ? await followStatus.get(userId, cookie) : 'unknown',
         alreadyExists: true,
       };
     }
@@ -137,7 +143,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       addedAt: new Date().toISOString(),
     };
     ctx.settings.upsertTarget(target);
-    const follow: FollowCheckResult = cookie ? await checkFollowing(userId, cookie) : 'unknown';
+    const follow: FollowCheckResult = cookie ? await followStatus.get(userId, cookie) : 'unknown';
     ctx.logger.info(`target added: ${name} (${userId}) follow=${follow}`);
     return { target, follow, alreadyExists: false };
   });
@@ -160,7 +166,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   );
   ipcMain.handle(IPC.checkFollow, async (_event, userId: string): Promise<FollowCheckResult> => {
     const cookie = await ctx.auth.getCookieHeader();
-    return cookie ? checkFollowing(String(userId), cookie) : 'unknown';
+    return cookie ? followStatus.get(String(userId), cookie) : 'unknown';
   });
 
   ipcMain.handle(IPC.login, () => ctx.auth.login(ctx.getMainWindow()));
@@ -214,6 +220,6 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   );
 }
 
-function clampInt(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, Math.round(value)));
+function clampInt(value: number, range: NumberRange): number {
+  return Math.min(range.max, Math.max(range.min, Math.round(value)));
 }

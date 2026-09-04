@@ -300,6 +300,7 @@ export class HlsTrackDownloader {
   async run(sink: Writable, signal?: AbortSignal): Promise<TrackResult> {
     const result: TrackResult = { reason: 'stopped', segments: 0, bytes: 0 };
     let lastSeq: number | undefined;
+    let lastPlaylist: { url: string; text: string } | undefined;
     let sentMapUri: string | undefined;
     let lastProgressAt = Date.now();
 
@@ -319,10 +320,18 @@ export class HlsTrackDownloader {
           break;
         }
         const finalPass = this.stopRequested;
-        const playlist = parseMediaPlaylist(
-          (await this.fetchWithRetry(this.playlistUrl, signal)).toString('utf8'),
-          this.playlistUrl,
-        );
+        // 次回の取得間隔は「取得を始めた時刻」から数える (RFC 8216 6.3.4)
+        const fetchStartedAt = Date.now();
+        const playlistUrl = this.playlistUrl;
+        const playlistText = (await this.fetchWithRetry(playlistUrl, signal)).toString('utf8');
+        // RFC 8216 の「変化した」は本文の変化 (古いセグメントの削除や属性の変更も含む)。
+        // 再接続で URL が変わったときは、本文が同じでも相対 URI の解決先が変わるので別物として扱う
+        const changed =
+          lastPlaylist === undefined ||
+          lastPlaylist.url !== playlistUrl ||
+          lastPlaylist.text !== playlistText;
+        lastPlaylist = { url: playlistUrl, text: playlistText };
+        const playlist = parseMediaPlaylist(playlistText, playlistUrl);
 
         let fresh = playlist.segments.filter((s) => lastSeq === undefined || s.seq > lastSeq);
         if (lastSeq === undefined && !this.startFromBeginning) {
@@ -375,10 +384,10 @@ export class HlsTrackDownloader {
           result.reason = 'idle';
           break;
         }
-        // 新規セグメントがあった直後は次がすぐ来る可能性があるので短めに待つ
-        const waitMs =
-          fresh.length > 0 ? playlist.targetDuration * 400 : playlist.targetDuration * 700;
-        await this.delay(Math.max(500, waitMs), signal);
+        // RFC 8216 6.3.4: 内容が変わった playlist は target duration、変わっていなければその半分以上あけてから
+        // 取り直す。セグメントの取得にかかった時間はその中に含める
+        const minIntervalMs = playlist.targetDuration * (changed ? 1000 : 500);
+        await this.delay(Math.max(0, fetchStartedAt + minIntervalMs - Date.now()), signal);
       }
     } catch (error) {
       if (signal?.aborted) {

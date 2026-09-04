@@ -210,7 +210,9 @@ async function bootstrap(): Promise<void> {
       ? '未ログイン'
       : active > 0
         ? `${active} 件録画中`
-        : `監視中 (push: ${status.push.state})`;
+        : status.detectorRunning
+          ? `監視中 (push: ${status.push.state})`
+          : '監視停止 (対象なし)';
     tray?.update(status.recordings, summary, trayState);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.statusChanged, status);
