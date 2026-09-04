@@ -515,8 +515,13 @@ describe('RecordingManager', () => {
       expect((await lowManager.getAlerts(true)).map((a) => a.kind)).toEqual(['disk-space']);
       probeFails = false;
 
+      // 保存先としきい値に関係ない設定変更では測り直さない
+      let callsBefore = probeCalls;
+      settings.update({ notificationsEnabled: false });
+      expect(probeCalls).toBe(callsBefore);
+
       // 0 にすると確認しない (probe も呼ばない)
-      const callsBefore = probeCalls;
+      callsBefore = probeCalls;
       settings.update({ minFreeSpaceGb: 0 });
       await lowManager.refreshDiskSpace();
       expect(await lowManager.getAlerts(true)).toEqual([]);

@@ -17,6 +17,7 @@ import {
   type HistoryQuery,
   type PushStatusInfo,
   type RecordingInfo,
+  type AppSettings,
   type RecordingSource,
 } from '../../shared/types';
 import type { NicoAuth } from './auth';
@@ -95,6 +96,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private diskTimer?: NodeJS.Timeout;
   /** 最後に測れた空き容量。保存先が変わったら捨てる */
   private diskSample?: { dir: string; free: number };
+  /** 最後に測ったときの保存先としきい値。設定変更で測り直す必要があるかの判断に使う */
+  private diskChecked?: Pick<AppSettings, 'outputDir' | 'minFreeSpaceGb'>;
   private diskGeneration = 0;
   /** 最後に判定したとき空き容量が少なかったか (切り替わったときだけ通知する) */
   private diskLow = false;
@@ -136,9 +139,15 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       this.authExpired = false;
       void this.restartDetection();
     });
-    this.settings.on('change', () => {
+    this.settings.on('change', (settings) => {
       void this.restartDetection();
-      void this.refreshDiskSpace();
+      // 空き容量は保存先かしきい値が変わったときだけ測り直す (対象の追加などでは statfs を走らせない)
+      if (
+        settings.outputDir !== this.diskChecked?.outputDir ||
+        settings.minFreeSpaceGb !== this.diskChecked?.minFreeSpaceGb
+      ) {
+        void this.refreshDiskSpace();
+      }
     });
   }
 
@@ -249,6 +258,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.diskGeneration += 1;
     const generation = this.diskGeneration;
     const settings = this.settings.get();
+    this.diskChecked = { outputDir: settings.outputDir, minFreeSpaceGb: settings.minFreeSpaceGb };
     if (settings.minFreeSpaceGb <= 0) {
       // 0 は確認しない。測定値を捨てれば警告と表示も消える
       this.diskSample = undefined;
@@ -780,7 +790,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     if (recording.part !== part) {
       return;
     }
-    if (size !== undefined) {
+    // 消失を検知した後に、削除前に始まった stat が成功で戻ってきても、消えた分を足し戻さない
+    if (size !== undefined && !part.lost) {
       part.fileSeen = true;
       const total = recording.finishedPartBytes + size;
       if (total !== info.videoBytes) {
