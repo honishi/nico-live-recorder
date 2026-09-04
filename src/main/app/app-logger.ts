@@ -90,8 +90,10 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
   private seq = 0;
   private stream?: fs.WriteStream;
   private fileBytes = 0;
+  /** 退避 (古いストリームを閉じて .1 に移し、開き直す) の進行中。その間の行は queued に溜める */
+  private rotating?: Promise<void>;
+  private readonly queued: string[] = [];
   private outputLevel: LogLevel;
-  private closed = false;
 
   constructor(
     logDir: string,
@@ -145,9 +147,10 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
   }
 
   /** ファイルへの書き込みを終えるまで待つ */
-  close(): Promise<void> {
-    this.closed = true;
-    return this.closeStream();
+  async close(): Promise<void> {
+    // 退避の途中なら、溜めた行を書き終えてから閉じる
+    await this.rotating;
+    await this.closeStream();
   }
 
   private write(level: LogLevel, args: unknown[]): void {
@@ -178,24 +181,40 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
 
   /** ファイルに追記し、上限を超えたら .1 に退避して新しいファイルに切り替える */
   private writeFile(line: string): void {
+    if (this.rotating) {
+      this.queued.push(line);
+      return;
+    }
     if (!this.stream) {
       return;
     }
-    this.stream.write(line);
-    this.fileBytes += Buffer.byteLength(line);
+    this.writeLine(this.stream, line);
     if (this.fileBytes > this.maxFileBytes) {
-      const stream = this.stream;
-      this.stream = undefined;
-      stream.end(() => {
-        try {
-          fs.renameSync(this.filePath, `${this.filePath}.1`);
-        } catch {
-          // 退避できなくても書き続ける
-        }
-        if (!this.closed) {
-          this.openStream();
-        }
+      this.rotating = this.rotate().finally(() => {
+        this.rotating = undefined;
       });
+    }
+  }
+
+  private writeLine(stream: fs.WriteStream, line: string): void {
+    stream.write(line);
+    this.fileBytes += Buffer.byteLength(line);
+  }
+
+  /** 今のファイルを閉じて .1 に移し、新しいファイルを開いて退避中に溜めた行を書く */
+  private async rotate(): Promise<void> {
+    await this.closeStream();
+    try {
+      fs.renameSync(this.filePath, `${this.filePath}.1`);
+    } catch {
+      // 退避できなくても書き続ける
+    }
+    this.openStream();
+    const stream = this.stream;
+    if (stream) {
+      for (const line of this.queued.splice(0)) {
+        this.writeLine(stream, line);
+      }
     }
   }
 
