@@ -83,6 +83,23 @@ describe('AppLogger', () => {
     expect(Buffer.byteLength(current)).toBeLessThan(400);
   });
 
+  test('退避の途中に書かれた行も失わない', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    // 1 行 70 バイト前後 × 20 行で、途中で 1 回だけ退避が起きる
+    const logger = new AppLogger(dir, 'info', 1000);
+    for (let i = 0; i < 20; i += 1) {
+      logger.info(`[rec] line ${String(i).padStart(2, '0')} ${'x'.repeat(40)}`);
+    }
+    await logger.close();
+
+    const rotated = fs.readFileSync(path.join(dir, 'app.log.1'), 'utf8');
+    const current = fs.readFileSync(path.join(dir, 'app.log'), 'utf8');
+    const lines = (rotated + current).match(/line \d\d/g) ?? [];
+    expect(lines).toEqual(
+      Array.from({ length: 20 }, (_, i) => `line ${String(i).padStart(2, '0')}`),
+    );
+  });
+
   test('出力レベルを debug に下げるとファイルにも debug が書かれる', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const logger = new AppLogger(dir, 'info');
