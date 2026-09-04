@@ -622,8 +622,12 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
             },
             AbortSignal.any([controller.signal, partController.signal]),
           );
+          // パートのファイルを最終確認する。消えたのをサイズ監視が拾う前に録画本体が終わっていたら、
+          // ここで消失として扱う (partController がまだあるので消失分岐に入れる)
+          recording.currentPartPath ??= result.videoPath;
+          await this.refreshSize(recording);
           recording.partController = undefined;
-          // 消失の後始末が走っている途中で録画本体が自然終了することがあるので、終わるまで待つ
+          // 消失の後始末が走っている途中で録画本体が終わることがあるので、終わるまで待つ
           // (待たずに確定すると、古い一覧や容量を履歴に書いてしまう)
           if (recording.partCleanup) {
             await recording.partCleanup;
@@ -632,15 +636,13 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           const outputMissing = recording.partAbortReason === 'output-missing';
           if (outputMissing) {
             // 消えたパートのファイルは採用せず、代表パスは残っているパートにする
-            // (一覧とサイズは消失検知の時点で実在するものだけに数え直してある)
+            // (一覧とサイズは後始末で実在するものだけに数え直してある)
             info.videoPath = info.videoPaths?.at(-1);
           } else {
             info.videoPath = result.videoPath;
             if (!info.videoPaths?.includes(result.videoPath)) {
               info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
             }
-            recording.currentPartPath = result.videoPath;
-            await this.refreshSize(recording);
           }
           // このパートは完了済みの合計に繰り入れる。再開待ちの間のサイズ監視は何も数えない
           recording.currentPartPath = undefined;

@@ -402,6 +402,28 @@ describe('RecordingManager', () => {
     },
   );
 
+  /** 2 パート目が消えた後、残った 1 パート目だけで確定し、3 パート目の合計も正しいことを確かめる */
+  async function expectSecondPartDropped(firstPath: string): Promise<void> {
+    // 再開待ちに入った時点で、後始末が反映された一覧と容量で履歴が確定している
+    await waitFor(async () => (await manager.getRecordings())[0]?.state === 'starting', 5000);
+    expect(history.get('lv1')?.videoPath).toBe(firstPath);
+    expect(history.get('lv1')?.videoPaths).toEqual([firstPath]);
+    expect(history.get('lv1')?.videoBytes).toBe(100);
+
+    // 完了済みの合計も古い値 (消えたパート込み) になっていない
+    await vi.advanceTimersByTimeAsync(10_500);
+    const third = await nextRecordCall(2);
+    const thirdPath = path.join(third.options.outputDir, 'rec_3.ts');
+    fs.writeFileSync(thirdPath, 'z'.repeat(30));
+    third.options.onPaths?.({
+      attempt: 3,
+      videoPath: thirdPath,
+      commentsPath: `${firstPath}.jsonl`,
+    });
+    third.pathsSent = true;
+    await waitFor(async () => (await manager.getRecordings())[0]?.videoBytes === 130, 5000);
+  }
+
   test(
     '消失の後始末より先に録画本体が終わっても、後始末を待ってから状態を確定する',
     { timeout: 15_000 },
@@ -417,25 +439,21 @@ describe('RecordingManager', () => {
         );
       });
       fs.rmSync(secondPath);
+      await expectSecondPartDropped(firstPath);
+    },
+  );
 
-      // 再開待ちに入った時点で、後始末が反映された一覧と容量で履歴が確定している
-      await waitFor(async () => (await manager.getRecordings())[0]?.state === 'starting', 5000);
-      expect(history.get('lv1')?.videoPath).toBe(firstPath);
-      expect(history.get('lv1')?.videoPaths).toEqual([firstPath]);
-      expect(history.get('lv1')?.videoBytes).toBe(100);
-
-      // 完了済みの合計も古い値 (消えたパート込み) になっていない
-      await vi.advanceTimersByTimeAsync(10_500);
-      const third = await nextRecordCall(2);
-      const thirdPath = path.join(third.options.outputDir, 'rec_3.ts');
-      fs.writeFileSync(thirdPath, 'z'.repeat(30));
-      third.options.onPaths?.({
-        attempt: 3,
-        videoPath: thirdPath,
-        commentsPath: `${firstPath}.jsonl`,
-      });
-      third.pathsSent = true;
-      await waitFor(async () => (await manager.getRecordings())[0]?.videoBytes === 130, 5000);
+  test(
+    'ファイルが消えたのをサイズ監視が拾う前に録画本体が終わっても、消失として扱う',
+    { timeout: 15_000 },
+    async () => {
+      const { firstPath, secondPath, second } = await startSecondPart();
+      // 削除の直後 (1 秒ごとの監視が見る前) に録画本体が idle で戻る
+      fs.rmSync(secondPath);
+      second.resolve(
+        finishedResult(second, { video: { reason: 'idle', video: {} }, videoPath: secondPath }),
+      );
+      await expectSecondPartDropped(firstPath);
     },
   );
 
