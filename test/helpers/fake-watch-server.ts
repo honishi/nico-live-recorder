@@ -66,12 +66,12 @@ export async function startFakeWatchServer(options: WatchServerOptions): Promise
 
 /** 条件が満たされるまで短い間隔で待つ */
 export async function waitFor(
-  predicate: () => boolean,
+  predicate: () => boolean | Promise<boolean>,
   timeoutMs = 3000,
   intervalMs = 20,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() > deadline) {
       throw new Error('waitFor: timed out');
     }

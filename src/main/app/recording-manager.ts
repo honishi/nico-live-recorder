@@ -32,6 +32,12 @@ interface ActiveRecording {
   finishedPartBytes: number;
   /** 履歴に途中経過を書いた時刻 (クラッシュ時の復元用) */
   snapshotAt: number;
+  /** 現在のパートだけを止めるための controller (録画全体の停止とは別) */
+  partController?: AbortController;
+  /** 現在のパートのファイルを一度でも観測したか (消えたことの判定に使う) */
+  partFileSeen: boolean;
+  /** 現在のパートを止めた理由 (ファイル消失など)。再開の判断に使う */
+  partAbortReason?: 'output-missing';
 }
 
 export interface RecordingManagerOptions {
@@ -436,6 +442,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       done: Promise.resolve(),
       finishedPartBytes: previousBytes,
       snapshotAt: Date.now(),
+      partFileSeen: false,
     };
     this.active.set(programId, recording);
     // 開始時点で履歴に残す。途中でアプリが落ちても「中断」として復元できる
@@ -459,6 +466,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         while (true) {
           // コメント件数はパートをまたいで累計する
           const countBefore = info.commentCount;
+          // パート単位の停止 (出力ファイルの消失など) は録画全体の停止と分けて扱う
+          const partController = new AbortController();
+          recording.partController = partController;
+          recording.partFileSeen = false;
+          recording.partAbortReason = undefined;
           const result = await recordProgram(
             {
               programId,
@@ -476,6 +488,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
                   info.videoPaths = [...(info.videoPaths ?? []), paths.videoPath];
                 }
                 info.commentsPath ??= paths.commentsPath;
+                recording.partFileSeen = false;
                 // クラッシュしてもこのパートのファイルが履歴から辿れるように、決まった時点で書く
                 this.history.upsert(info);
                 recording.snapshotAt = Date.now();
@@ -488,8 +501,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
                 info.commentCount = countBefore + count;
               },
             },
-            controller.signal,
+            AbortSignal.any([controller.signal, partController.signal]),
           );
+          recording.partController = undefined;
           info.videoPath = result.videoPath;
           if (!info.videoPaths?.includes(result.videoPath)) {
             info.videoPaths = [...(info.videoPaths ?? []), result.videoPath];
@@ -500,11 +514,14 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           recording.snapshotAt = Date.now();
 
           const errorText = result.errors.map((e) => `${e.target}: ${e.message}`).join(' / ');
-          lastReason = result.video?.reason ?? 'no video';
+          const outputMissing = recording.partAbortReason === 'output-missing';
+          lastReason = outputMissing
+            ? 'output file disappeared'
+            : (result.video?.reason ?? 'no video');
           const videoOk = result.video !== undefined;
           const abnormal =
             !controller.signal.aborted &&
-            (!videoOk || lastReason === 'idle' || lastReason === 'disconnected');
+            (!videoOk || outputMissing || lastReason === 'idle' || lastReason === 'disconnected');
           if (!abnormal) {
             outcome = videoOk ? 'done' : 'failed';
             info.error = result.errors.length > 0 ? errorText : undefined;
@@ -623,6 +640,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     }
     try {
       const stat = await fs.stat(videoPath);
+      recording.partFileSeen = true;
       const total = recording.finishedPartBytes + stat.size;
       if (total !== info.videoBytes || info.videoPath !== videoPath) {
         info.videoBytes = total;
@@ -633,8 +651,23 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         this.history.upsert(info);
         recording.snapshotAt = Date.now();
       }
-    } catch {
-      // まだファイルが無い
+    } catch (error) {
+      // 一度は見えたファイルが無くなった = 録画中にファイルかフォルダが消された。
+      // ffmpeg は消えたファイルに書き続けて内容を失うので、このパートを止めて別ファイルで再開する
+      const missing = (error as NodeJS.ErrnoException).code === 'ENOENT';
+      const part = recording.partController;
+      if (missing && recording.partFileSeen && part && !part.signal.aborted) {
+        this.logger.error(
+          `[rec] output file disappeared while recording ${info.programId}: ${videoPath}. Restarting as a new part`,
+        );
+        recording.partAbortReason = 'output-missing';
+        // 失われたパートの分は容量と一覧から外す
+        info.videoBytes = recording.finishedPartBytes;
+        info.videoPaths = info.videoPaths?.filter((p) => p !== videoPath);
+        recording.partFileSeen = false;
+        part.abort();
+        this.emitChange();
+      }
     }
   }
 

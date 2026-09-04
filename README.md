@@ -54,6 +54,12 @@ NICO_USER_SESSION=... npx tsx scripts/push-listen.ts        # push 購読の疎�
 npm run build && npx tsx scripts/e2e-screenshots.ts         # アプリを起動して各タブのスクリーンショット
 ```
 
+検証用に起動するときは `NLR_USER_DATA` (設定の置き場所) と `NLR_OUTPUT_DIR` (保存先の既定値) で本番と分けられます。
+
+```bash
+
+```
+
 画面のデザインは `docs/design/` (Claude Design のハンドオフ) を正としています。
 
 ### コード構成
