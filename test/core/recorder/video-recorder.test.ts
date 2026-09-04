@@ -118,21 +118,38 @@ async function startFakeHls(): Promise<FakeHls> {
 }
 
 /** fd3 (映像) と fd4 (音声) を読んでファイルに書くだけの ffmpeg の代わり */
+/**
+ * 偽の ffmpeg。fd 3 (映像) と fd 4 (音声) を最後の引数のファイルに書き出し、
+ * FAKE_FFMPEG_EXIT の終了コードで終わる。Node スクリプトなので Windows でも動く
+ */
 function writeFakeFfmpeg(dir: string): string {
-  const script = path.join(dir, 'fake-ffmpeg.sh');
+  const script = path.join(dir, 'fake-ffmpeg.cjs');
   fs.writeFileSync(
     script,
     [
-      '#!/bin/bash',
-      'out="${@: -1}"',
-      'cat <&3 > "$out" &',
-      'cat <&4 > "$out.audio" &',
-      'wait',
-      'exit "${FAKE_FFMPEG_EXIT:-0}"',
+      "const fs = require('node:fs');",
+      "const net = require('node:net');",
+      'const out = process.argv[process.argv.length - 1];',
+      'const copy = (fd, file) =>',
+      '  new Promise((resolve) => {',
+      '    let input;',
+      '    try {',
+      '      input = new net.Socket({ fd, readable: true, writable: false });',
+      '    } catch {',
+      '      resolve(); // その fd が渡されていない (音声なし) ときは何もしない',
+      '      return;',
+      '    }',
+      '    const output = fs.createWriteStream(file);',
+      '    input.pipe(output);',
+      "    output.on('close', resolve);",
+      "    input.on('error', () => output.end());",
+      '  });',
+      "Promise.all([copy(3, out), copy(4, out + '.audio')]).then(() => {",
+      '  process.exit(Number(process.env.FAKE_FFMPEG_EXIT || 0));',
+      '});',
       '',
     ].join('\n'),
   );
-  fs.chmodSync(script, 0o755);
   return script;
 }
 
