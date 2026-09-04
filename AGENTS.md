@@ -27,6 +27,7 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 ## 検証
 
 - commit 前に `npm run format` → `npm run lint` → `npm run typecheck` → `npm test` を通す。
+- テストは積極的に足すが、何でも書くのではなく、壊れたときの実害と、書く手間・保守の手間・実行時間との釣り合いで判断する。録画や検知のように壊れると取りこぼしにつながる経路を優先し、表示だけの部品や Electron 実体が要るものは無理に書かない。
 - テストは `test/` 以下に `src/main/` を鏡写しにして置く (`src/main/core/nico/hls.ts` → `test/core/nico/hls.test.ts`)。偽サーバーなど共通の道具は `test/helpers/`。ネットワークに出る部分は偽サーバー (視聴 WebSocket、HLS、AutoPush) か `vi.mock` で差し替え、テストから外部に接続しない。
 - 録画コアの変更は `npx tsx scripts/record.ts <lv番号> 30 ./recordings` で実放送に対して確認する。
 - Electron 全体は `--remote-debugging-port` 付きで起動し、CDP から `window.api.*` を呼んで確認できる。開発中のアプリと同時に立てるときは `NLR_USER_DATA` で別の userData を指定する。
