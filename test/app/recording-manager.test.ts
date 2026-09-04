@@ -330,6 +330,41 @@ describe('RecordingManager', () => {
     expect(manager.stopRecording('lv1')).toBe(false);
   });
 
+  test('空き容量がしきい値を下回るとバナー用の警告を出し、回復したら消す', async () => {
+    let free = 1 * 1024 ** 3;
+    const lowManager = new RecordingManager({
+      settings,
+      auth: fakeAuth(),
+      pushStore: {
+        load: async () => undefined,
+        save: async () => undefined,
+        clear: async () => undefined,
+      },
+      history,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      ffmpegPath: '/bin/false',
+      diskProbe: async () => free,
+    });
+    try {
+      settings.update({ minFreeSpaceGb: 5 });
+      await lowManager.refreshDiskSpace();
+      expect(lowManager.diskFreeBytes).toBe(free);
+      expect((await lowManager.getAlerts(true)).map((a) => a.kind)).toEqual(['disk-space']);
+
+      free = 50 * 1024 ** 3;
+      await lowManager.refreshDiskSpace();
+      expect(await lowManager.getAlerts(true)).toEqual([]);
+
+      // 0 にすると確認しない
+      free = 0;
+      settings.update({ minFreeSpaceGb: 0 });
+      await lowManager.refreshDiskSpace();
+      expect(await lowManager.getAlerts(true)).toEqual([]);
+    } finally {
+      await lowManager.shutdown();
+    }
+  });
+
   test('検知した放送は対象の配信者のときだけ録画する', async () => {
     settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
     await manager.start();

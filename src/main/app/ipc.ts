@@ -40,6 +40,7 @@ export async function buildStatus(ctx: IpcContext): Promise<AppStatus> {
     logs: ctx.logger.recent(LOG_ENTRIES_FOR_UI),
     alerts: await ctx.manager.getAlerts(loggedIn),
     logFilePath: ctx.logger.logFilePath,
+    diskFreeBytes: ctx.manager.diskFreeBytes,
   };
 }
 
@@ -50,6 +51,9 @@ function pickSettingsPatch(patch: Partial<AppSettings>): Partial<AppSettings> {
   }
   if (typeof patch.pollIntervalSec === 'number' && Number.isFinite(patch.pollIntervalSec)) {
     allowed.pollIntervalSec = Math.min(300, Math.max(15, Math.round(patch.pollIntervalSec)));
+  }
+  if (typeof patch.minFreeSpaceGb === 'number' && Number.isFinite(patch.minFreeSpaceGb)) {
+    allowed.minFreeSpaceGb = Math.min(10_000, Math.max(0, Math.round(patch.minFreeSpaceGb)));
   }
   for (const key of ['recordOngoingOnStart', 'pushEnabled', 'notificationsEnabled'] as const) {
     if (typeof patch[key] === 'boolean') {

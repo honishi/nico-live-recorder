@@ -34,6 +34,8 @@ export interface AppSettings {
   recordOngoingOnStart: boolean;
   pushEnabled: boolean;
   notificationsEnabled: boolean;
+  /** 保存先の空き容量がこの GB を下回ったら警告する。0 なら確認しない */
+  minFreeSpaceGb: number;
   ui: UiState;
   window?: WindowBounds;
 }
@@ -89,7 +91,7 @@ export interface PushStatusInfo {
   lastError?: string;
 }
 
-export type AlertKind = 'output-dir' | 'auth-expired' | 'push-unavailable';
+export type AlertKind = 'output-dir' | 'auth-expired' | 'push-unavailable' | 'disk-space';
 
 /** ヘッダ直下のバナーに出す、解消するまで続く問題 */
 export interface AppAlert {
@@ -127,6 +129,8 @@ export interface AppStatus {
   logs: LogEntry[];
   alerts: AppAlert[];
   logFilePath: string;
+  /** 保存先の空き容量 (バイト)。取得できないときは undefined */
+  diskFreeBytes?: number;
 }
 
 export type FollowCheckResult = 'following' | 'not-following' | 'unknown';
