@@ -100,6 +100,23 @@ describe('FollowStatusCache', () => {
     expect(fake.calls).toHaveLength(2);
   });
 
+  test('clear の前から順番待ちしていた問い合わせは、古い cookie で外部に出ない', async () => {
+    const fake = fakeCheck();
+    const cache = new FollowStatusCache({ check: fake.check, maxConcurrent: 1 });
+    const running = cache.get('1', 'old-cookie');
+    const waiting = cache.get('2', 'old-cookie');
+    cache.clear();
+    const fresh = cache.get('3', 'new-cookie');
+    // 実行中の 1 件が終わると、待っていた旧世代は check を呼ばずに unknown で終わり、新世代だけが外部に出る
+    fake.resolveAll('following');
+    expect(await running).toBe('following');
+    expect(await waiting).toBe('unknown');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fake.calls).toEqual(['1', '3']);
+    fake.resolveAll('following');
+    expect(await fresh).toBe('following');
+  });
+
   test('同時に問い合わせるのは上限までで、残りは順番待ちする', async () => {
     const fake = fakeCheck();
     const cache = new FollowStatusCache({ check: fake.check, maxConcurrent: 3 });

@@ -56,7 +56,12 @@ export class FollowStatusCache {
     if (pending && pending.generation === generation) {
       return pending.promise;
     }
-    const promise = this.withSlot(() => this.check(userId, cookieHeader))
+    // 枠を待つ間にログイン状態が変わっていたら、古い cookie で外部に出ずに不明として終える
+    const promise = this.withSlot(() =>
+      generation === this.generation
+        ? this.check(userId, cookieHeader)
+        : Promise.resolve<FollowCheckResult>('unknown'),
+    )
       .then((result) => {
         // 途中でログイン状態が変わっていたら、古いアカウントの結果なので保存しない
         if (generation === this.generation) {

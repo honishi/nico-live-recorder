@@ -300,7 +300,7 @@ export class HlsTrackDownloader {
   async run(sink: Writable, signal?: AbortSignal): Promise<TrackResult> {
     const result: TrackResult = { reason: 'stopped', segments: 0, bytes: 0 };
     let lastSeq: number | undefined;
-    let lastPlaylistText: string | undefined;
+    let lastPlaylist: { url: string; text: string } | undefined;
     let sentMapUri: string | undefined;
     let lastProgressAt = Date.now();
 
@@ -322,11 +322,16 @@ export class HlsTrackDownloader {
         const finalPass = this.stopRequested;
         // 次回の取得間隔は「取得を始めた時刻」から数える (RFC 8216 6.3.4)
         const fetchStartedAt = Date.now();
-        const playlistText = (await this.fetchWithRetry(this.playlistUrl, signal)).toString('utf8');
-        // RFC 8216 の「変化した」は本文の変化 (古いセグメントの削除や属性の変更も含む)
-        const changed = playlistText !== lastPlaylistText;
-        lastPlaylistText = playlistText;
-        const playlist = parseMediaPlaylist(playlistText, this.playlistUrl);
+        const playlistUrl = this.playlistUrl;
+        const playlistText = (await this.fetchWithRetry(playlistUrl, signal)).toString('utf8');
+        // RFC 8216 の「変化した」は本文の変化 (古いセグメントの削除や属性の変更も含む)。
+        // 再接続で URL が変わったときは、本文が同じでも相対 URI の解決先が変わるので別物として扱う
+        const changed =
+          lastPlaylist === undefined ||
+          lastPlaylist.url !== playlistUrl ||
+          lastPlaylist.text !== playlistText;
+        lastPlaylist = { url: playlistUrl, text: playlistText };
+        const playlist = parseMediaPlaylist(playlistText, playlistUrl);
 
         let fresh = playlist.segments.filter((s) => lastSeq === undefined || s.seq > lastSeq);
         if (lastSeq === undefined && !this.startFromBeginning) {
