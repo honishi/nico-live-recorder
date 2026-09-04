@@ -237,6 +237,15 @@ describe('RecordingManager', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  /**
+   * 再開待ち (5 秒から倍々) に入るのを待ってから、その待ちを進める。
+   * 待ちに入る前に進めると、遅い環境ではタイマーが後から作られて実時間でしか進まない
+   */
+  async function skipRetryWait(ms: number): Promise<void> {
+    await waitFor(async () => (await manager.getRecordings())[0]?.state === 'starting');
+    await vi.advanceTimersByTimeAsync(ms);
+  }
+
   test('終了済みや取得できない番組は開始せず、コード付きの例外にする', async () => {
     getProgramInfo.mockResolvedValueOnce(info({ status: NicoLiveProgramStatus.ended }));
     await expect(manager.startRecording('lv1', 'manual')).rejects.toSatisfy(
@@ -284,7 +293,7 @@ describe('RecordingManager', () => {
     );
 
     // 5 秒の待ちの後に再開する
-    await vi.advanceTimersByTimeAsync(5_500);
+    await skipRetryWait(5_500);
     const second = await nextRecordCall(1);
     expect(second.options.attempt).toBe(2);
     expect(second.options.prefetchBackwardComments).toBe(false);
@@ -303,7 +312,7 @@ describe('RecordingManager', () => {
     getProgramInfo.mockRejectedValue(new Error('offline'));
     first.resolve(finishedResult(first, { video: { reason: 'idle', video: {} } }));
 
-    await vi.advanceTimersByTimeAsync(5_500);
+    await skipRetryWait(5_500);
     const second = await nextRecordCall(1);
     expect(second.options.attempt).toBe(2);
     expect(history.get('lv1')?.state).not.toBe('done');
@@ -330,7 +339,7 @@ describe('RecordingManager', () => {
 
     // 消えたパートの結果は採用されず、コメントファイルも消えているので次のパートで作り直す
     first.resolve(finishedResult(first, { video: { reason: 'aborted', video: {} }, videoPath }));
-    await vi.advanceTimersByTimeAsync(5_500);
+    await skipRetryWait(5_500);
     const second = await nextRecordCall(1);
     expect(second.options.attempt).toBe(2);
     expect(second.options.commentsPath).toBeUndefined();
@@ -361,7 +370,7 @@ describe('RecordingManager', () => {
     );
 
     // 再開待ちの間もサイズ監視は動くが、完了済みのパートを二重に数えない
-    await vi.advanceTimersByTimeAsync(5_500);
+    await skipRetryWait(5_500);
     const second = await nextRecordCall(1);
     expect(second.options.attempt).toBe(2);
     expect((await manager.getRecordings())[0]?.videoBytes).toBe(100);
@@ -379,7 +388,7 @@ describe('RecordingManager', () => {
       finishedResult(second, { video: { reason: 'aborted', video: {} }, videoPath: secondPath }),
     );
     // 2 回目の再開は待ち時間が倍 (10 秒) になる
-    await vi.advanceTimersByTimeAsync(10_500);
+    await skipRetryWait(10_500);
     const third = await nextRecordCall(2);
     expect(third.options.attempt).toBe(3);
     return third;
@@ -463,7 +472,7 @@ describe('RecordingManager', () => {
     getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
     first.resolve(finishedResult(first, { video: { reason: 'disconnected', video: {} } }));
 
-    await vi.advanceTimersByTimeAsync(5_500);
+    await skipRetryWait(5_500);
     await waitFor(() => history.get('lv1')?.state === 'done');
     expect(recordCalls).toHaveLength(1);
     expect(history.get('lv1')?.error).toBeUndefined();

@@ -69,7 +69,11 @@ export class FfmpegMuxer {
     if (this.separateAudio) {
       stdio.push('pipe');
     }
-    const child = spawn(this.ffmpegPath, args, { stdio, windowsHide: true });
+    // .js / .cjs を指定されたときは node で実行する (テストの偽 ffmpeg。Windows では shell script を spawn できない)
+    const [command, commandArgs] = /\.[cm]?js$/.test(this.ffmpegPath)
+      ? [process.execPath, [this.ffmpegPath, ...args]]
+      : [this.ffmpegPath, args];
+    const child = spawn(command, commandArgs, { stdio, windowsHide: true });
     this.child = child;
 
     child.stderr?.setEncoding('utf8');

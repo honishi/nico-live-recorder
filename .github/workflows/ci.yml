@@ -7,7 +7,12 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 配布は macOS と Windows 向けなので、テストは Windows でも回す (mac は Release で通る)
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     env:
       # 型チェックとテストに Electron 本体は不要なので、バイナリのダウンロードを省く
       ELECTRON_SKIP_BINARY_DOWNLOAD: 1
