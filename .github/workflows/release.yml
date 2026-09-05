@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # タグを作らず、同じ署名・公証・成果物検証を手動で確認できるようにする。
+  workflow_dispatch:
 
 jobs:
   package:
@@ -15,11 +17,9 @@ jobs:
           - os: windows-latest
             args: --win --x64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     permissions:
       contents: write
-    env:
-      # 署名用の証明書は CI に無いので、electron-builder の自動検出を止める
-      CSC_IDENTITY_AUTO_DISCOVERY: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -30,9 +30,51 @@ jobs:
       - uses: ./.github/actions/build-ffmpeg
       - run: npm test
       - run: npm run build
-      - run: npx electron-builder ${{ matrix.args }} --publish never
-      - run: npm run ffmpeg:verify-artifacts
+      # 本家の macOS 配布だけに認証情報を渡す。不足時は未署名のまま配布しない。
+      - name: Sign and notarize macOS
+        if: runner.os == 'macOS' && github.repository == 'honishi/nico-live-recorder'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required secret: $name"
+              exit 1
+            fi
+          done
+          npx electron-builder --mac --arm64 --publish never -c.forceCodeSigning=true
+      - name: Verify notarized macOS artifacts
+        if: runner.os == 'macOS' && github.repository == 'honishi/nico-live-recorder'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run ffmpeg:verify-artifacts -- --require-notarization
+      - name: Package without signing (Windows / forks)
+        if: runner.os != 'macOS' || github.repository != 'honishi/nico-live-recorder'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npx electron-builder ${{ matrix.args }} --publish never
+      - name: Verify unsigned artifacts
+        if: runner.os != 'macOS' || github.repository != 'honishi/nico-live-recorder'
+        run: npm run ffmpeg:verify-artifacts
+      - name: Upload validation artifacts
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages-${{ runner.os }}
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
       - name: Upload to the GitHub release
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
           draft: true

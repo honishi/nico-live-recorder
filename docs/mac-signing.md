@@ -3,12 +3,23 @@
 issue #22。GitHub Releases で配布する DMG / ZIP 向けの Developer ID 署名を使います。
 Bundle ID は `com.honishi.nico-live-recorder`、表示名は `NicoLiveRecorder` です。
 
-## 現在の対応範囲
+## リリース CI
 
-ローカルの Developer ID Application 証明書で、Electron 本体・補助プロセス・同梱 FFmpeg / ffprobe を署名する設定があります。
-electron-builder の公証連携も有効ですが、認証情報がない場合は公証をスキップします。
-Release の CI に Secrets を渡す処理と、公証済み成果物の検証は次の工程で追加します。
-現時点のタグビルドは引き続き未署名です。
+本家リポジトリの Release ワークフローでは、macOS のビルドステップにだけ署名・公証用の Secrets を渡します。
+認証情報の不足、署名失敗、公証失敗、成果物検証の失敗はエラーにし、未署名のままリリースに添付しません。
+Windows と fork の Release、および通常の PR / main の CI は署名なしでパッケージを検証します。
+各 OS のジョブの上限は60分です。
+
+`v*` タグの push では、検証に通った DMG / ZIP / NSIS を下書きリリースに添付します。
+`workflow_dispatch` による手動実行では同じビルド・検証を行い、成果物を Actions の artifact に7日間保存します。手動実行では GitHub Release を作成しません。
+Actions の「Release」→「Run workflow」で対象ブランチを選ぶか、次のコマンドで実行できます。
+
+```bash
+gh workflow run release.yml --ref <検証するブランチ>
+```
+
+初めて手動実行を導入するときは、ワークフローの登録状況によって既定ブランチへの反映が必要です。
+ローカル実行では electron-builder が認証情報なしの公証をスキップするため、署名済みというだけで配布可能とは扱わないでください。
 
 ## 署名の順序
 
@@ -69,7 +80,28 @@ npm run ffmpeg:verify -- \
 
 証明書のない通常の CI / fork では署名をスキップします。手元で未署名パッケージを検証する場合は、署名用の `CSC_*` 認証情報を設定せず、`CSC_IDENTITY_AUTO_DISCOVERY=false` を指定します。
 
-## ローカル検証記録 (2026-09-06)
+## 配布成果物の検証
+
+本家の macOS Release は `APPLE_TEAM_ID` を渡して以下を実行します。
+
+```bash
+npm run ffmpeg:verify-artifacts -- --require-notarization
+```
+
+DMG と ZIP の両方を一時領域に展開し、`scripts/mac/verify.mjs` で次を検証します。
+
+- アプリ全体と FFmpeg / ffprobe の署名が破損していないこと。
+- Developer ID Application の署名で、指定した Team ID と一致し、Hardened Runtime とタイムスタンプがあること。
+- アプリの Bundle ID が `com.honishi.nico-live-recorder` であること。
+- `xcrun stapler validate` で、アプリに公証チケットが添付されていること。
+- `spctl` が `accepted` / `source=Notarized Developer ID` を返すこと。
+- 従来の FFmpeg の全ファイルのハッシュ・ライセンス・資料・多重化検証に通ること。
+
+署名・公証する対象は `.app` とその中のコードです。DMG と ZIP は、公証チケットを添付した `.app` を格納します。
+公開前には、配布ファイルをブラウザからダウンロードした別の Mac でも起動と録画を確認します。
+初回の「インターネットからダウンロードしたアプリを開きますか」という通常の確認は、公証済みでも表示される場合があります。
+
+## ローカル署名の検証記録 (2026-09-06)
 
 macOS arm64 / Electron 44.0.0 / electron-builder 26.15.3 で確認しました。
 

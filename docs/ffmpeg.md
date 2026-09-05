@@ -79,6 +79,8 @@ PR の CI とタグの Release の両方で、macOS arm64 と Windows x64 それ
 
 Release の説明には FFmpeg のライセンスと同梱ソースの所在を載せます。`npm run ffmpeg:verify-artifacts` で配布用 DMG / ZIP / NSIS インストーラを一時領域へ展開し、同じ検証を再実行します (Windows は 7-Zip が必要です)。Release はこれも成功してから下書きに添付します。下書き公開前に両 OS の成功を確認してください。古い `ffmpeg-static` 入り成果物を同じリリースに残さないでください。将来別サイトで配布するときも、配布ページに FFmpeg とライセンス・ソースの所在を表示します。
 
+本家の macOS Release では `--require-notarization` を付け、展開したアプリと FFmpeg / ffprobe の署名、公証チケット、Gatekeeper の受け入れ判定も必須にします。検証する署名元は `APPLE_TEAM_ID` で指定します。通常の CI / fork はこのオプションを付けず、未署名で従来の FFmpeg 検証を行います。
+
 バージョン更新時は公式アーカイブとハッシュを確認して固定値を更新し、許諾文、configure、外部ランタイム、両 OS のパッケージと実放送録画を再確認します。ソースを改変する場合は改変内容と日付を明示し、その変更を含む完全な対応ソースとビルドスクリプトを配布する必要があります。
 
 ## 参考
