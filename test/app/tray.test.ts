@@ -119,18 +119,27 @@ describe('AppTray', () => {
 });
 
 describe('resources/tray', () => {
-  it('3 状態 x 白黒 x 1x/@2x の 12 枚が 16px と 32px で揃っている', () => {
+  it('3 状態 x 白黒 x 1x/@1.25x/@1.5x/@2x の 24 枚が 16 / 20 / 24 / 32px で揃っている', () => {
     const files = fs
       .readdirSync(iconDir)
       .filter((f) => f.endsWith('.png'))
       .sort();
+    // 倍率ごとの接尾辞と期待する px。nativeImage が拾える接尾辞 (@1.25x など) に合わせる
+    const scales: Array<[string, number]> = [
+      ['', 16],
+      ['@1.25x', 20],
+      ['@1.5x', 24],
+      ['@2x', 32],
+    ];
     const expected = ['Idle', 'Recording', 'Offline']
       .flatMap((state) => ['Template', 'White'].map((variant) => `tray${state}${variant}`))
-      .flatMap((name) => [`${name}.png`, `${name}@2x.png`])
+      .flatMap((name) => scales.map(([suffix]) => `${name}${suffix}.png`))
       .sort();
     expect(files).toEqual(expected);
     for (const file of files) {
-      const size = file.endsWith('@2x.png') ? 32 : 16;
+      const [, size] = scales.find(
+        ([suffix]) => file.endsWith(`${suffix}.png`) && (suffix !== '' || !file.includes('@')),
+      )!;
       expect(pngSize(path.join(iconDir, file)), file).toEqual({ width: size, height: size });
     }
   });

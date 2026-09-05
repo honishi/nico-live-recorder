@@ -1,7 +1,7 @@
 /*
  * build/icon.icns と build/icon.ico を、サイズ別に描き分けた build/icons/*.png から組み立てる。
  * 1024px の 1 枚から縮小すると 16 / 32 / 64px で括弧が潰れるため、electron-builder の自動変換に任せない。
- * macOS 専用 (iconutil と sips を使う)。生成物はリポジトリに含めるので、アイコンを更新したときだけ実行する。
+ * macOS 専用 (iconutil を使う)。生成物はリポジトリに含めるので、アイコンを更新したときだけ実行する。
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -29,21 +29,11 @@ function buildIcns() {
   return out;
 }
 
-// ico に入れるサイズ。24 / 48px は納品にないので、同じチューニング帯の 32 / 64px から縮小する
-const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
-const ICO_SOURCE_FOR_MISSING = { 24: 32, 48: 64 };
+// ico に入れるサイズ。すべて描き分けた PNG をそのまま使う (20 / 40px は Windows の 125% 表示用)
+const ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 
 function icoLayer(size) {
-  const file = winPng(size);
-  if (fs.existsSync(file)) {
-    return fs.readFileSync(file);
-  }
-  const out = path.join(tmp, `win-${size}.png`);
-  const source = winPng(ICO_SOURCE_FOR_MISSING[size]);
-  execFileSync('sips', ['-z', String(size), String(size), source, '--out', out], {
-    stdio: 'ignore',
-  });
-  return fs.readFileSync(out);
+  return fs.readFileSync(winPng(size));
 }
 
 // ico: PNG をそのまま格納する形式 (Windows Vista 以降) で、ヘッダとディレクトリを手で書く
@@ -74,7 +64,7 @@ function buildIco() {
 }
 
 if (process.platform !== 'darwin') {
-  console.error('このスクリプトは macOS 専用です (iconutil と sips を使います)');
+  console.error('このスクリプトは macOS 専用です (iconutil を使います)');
   process.exit(1);
 }
 try {

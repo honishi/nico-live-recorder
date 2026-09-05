@@ -22,7 +22,8 @@ const ICON_BASENAMES: Record<TrayState, string> = {
 
 /**
  * トレイ (macOS ではメニューバー) の常駐アイコンとメニュー。
- * 画像は 16px (@2x で 32px) の単色 PNG を iconDir (resources/tray/) から読む
+ * 画像は 16px の単色 PNG を iconDir (resources/tray/) から読む。
+ * @1.25x / @1.5x / @2x (20 / 24 / 32px) は nativeImage が同じ場所から自動で拾い、表示倍率に合わせて使い分ける
  */
 export class AppTray {
   private readonly tray: Tray;
@@ -64,7 +65,7 @@ export class AppTray {
   /**
    * 状態に合う画像を返す。一度読んだものは使い回す。
    * macOS は黒のテンプレート画像を渡し、メニューバーの明暗に合わせた反転は OS に任せる。
-   * Windows はテーマに合わせて白 / 黒を選ぶ。@2x は nativeImage が同じ場所から自動で拾う
+   * Windows はテーマに合わせて白 / 黒を選ぶ。@1.25x / @1.5x / @2x は nativeImage が同じ場所から自動で拾う
    */
   private icon(state: TrayState): NativeImage {
     const isMac = process.platform === 'darwin';

@@ -70,7 +70,7 @@ src/main/app/                 Electron 側: 設定、ログイン、録画マネ
 src/renderer/                 React の設定ウィンドウ
 src/shared/                   main と renderer で共有する型・定数・整形
 resources/proto/              NDGR の protobuf 定義
-resources/tray/               トレイアイコン (16px と @2x。黒 = macOS のテンプレート / Windows の明テーマ、白 = Windows の暗テーマ)
+resources/tray/               トレイアイコン (16px と @1.25x / @1.5x / @2x。黒 = macOS のテンプレート / Windows の明テーマ、白 = Windows の暗テーマ)
 build/                        アプリアイコン (icns / ico と、その元になるサイズ別 PNG) と macOS の entitlements
 test/                         src/main/ を鏡写しにしたテスト。偽サーバーは test/helpers/
 ```
@@ -108,7 +108,7 @@ FFmpeg は公式ソースから LGPL-2.1-or-later の構成でビルドし、完
 
 ### アプリアイコン
 
-アプリアイコンは `build/icons/` のサイズ別 PNG、トレイアイコンは `resources/tray/` の PNG が元データです。出荷用の `build/icon.icns` と `build/icon.ico` は、1024px の 1 枚から縮小すると 16 / 32 / 64px で括弧が潰れるため、サイズ別に描き分けた `build/icons/*.png` から `npm run icons:build` (macOS 専用。`iconutil` と `sips` を使う) で組み立て、生成物ごとリポジトリに含めます。アイコンを更新したときだけ実行してください。開発起動でも Dock / タスクバーに同じアイコンを出します。
+アプリアイコンは `build/icons/` のサイズ別 PNG、トレイアイコンは `resources/tray/` の PNG が元データです。出荷用の `build/icon.icns` と `build/icon.ico` は、1024px の 1 枚から縮小すると 16 / 32 / 64px で括弧が潰れるため、サイズ別に描き分けた `build/icons/*.png` から `npm run icons:build` (macOS 専用。`iconutil` を使う) で組み立て、生成物ごとリポジトリに含めます。アイコンを更新したときだけ実行してください。開発起動でも Dock / タスクバーに同じアイコンを出します。
 
 ## ライセンス
 
