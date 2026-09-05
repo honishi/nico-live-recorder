@@ -218,6 +218,9 @@ export class HlsHttpError extends Error {
   }
 }
 
+/** 認証更新で取得元が変わったら、旧 playlist 由来の URL を捨てて取り直す */
+class HlsSourceChangedError extends Error {}
+
 export type TrackStopReason = 'endlist' | 'stopped' | 'aborted' | 'idle';
 
 export interface TrackResult {
@@ -314,8 +317,8 @@ export class HlsTrackDownloader {
       }
     };
 
-    try {
-      while (true) {
+    while (true) {
+      try {
         if (signal?.aborted) {
           result.reason = 'aborted';
           break;
@@ -346,12 +349,12 @@ export class HlsTrackDownloader {
             break;
           }
           if (segment.mapUri && segment.mapUri !== sentMapUri) {
-            await write(await this.fetchWithRetry(segment.mapUri, signal));
+            await write(await this.fetchWithRetry(segment.mapUri, signal, playlistUrl));
             sentMapUri = segment.mapUri;
           }
           let data: Buffer;
           try {
-            data = await this.fetchWithRetry(segment.uri, signal);
+            data = await this.fetchWithRetry(segment.uri, signal, playlistUrl);
           } catch (error) {
             if (error instanceof HlsHttpError && error.status === 404) {
               this.logger.warn(`${this.label}: segment ${segment.seq} expired, skipping`);
@@ -361,7 +364,7 @@ export class HlsTrackDownloader {
             throw error;
           }
           if (segment.key) {
-            data = await this.decrypt(data, segment, signal);
+            data = await this.decrypt(data, segment, signal, playlistUrl);
           }
           await write(data);
           result.segments += 1;
@@ -389,13 +392,21 @@ export class HlsTrackDownloader {
         // 取り直す。セグメントの取得にかかった時間はその中に含める
         const minIntervalMs = playlist.targetDuration * (changed ? 1000 : 500);
         await this.delay(Math.max(0, fetchStartedAt + minIntervalMs - Date.now()), signal);
+      } catch (error) {
+        if (signal?.aborted) {
+          result.reason = 'aborted';
+          break;
+        }
+        if (error instanceof HlsSourceChangedError) {
+          // 保存済みの seq は維持する。URL 更新だけが続く場合も idle の上限で戻す
+          if (Date.now() - lastProgressAt > this.idleTimeoutMs) {
+            result.reason = 'idle';
+            break;
+          }
+          continue;
+        }
+        throw error;
       }
-    } catch (error) {
-      if (signal?.aborted) {
-        result.reason = 'aborted';
-        return result;
-      }
-      throw error;
     }
     this.logger.info(
       `${this.label}: finished reason=${result.reason} segments=${result.segments} bytes=${result.bytes}`,
@@ -403,7 +414,12 @@ export class HlsTrackDownloader {
     return result;
   }
 
-  private async decrypt(data: Buffer, segment: HlsSegment, signal?: AbortSignal): Promise<Buffer> {
+  private async decrypt(
+    data: Buffer,
+    segment: HlsSegment,
+    signal: AbortSignal | undefined,
+    sourceUrl: string,
+  ): Promise<Buffer> {
     const key = segment.key;
     if (!key || !key.uri) {
       return data;
@@ -413,7 +429,7 @@ export class HlsTrackDownloader {
     }
     let keyBytes = this.keyCache.get(key.uri);
     if (!keyBytes) {
-      keyBytes = await this.fetchWithRetry(key.uri, signal);
+      keyBytes = await this.fetchWithRetry(key.uri, signal, sourceUrl);
       if (keyBytes.length !== 16) {
         throw new Error(`${this.label}: invalid key length ${keyBytes.length}`);
       }
@@ -429,14 +445,24 @@ export class HlsTrackDownloader {
     return Buffer.concat([decipher.update(data), decipher.final()]);
   }
 
-  private async fetchWithRetry(url: string, signal?: AbortSignal): Promise<Buffer> {
+  private async fetchWithRetry(
+    url: string,
+    signal?: AbortSignal,
+    sourceUrl = this.playlistUrl,
+  ): Promise<Buffer> {
     let forbiddenHandled = false;
     for (let attempt = 1; ; attempt += 1) {
+      if (sourceUrl !== this.playlistUrl) {
+        throw new HlsSourceChangedError();
+      }
       try {
         return await this.fetchOnce(url, signal);
       } catch (error) {
         if (signal?.aborted) {
           throw error;
+        }
+        if (sourceUrl !== this.playlistUrl) {
+          throw new HlsSourceChangedError();
         }
         if (error instanceof HlsForbiddenError && this.onForbidden && !forbiddenHandled) {
           this.logger.warn(`${this.label}: 403 for ${url}, refreshing stream credentials`);
