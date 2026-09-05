@@ -100,20 +100,29 @@ describe('AppLogger', () => {
   test('ファイルが上限を超えたら書き込み中でも .1 に退避して続ける', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const logger = new AppLogger(dir, 'info', 200);
-    for (let i = 0; i < 10; i += 1) {
-      logger.info(`[rec] line ${i} ${'x'.repeat(40)}`);
-      // 退避はストリームを閉じてから行うので、1 行ごとに待つ
-      await new Promise((resolve) => setTimeout(resolve, 5));
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        logger.info(`[rec] line ${i} ${'x'.repeat(40)}`);
+        // 3 行で上限 200 バイトを超える。退避された内容を確認してから次を書く
+        if (i % 3 === 2) {
+          await vi.waitFor(() => {
+            const rotated = fs.readFileSync(path.join(dir, 'app.log.1'), 'utf8');
+            expect(rotated.match(/line \d/g)).toEqual([
+              `line ${i - 2}`,
+              `line ${i - 1}`,
+              `line ${i}`,
+            ]);
+          });
+        }
+      }
+    } finally {
+      await logger.close();
     }
-    await logger.close();
 
-    // 上限 200 バイトなので途中で何度か退避され、最後の分だけが app.log に残る
-    const rotated = fs.readFileSync(path.join(dir, 'app.log.1'), 'utf8');
+    // 3 回の退避後、最後の 1 行だけが新しい app.log に残る
     const current = fs.readFileSync(path.join(dir, 'app.log'), 'utf8');
-    expect(current).toContain('line 9');
-    expect(current).not.toContain('line 0');
-    expect(rotated).not.toContain('line 9');
-    expect(Buffer.byteLength(current)).toBeLessThan(400);
+    expect(current.match(/line \d/g)).toEqual(['line 9']);
+    expect(Buffer.byteLength(current)).toBeLessThan(200);
   });
 
   test('退避の途中に書かれた行も失わない', async () => {
