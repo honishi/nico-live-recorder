@@ -89,6 +89,8 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
   /** 2 つのバッファを出た順に合流させるための連番 (同じミリ秒でも順序が崩れない) */
   private seq = 0;
   private stream?: fs.WriteStream;
+  /** 保存エラー後はファイルだけを止め、標準出力と画面のログは続ける */
+  private fileFailed = false;
   private fileBytes = 0;
   /** 退避 (古いストリームを閉じて .1 に移し、開き直す) の進行中。その間の行は queued に溜める */
   private rotating?: Promise<void>;
@@ -181,6 +183,9 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
 
   /** ファイルに追記し、上限を超えたら .1 に退避して新しいファイルに切り替える */
   private writeFile(line: string): void {
+    if (this.fileFailed) {
+      return;
+    }
     if (this.rotating) {
       this.queued.push(line);
       return;
@@ -204,6 +209,9 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
   /** 今のファイルを閉じて .1 に移し、新しいファイルを開いて退避中に溜めた行を書く */
   private async rotate(): Promise<void> {
     await this.closeStream();
+    if (this.fileFailed) {
+      return;
+    }
     try {
       fs.renameSync(this.filePath, `${this.filePath}.1`);
     } catch {
@@ -224,7 +232,18 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
     } catch {
       this.fileBytes = 0;
     }
-    this.stream = fs.createWriteStream(this.filePath, { flags: 'a', encoding: 'utf8' });
+    const stream = fs.createWriteStream(this.filePath, { flags: 'a', encoding: 'utf8' });
+    this.stream = stream;
+    // close の最中だけでなく、open 直後や通常の追記中のエラーも必ず受け止める
+    stream.on('error', (error) => {
+      if (this.fileFailed) {
+        return;
+      }
+      this.fileFailed = true;
+      this.stream = undefined;
+      this.queued.length = 0;
+      this.warn(`ログファイルへの出力を停止しました: ${error.message} (画面のログは継続します)`);
+    });
   }
 
   private closeStream(): Promise<void> {

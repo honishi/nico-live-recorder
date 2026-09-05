@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import { AppLogger, categorize } from '../../src/main/app/app-logger';
 
 describe('categorize', () => {
@@ -43,6 +44,38 @@ describe('AppLogger', () => {
     expect(file).not.toContain('quiet');
     expect(stdout).toHaveBeenCalledTimes(1);
   });
+
+  test.each(['open', 'write'])(
+    '%s の保存失敗を警告し、その後も画面と標準出力のログを続ける',
+    async (stage) => {
+      const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      if (stage === 'open') {
+        fs.mkdirSync(path.join(dir, 'app.log'));
+      } else {
+        const stream = new Writable({
+          write(_chunk, _encoding, callback) {
+            queueMicrotask(() => callback(new Error('disk full')));
+          },
+        });
+        vi.spyOn(fs, 'createWriteStream').mockReturnValue(stream as fs.WriteStream);
+      }
+      const logger = new AppLogger(dir);
+      const warned = new Promise<void>((resolve) => {
+        logger.on('entry', (entry) => {
+          if (entry.level === 'warn') {
+            resolve();
+          }
+        });
+      });
+      logger.info('before failure');
+      await warned;
+      logger.info('after failure');
+      await logger.close();
+      expect(logger.recent().filter((entry) => entry.level === 'warn')).toHaveLength(1);
+      expect(logger.recent().at(-1)?.message).toBe('after failure');
+      expect(stdout).toHaveBeenCalledTimes(3);
+    },
+  );
 
   test('debug が大量に出ても info 以上は押し出されず、debug 抜きでも取り出せる', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
