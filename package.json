@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "ニコニコ生放送の放送開始を検知して自動録画するデスクトップアプリ",
   "main": "./out/main/index.js",
-  "author": "Hiroyuki Onishi",
+  "author": "honishi",
   "license": "MIT",
   "private": true,
   "scripts": {
