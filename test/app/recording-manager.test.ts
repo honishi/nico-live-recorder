@@ -478,6 +478,17 @@ describe('RecordingManager', () => {
     expect(history.get('lv1')?.error).toBeUndefined();
   });
 
+  test('放送中に視聴 URL が取れなければ、完了ではなく理由付きの失敗にする', async () => {
+    await manager.startRecording('lv1', 'manual');
+    const first = await nextRecordCall(0);
+    getProgramInfo.mockResolvedValue(info({ webSocketUrl: undefined }));
+    first.resolve(finishedResult(first, { video: { reason: 'disconnected', video: {} } }));
+    await skipRetryWait(5_500);
+    await waitFor(() => history.get('lv1')?.state === 'failed');
+    expect(history.get('lv1')?.error).toContain('視聴接続情報');
+    expect(recordCalls).toHaveLength(1);
+  });
+
   test('同じ番組の開始要求が重なっても録画は 1 本だけ', async () => {
     let release: ((value: NicoLiveProgramInfo) => void) | undefined;
     getProgramInfo.mockImplementationOnce(

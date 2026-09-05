@@ -701,10 +701,17 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               this.logger.warn(`[rec] could not check ${programId} before resuming`, error);
               return undefined;
             });
-          if (latest && (latest.status === NicoLiveProgramStatus.ended || !latest.webSocketUrl)) {
+          if (latest?.status === NicoLiveProgramStatus.ended) {
             this.logger.info(`[rec] ${programId} has ended, not resuming`);
             outcome = 'done';
             info.error = undefined;
+            break;
+          }
+          // URL の欠落は放送終了ではなく、今のログイン状態では視聴できない可能性を示す
+          if (latest && !latest.webSocketUrl) {
+            outcome = 'failed';
+            info.error =
+              '視聴接続情報を取得できませんでした。ログイン状態と視聴権限を確認してください';
             break;
           }
           if (latest) {
