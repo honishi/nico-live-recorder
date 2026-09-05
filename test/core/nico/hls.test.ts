@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import {
   cookieHeaderFor,
   HlsTrackDownloader,
@@ -221,6 +221,42 @@ https://cdn.test/seg/11.cmfv
     expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
     // 鍵は 1 回だけ取得する
     expect(calls.filter((u) => u.endsWith('.key'))).toHaveLength(1);
+  });
+
+  test('ffmpeg への書き込みが詰まっていても abort で終了する', async () => {
+    const { fetchImpl, calls } = makeFetch(new Set());
+    let onWrite: () => void = () => {};
+    const writing = new Promise<void>((resolve) => {
+      onWrite = resolve;
+    });
+    let completeWrite: (() => void) | undefined;
+    const sink = new Writable({
+      highWaterMark: 1,
+      write(_chunk, _encoding, callback) {
+        // 書き込み完了を保留し、実時間の待機なしで backpressure を再現する
+        completeWrite = () => callback();
+        onWrite();
+      },
+    });
+    const controller = new AbortController();
+    const downloader = new HlsTrackDownloader({
+      label: 'video',
+      playlistUrl: 'https://cdn.test/media.m3u8',
+      cookies: () => [],
+      fetchImpl,
+    });
+    const task = downloader.run(sink, controller.signal);
+    try {
+      await writing;
+      controller.abort();
+      expect(await task).toMatchObject({ reason: 'aborted', segments: 0 });
+      expect(calls).toEqual(['https://cdn.test/media.m3u8', 'https://cdn.test/init.cmfv']);
+      expect(sink.listenerCount('drain')).toBe(0);
+      expect(sink.listenerCount('error')).toBe(0);
+    } finally {
+      completeWrite?.();
+      sink.destroy();
+    }
   });
 
   test('403 のときは onForbidden で認証情報を更新してから再試行する', async () => {

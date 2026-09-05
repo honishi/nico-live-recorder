@@ -309,7 +309,8 @@ export class HlsTrackDownloader {
         throw new Error(`${this.label}: sink is closed`);
       }
       if (!sink.write(chunk)) {
-        await once(sink, 'drain');
+        // ffmpeg が読み進めなくても、停止要求で待機を解除して録画の後始末へ進む
+        await once(sink, 'drain', { signal });
       }
     };
 
