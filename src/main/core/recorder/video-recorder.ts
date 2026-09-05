@@ -1,4 +1,5 @@
 import { NicoClient } from '../../vendor/nico-client/NicoClient';
+import { abortableDelay } from '../../vendor/nico-client/abortableDelay';
 import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
 import { NicoLiveProgramStatus, type NicoLiveProgramInfo } from '../../vendor/nico-client/types';
 import { silentLogger, type Logger } from '../logger';
@@ -53,10 +54,6 @@ function cookieHeaderOf(cookies?: Record<string, string>): string | undefined {
   return entries.length > 0 ? entries.map(([k, v]) => `${k}=${v}`).join('; ') : undefined;
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * 1 番組の映像を録画する。
  * 視聴 WebSocket → HLS (映像・音声別 playlist) → 復号 → ffmpeg で MPEG-TS に多重化。
@@ -68,6 +65,9 @@ export async function recordVideo(
   const logger = options.logger ?? silentLogger;
   const userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
   const startedAt = new Date();
+  // 片方のトラックが止まったら、他方の取得・認証更新も中断して再開判断へ戻す
+  const tracksController = new AbortController();
+  const tracksSignal = AbortSignal.any([tracksController.signal, ...(signal ? [signal] : [])]);
 
   const client = new NicoClient(options.programId, { cookies: options.cookies, userAgent });
   const info = options.programInfo ?? (await client.getProgramInfo(signal));
@@ -89,7 +89,7 @@ export async function recordVideo(
   const fetchMultivariant = async (stream: HlsStreamInfo) => {
     const response = await fetch(stream.uri, {
       headers: { 'user-agent': userAgent, cookie: cookieHeaderFor(stream.cookies, stream.uri) },
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.any([AbortSignal.timeout(20_000), tracksSignal]),
     });
     if (!response.ok) {
       throw new Error(`multivariant playlist の取得に失敗しました (HTTP ${response.status})`);
@@ -101,11 +101,20 @@ export async function recordVideo(
   let muxer: FfmpegMuxer | undefined;
   let stableTimer: NodeJS.Timeout | undefined;
   let devFailTimer: NodeJS.Timeout | undefined;
-  let onAbort: (() => void) | undefined;
+  let reason: VideoStopReason = 'endlist';
+  let finishing = false;
+  // 初期化や認証更新の途中でも視聴セッションを閉じ、待機中の処理にも停止を伝える
+  const onAbort = (): void => {
+    finishing = true;
+    reason = 'aborted';
+    session.close();
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
   session.on('error', (error) => logger.warn('watch session error', error));
   try {
-    await session.connect();
-    const initialStream = await session.waitForStream();
+    signal?.throwIfAborted();
+    await session.connect(signal);
+    const initialStream = await session.waitForStream(false, signal);
     const tracks = await fetchMultivariant(initialStream);
     logger.info(
       `recording ${options.programId}: ${tracks.video.resolution ?? '?'} ${tracks.video.bandwidth}bps` +
@@ -130,7 +139,7 @@ export async function recordVideo(
       }
       if (!refreshing) {
         refreshing = (async () => {
-          const stream = await session.refreshStream();
+          const stream = await session.refreshStream(tracksSignal);
           const next = await fetchMultivariant(stream);
           videoTrack.updateSource(next.video.uri);
           if (next.audioUri) {
@@ -159,8 +168,6 @@ export async function recordVideo(
       ? new HlsTrackDownloader({ ...trackOptions, label: 'audio', playlistUrl: tracks.audioUri })
       : undefined;
 
-    let reason: VideoStopReason = 'endlist';
-    let finishing = false;
     const stopTracks = (why: VideoStopReason): void => {
       if (finishing) {
         return;
@@ -188,13 +195,13 @@ export async function recordVideo(
     const reconnect = async (): Promise<void> => {
       while (reconnectAttempts < WS_RECONNECT_ATTEMPTS) {
         reconnectAttempts += 1;
-        await delay(reconnectBaseDelayMs * reconnectAttempts);
+        await abortableDelay(reconnectBaseDelayMs * reconnectAttempts, signal);
         if (finishing || signal?.aborted) {
           return;
         }
         try {
-          await session.connect();
-          await session.waitForStream(true);
+          await session.connect(signal);
+          await session.waitForStream(true, signal);
           logger.info(
             `watch session reconnected (attempt ${reconnectAttempts}/${WS_RECONNECT_ATTEMPTS})`,
           );
@@ -212,7 +219,7 @@ export async function recordVideo(
       }
       // 上限に達したら、番組が終わったかを確認して止める
       try {
-        const latest = await client.getProgramInfo();
+        const latest = await client.getProgramInfo(signal);
         stopTracks(
           latest.status === NicoLiveProgramStatus.ended ? 'program-ended' : 'disconnected',
         );
@@ -233,12 +240,6 @@ export async function recordVideo(
       });
     });
 
-    onAbort = (): void => {
-      finishing = true;
-      reason = 'aborted';
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-
     // 開発用: 再開処理を確かめるために、指定 ms 後に映像を失敗させる
     const devFailAfterMs = Number(process.env['NLR_DEV_FAIL_VIDEO_AFTER_MS'] ?? 0);
     let devFailure: Error | undefined;
@@ -253,10 +254,36 @@ export async function recordVideo(
           }, devFailAfterMs)
         : undefined;
 
-    const [videoResult, audioResult] = await Promise.all([
-      videoTrack.run(pipes.video, signal),
-      audioTrack && pipes.audio ? audioTrack.run(pipes.audio, signal) : Promise.resolve(undefined),
+    const runTrack = async (track: HlsTrackDownloader, pipe: Writable): Promise<TrackResult> => {
+      try {
+        const result = await track.run(pipe, tracksSignal);
+        if (result.reason === 'idle') {
+          finishing = true;
+          reason = 'idle';
+          tracksController.abort();
+        }
+        return result;
+      } catch (error) {
+        tracksController.abort();
+        throw error;
+      } finally {
+        // 終わった入力はすぐ閉じる。ffmpeg がもう一方の入力を読み進められるようにする
+        pipe.end();
+      }
+    };
+    const [videoOutcome, audioOutcome] = await Promise.allSettled([
+      runTrack(videoTrack, pipes.video),
+      audioTrack && pipes.audio ? runTrack(audioTrack, pipes.audio) : Promise.resolve(undefined),
     ]);
+    // 両方の後始末を待ってから失敗を伝え、古い取得処理を次の録画に持ち越さない
+    if (videoOutcome.status === 'rejected') {
+      throw videoOutcome.reason;
+    }
+    if (audioOutcome.status === 'rejected') {
+      throw audioOutcome.reason;
+    }
+    const videoResult = videoOutcome.value;
+    const audioResult = audioOutcome.value;
     if (devFailure) {
       throw devFailure;
     }
@@ -285,9 +312,8 @@ export async function recordVideo(
     muxer?.kill();
     throw error;
   } finally {
-    if (onAbort) {
-      signal?.removeEventListener('abort', onAbort);
-    }
+    tracksController.abort();
+    signal?.removeEventListener('abort', onAbort);
     if (stableTimer) {
       clearTimeout(stableTimer);
     }
@@ -297,3 +323,4 @@ export async function recordVideo(
     session.close();
   }
 }
+import type { Writable } from 'node:stream';

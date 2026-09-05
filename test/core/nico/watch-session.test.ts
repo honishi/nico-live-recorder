@@ -31,6 +31,49 @@ describe('WatchSession', () => {
     session?.close();
     session = undefined;
     await server.close();
+    vi.useRealTimers();
+  });
+
+  test.each(['timeout', 'abort'] as const)('open 前の無応答を %s で中断する', async (cause) => {
+    const stalled = http.createServer();
+    stalled.listen(0, '127.0.0.1');
+    await once(stalled, 'listening');
+    const upgraded = new Promise<Duplex>((resolve) =>
+      stalled.once('upgrade', (_req, socket) => resolve(socket)),
+    );
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    session = new WatchSession(`ws://127.0.0.1:${(stalled.address() as AddressInfo).port}`, {
+      connectTimeoutMs: 1000,
+    });
+    const task = session.connect(controller.signal);
+    const check = expect(task).rejects.toThrow(cause === 'timeout' ? /1000ms/ : /abort/i);
+    const socket = await upgraded;
+    try {
+      if (cause === 'timeout') {
+        await vi.advanceTimersByTimeAsync(1000);
+      } else {
+        controller.abort();
+      }
+      await check;
+    } finally {
+      socket.destroy();
+      await new Promise<void>((resolve) => stalled.close(() => resolve()));
+    }
+  });
+
+  test('stream 待ちと認証更新中も abort で中断できる', async () => {
+    await server.close();
+    server = await startFakeWatchServer({ streamData: () => ({ protocol: 'other' }) });
+    session = new WatchSession(server.url);
+    await session.connect();
+    const controller = new AbortController();
+    const waiting = session.waitForStream(false, controller.signal);
+    const check = expect(waiting).rejects.toThrow(/abort/i);
+    controller.abort();
+    await check;
+    await expect(session.refreshStream(controller.signal)).rejects.toThrow(/abort/i);
+    expect(server.connections).toHaveLength(1);
   });
 
   test('startWatching を送り、stream メッセージを HLS 配信情報として受け取る', async () => {
@@ -143,3 +186,7 @@ describe('WatchSession', () => {
     await expect(session.waitForStream()).rejects.toThrow(/100ms/);
   });
 });
+import http from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import type { Duplex } from 'node:stream';

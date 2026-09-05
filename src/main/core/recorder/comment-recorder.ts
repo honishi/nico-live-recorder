@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import { once } from 'node:events';
 import { finished } from 'node:stream/promises';
+import { abortableDelay } from '../../vendor/nico-client/abortableDelay';
+import { HttpError } from '../../vendor/nico-client/internal/httpClient';
+import { isRetryableNicoError } from '../../vendor/nico-client/retryPolicy';
 import { NicoClient } from '../../vendor/nico-client/NicoClient';
 import type { NicoComment, NicoLiveProgramInfo } from '../../vendor/nico-client/types';
 import { silentLogger, type Logger } from '../logger';
@@ -45,18 +48,6 @@ export async function recordComments(
 ): Promise<CommentRecordResult> {
   const logger = options.logger ?? silentLogger;
   const startedAt = new Date();
-  const client = new NicoClient(options.programId, {
-    cookies: options.cookies,
-    userAgent: options.userAgent,
-    logger: {
-      // セグメントや chunk ごとの verbose は録画中に 1 時間で数千行になるので落とす (debug に流さない)
-      verbose: () => {},
-      debug: (...args) => logger.debug(...args),
-      info: (...args) => logger.info(...args),
-      warn: (...args) => logger.warn(...args),
-      error: (...args) => logger.error(...args),
-    },
-  });
 
   // ファイルの失敗は受信待ちの間にも起きるので、生成直後から監視し、コメント取得も止める
   const outputFailure = new AbortController();
@@ -71,21 +62,66 @@ export async function recordComments(
   });
   let count = 0;
   try {
-    const stream = client.streamComments(
-      {
-        signal: receiveSignal,
-        startPosition: 'now',
-        prefetchBackward: options.prefetchBackward ?? true,
-      },
-      options.programInfo,
-    );
-    for await (const comment of stream) {
-      const line = JSON.stringify(toCommentRecord(comment)) + '\n';
-      if (!file.write(line)) {
-        await once(file, 'drain');
+    // 再接続時に過去分を取り直しても、同じコメントはこの録画内で二重に保存しない
+    const seen = new Set<string>();
+    let programInfo = options.programInfo;
+    let failures = 0;
+    while (!receiveSignal.aborted) {
+      const client = new NicoClient(options.programId, {
+        cookies: options.cookies,
+        userAgent: options.userAgent,
+        logger: {
+          // セグメントや chunk ごとの verbose は録画中に 1 時間で数千行になるので落とす (debug に流さない)
+          verbose: () => {},
+          debug: (...args) => logger.debug(...args),
+          info: (...args) => logger.info(...args),
+          warn: (...args) => logger.warn(...args),
+          error: (...args) => logger.error(...args),
+        },
+      });
+      try {
+        const stream = client.streamComments(
+          {
+            signal: receiveSignal,
+            startPosition: 'now',
+            prefetchBackward: options.prefetchBackward ?? true,
+          },
+          programInfo,
+        );
+        for await (const comment of stream) {
+          const key = comment.id || `${comment.liveId}:${comment.no}`;
+          if (seen.has(key)) {
+            continue;
+          }
+          const line = JSON.stringify(toCommentRecord(comment)) + '\n';
+          if (!file.write(line)) {
+            await once(file, 'drain', { signal: receiveSignal });
+          }
+          seen.add(key);
+          failures = 0;
+          count += 1;
+          options.onComment?.(comment, count);
+        }
+        // 正常に抜けた場合は番組終了または停止。再接続はしない
+        break;
+      } catch (error) {
+        if (fileError) {
+          throw fileError;
+        }
+        if (receiveSignal.aborted) {
+          break;
+        }
+        // View/Segment URI の失効も、番組情報と viewUri を取得し直して回復を試みる
+        const expired = error instanceof HttpError && [403, 404].includes(error.statusCode);
+        if ((!isRetryableNicoError(error) && !expired) || failures >= 5) {
+          throw error;
+        }
+        failures += 1;
+        const delayMs = Math.min(30_000, 1000 * 2 ** (failures - 1));
+        logger.debug(`comments: reconnecting in ${delayMs}ms (attempt ${failures}/5)`, error);
+        programInfo = undefined;
+        await abortableDelay(delayMs, receiveSignal);
       }
-      count += 1;
-      options.onComment?.(comment, count);
     }
   } catch (error) {
     // 受信側が AbortError を返しても、原因となった保存エラーを呼び出し側に伝える

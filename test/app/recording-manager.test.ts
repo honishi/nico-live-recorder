@@ -478,6 +478,17 @@ describe('RecordingManager', () => {
     expect(history.get('lv1')?.error).toBeUndefined();
   });
 
+  test('放送中に視聴 URL が取れなければ、完了ではなく理由付きの失敗にする', async () => {
+    await manager.startRecording('lv1', 'manual');
+    const first = await nextRecordCall(0);
+    getProgramInfo.mockResolvedValue(info({ webSocketUrl: undefined }));
+    first.resolve(finishedResult(first, { video: { reason: 'disconnected', video: {} } }));
+    await skipRetryWait(5_500);
+    await waitFor(() => history.get('lv1')?.state === 'failed');
+    expect(history.get('lv1')?.error).toContain('視聴接続情報');
+    expect(recordCalls).toHaveLength(1);
+  });
+
   test('同じ番組の開始要求が重なっても録画は 1 本だけ', async () => {
     let release: ((value: NicoLiveProgramInfo) => void) | undefined;
     getProgramInfo.mockImplementationOnce(
@@ -636,6 +647,38 @@ describe('RecordingManager', () => {
     await waitFor(() => !manager.detectorRunning);
     expect(detectors.at(-1)?.running).toBe(false);
     expect(pushManagers.at(-1)?.started).toBe(false);
+  });
+
+  test('無関係な設定で検知器を作り直さず、再接続後も手動停止を保持する', async () => {
+    settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    await manager.start();
+    await manager.startRecording('lv1', 'manual');
+    const first = await nextRecordCall(0);
+    manager.stopRecording('lv1');
+    first.resolve(finishedResult(first, { video: { reason: 'aborted', video: {} } }));
+    await waitFor(() => !manager.hasActiveRecordings());
+    const detectorCount = detectors.length;
+    settings.update({ notificationsEnabled: false, outputDir: path.join(dir, 'other') });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectors).toHaveLength(detectorCount);
+
+    await manager.restartDetection();
+    const detector = detectors.at(-1)!;
+    expect(detector.seen.has('lv1')).toBe(true);
+    detector.emit('program', {
+      programId: 'lv1',
+      providerId: '100',
+      source: 'poll',
+      alreadyOnAir: true,
+      detectedAt: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(recordCalls).toHaveLength(1);
+
+    // 自動再開は抑えるが、明示的に手動録画を始め直すことはできる
+    await manager.startRecording('lv1', 'manual');
+    await nextRecordCall(1);
+    expect(recordCalls).toHaveLength(2);
   });
 
   test('検知の再起動中に来た設定変更は、終わってから最新の設定で反映する', async () => {

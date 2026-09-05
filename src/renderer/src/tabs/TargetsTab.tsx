@@ -161,7 +161,7 @@ export function TargetsTab({ targets, loggedIn, onRemoved }: Props): ReactElemen
 
       {notFollowing && (
         <p className="note" style={{ margin: 0 }}>
-          未フォローの配信者には push 通知が届きません。ポーリングのみで検知します。
+          未フォローの配信者は自動検知されません。ニコニコでフォローするか、手動録画を使ってください。
         </p>
       )}
       {unknownCount > 0 && (

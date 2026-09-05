@@ -278,6 +278,42 @@ https://cdn.test/seg/11.cmfv
     expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
   });
 
+  test.each(['media.m3u8', 'seg/10.cmfv', 'keys/k.key'])(
+    '%s の 403 で URL が変わったら新しい playlist から取り直す',
+    async (denied) => {
+      const calls: string[] = [];
+      const fetchImpl: typeof fetch = async (input) => {
+        const url = input instanceof Request ? input.url : String(input);
+        calls.push(url);
+        if (url === `https://cdn.test/${denied}`) {
+          return new Response('expired', { status: 403 });
+        }
+        let body = responses[url.replace('new.test', 'cdn.test')];
+        if (url === 'https://new.test/media.m3u8') {
+          // init は共通のまま、セグメントと鍵の配信先だけが変わる
+          body = playlist
+            .replaceAll('cdn.test/seg/', 'new.test/seg/')
+            .replaceAll('cdn.test/keys/', 'new.test/keys/');
+        }
+        return body === undefined ? new Response('missing', { status: 404 }) : new Response(body);
+      };
+      const { sink, output } = collect();
+      const downloader: HlsTrackDownloader = new HlsTrackDownloader({
+        label: 'video',
+        playlistUrl: 'https://cdn.test/media.m3u8',
+        cookies: () => [],
+        fetchImpl,
+        onForbidden: async (): Promise<void> =>
+          downloader.updateSource('https://new.test/media.m3u8'),
+      });
+      const result = await downloader.run(sink);
+      expect(result).toMatchObject({ reason: 'endlist', segments: 2 });
+      expect(calls.filter((url) => url === `https://cdn.test/${denied}`)).toHaveLength(1);
+      expect(calls).toContain('https://new.test/media.m3u8');
+      expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
+    },
+  );
+
   test('playlist の取り直しは取得開始から target duration (変化なしなら半分) 以上あける', async () => {
     vi.useFakeTimers();
     try {

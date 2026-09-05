@@ -84,8 +84,8 @@ export function RecordingsTab(props: Props): ReactElement {
                   </span>
                   <span className="ellipsis">{r.providerName ?? r.providerId ?? '—'}</span>
                   <span className="cell-title">
-                    <span className="ellipsis">{r.state === 'failed' ? r.error : r.title}</span>
-                    {r.state === 'failed' && (
+                    <span className="ellipsis">{r.error ?? r.title}</span>
+                    {(r.state === 'failed' || r.error) && (
                       <button className="link" onClick={() => props.onShowLog(r.programId)}>
                         詳細
                       </button>
@@ -110,6 +110,9 @@ export function RecordingsTab(props: Props): ReactElement {
 export function StateBadge({ recording }: { recording: RecordingInfo }): ReactElement {
   if (recording.state === 'failed') {
     return <span className="badge badge-warn">中断</span>;
+  }
+  if (recording.error) {
+    return <span className="badge badge-warn">一部失敗</span>;
   }
   if (recording.videoExists === false) {
     return <span className="badge badge-neutral">削除済</span>;

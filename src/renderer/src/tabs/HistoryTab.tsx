@@ -140,9 +140,9 @@ export function HistoryTab({ historyVersion, now, onShowFile, onShowLog }: Props
                   <span className="ellipsis">{r.providerName ?? r.providerId ?? '—'}</span>
                   <span className="cell-title">
                     <span className="ellipsis" title={r.title}>
-                      {r.state === 'failed' ? (r.error ?? r.title) : r.title}
+                      {r.error ?? r.title}
                     </span>
-                    {r.state === 'failed' && (
+                    {(r.state === 'failed' || r.error) && (
                       <button className="link" onClick={() => onShowLog(r.programId)}>
                         詳細
                       </button>
