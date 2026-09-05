@@ -18,7 +18,6 @@ Actions の「Release」→「Run workflow」で対象ブランチを選ぶか�
 gh workflow run release.yml --ref <検証するブランチ>
 ```
 
-初めて手動実行を導入するときは、ワークフローの登録状況によって既定ブランチへの反映が必要です。
 ローカル実行では electron-builder が認証情報なしの公証をスキップするため、署名済みというだけで配布可能とは扱わないでください。
 
 ## 署名の順序
@@ -113,6 +112,18 @@ macOS arm64 / Electron 44.0.0 / electron-builder 26.15.3 で確認しました�
 - format / lint / typecheck と全192テストが成功。追加した署名処理の7テストは OS の署名ツールと外部通信をモック。
 
 公証・DMG / ZIP からの Gatekeeper 検証・Windows CI はこの工程では未実行です。
+
+## CI の公証と成果物の検証記録 (2026-09-06)
+
+コミット `83fe3a5` の作業ブランチに対して、[Release を手動実行](https://github.com/honishi/nico-live-recorder/actions/runs/33984115059)しました。
+
+- macOS 15 のランナーで GitHub Secrets から署名用証明書を読み込み、署名・Apple の公証・チケット添付が成功。
+- DMG と ZIP の両方を展開し、署名元・Bundle ID・Hardened Runtime・タイムスタンプ・公証チケット・Gatekeeper 判定と FFmpeg の検証が成功。
+- Actions からダウンロードした両成果物を手元の macOS 26 でも展開し、同じ署名・公証・FFmpeg 検証が成功。
+- Windows のランナーでもテスト、未署名 NSIS の作成、展開後の FFmpeg 検証と artifact 保存が成功。
+- ローカルの format / lint / typecheck、全203テスト、actionlint が成功。
+
+タグと GitHub Release は作成していません。別の Mac でブラウザからダウンロードして起動する確認と、正式なタグからのリリースは後続の工程です。
 
 ## 参考
 
