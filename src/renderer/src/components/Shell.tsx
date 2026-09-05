@@ -88,7 +88,7 @@ interface TabBarProps {
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'recordings', label: '録画' },
-  { id: 'targets', label: '対象' },
+  { id: 'targets', label: '録画対象' },
   { id: 'history', label: '履歴' },
   { id: 'log', label: 'ログ' },
 ];
