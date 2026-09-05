@@ -9,6 +9,7 @@ import { FilePushStateStore } from './app/push-state-store';
 import { RecordingManager } from './app/recording-manager';
 import { SettingsStore } from './app/settings-store';
 import { AppTray, type TrayState } from './app/tray';
+import { UpdateChecker } from './app/update-checker';
 import { resolveFfmpegPath } from './core/nico/ffmpeg';
 import { configureProtoRootDir } from './vendor/nico-client/internal/protoLoader';
 
@@ -181,8 +182,10 @@ async function bootstrap(): Promise<void> {
     mainWindow.focus();
   };
 
+  const updates = new UpdateChecker(app.getVersion(), logger);
   const ctx = {
     version: app.getVersion(),
+    updates,
     settings,
     auth,
     manager,
@@ -232,16 +235,22 @@ async function bootstrap(): Promise<void> {
   auth.on('change', scheduleBroadcast);
   settings.on('change', scheduleBroadcast);
   logger.on('entry', scheduleBroadcast);
+  updates.on('change', scheduleBroadcast);
 
   app.on('second-instance', showMainWindow);
   app.on('activate', showMainWindow);
 
   mainWindow = createMainWindow(settings);
+  // パッケージ版だけ自動確認する。開発時も設定画面からの手動確認は可能
+  if (app.isPackaged) {
+    updates.start();
+  }
   await manager.start();
   scheduleBroadcast();
 
   app.on('before-quit', () => {
     quitting = true;
+    updates.stop();
   });
   // 終了時は録画の停止処理 (ffmpeg の書き終わり、履歴の確定) とログの書き出しを待ってから抜ける
   let quitHandled = false;

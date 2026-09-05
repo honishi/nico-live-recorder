@@ -10,10 +10,13 @@ import {
   type TargetAddResult,
   type TargetUser,
   type UiState,
+  type UpdateStatus,
 } from '../shared/types';
 
 const api = {
   getStatus: (): Promise<AppStatus> => ipcRenderer.invoke(IPC.getStatus),
+  checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.checkForUpdates),
+  openReleasePage: (): Promise<void> => ipcRenderer.invoke(IPC.openReleasePage),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
   updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.updateSettings, patch),

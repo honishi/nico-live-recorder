@@ -179,7 +179,8 @@ select {
   color: var(--text-3);
 }
 
-.alert-banner {
+.alert-banner,
+.update-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -190,6 +191,14 @@ select {
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   font-size: var(--fs-body);
+  flex-shrink: 0;
+}
+
+.update-banner {
+  background: var(--accent-weak);
+}
+
+.update-banner .btn {
   flex-shrink: 0;
 }
 

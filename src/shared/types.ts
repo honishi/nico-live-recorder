@@ -117,8 +117,18 @@ export interface HistoryPage {
   providers: string[];
 }
 
+/** 更新確認だけを行う。取得できなかった状態と「更新なし」を区別する */
+export interface UpdateStatus {
+  checking: boolean;
+  result: 'unchecked' | 'current' | 'available' | 'unavailable' | 'error' | 'rate-limited';
+  release?: { version: string; url: string };
+  checkedAt?: string;
+  nextCheckAt: number;
+}
+
 export interface AppStatus {
   version: string;
+  update: UpdateStatus;
   auth: AuthStatus;
   push: PushStatusInfo;
   detectorRunning: boolean;
@@ -177,6 +187,8 @@ export const IPC = {
   openOutputDir: 'app:openOutputDir',
   openPath: 'app:openPath',
   openLogFile: 'app:openLogFile',
+  checkForUpdates: 'app:checkForUpdates',
+  openReleasePage: 'app:openReleasePage',
   reconnectPush: 'app:reconnectPush',
   addTarget: 'targets:add',
   restoreTarget: 'targets:restore',

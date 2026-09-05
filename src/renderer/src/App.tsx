@@ -157,6 +157,21 @@ export function App(): ReactElement {
         enabledTargets={settings.targets.filter((t) => t.enabled).length}
       />
       <AlertBanner alert={status.alerts[0]} onAction={onAlertAction} />
+      {status.update.release && (
+        <div className="update-banner" role="status">
+          <span>新しいバージョン v{status.update.release.version} があります</span>
+          <button
+            className="btn btn-secondary sm"
+            onClick={() => {
+              void window.api.openReleasePage().catch(() => {
+                showToast('リリースページを開けませんでした');
+              });
+            }}
+          >
+            リリースページを開く
+          </button>
+        </div>
+      )}
       <TabBar active={tab} badges={badges} onSelect={selectTab} />
       <main className={`content ${tab === 'settings' ? 'scroll' : ''}`}>
         {tab === 'recordings' && (
@@ -204,6 +219,7 @@ export function App(): ReactElement {
           <SettingsTab
             settings={settings}
             status={status}
+            now={now}
             loginPending={loginPending}
             onLogin={() => void login()}
             onLogout={() => void window.api.logout()}

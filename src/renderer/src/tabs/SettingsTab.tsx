@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import type { AppSettings, AppStatus } from '@shared/types';
+import type { AppSettings, AppStatus, UpdateStatus } from '@shared/types';
 import { formatBytes } from '@shared/format';
 import { MIN_FREE_SPACE_GB, POLL_INTERVAL_SEC } from '@shared/limits';
 import { formatClock } from '../lib/format';
@@ -7,6 +7,7 @@ import { formatClock } from '../lib/format';
 interface Props {
   settings: AppSettings;
   status: AppStatus;
+  now: number;
   loginPending: boolean;
   onLogin: () => void;
   onLogout: () => void;
@@ -16,12 +17,36 @@ interface Props {
 export function SettingsTab({
   settings,
   status,
+  now,
   loginPending,
   onLogin,
   onLogout,
   onChooseOutputDir,
 }: Props): ReactElement {
   const [choosing, setChoosing] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState(false);
+
+  // IPC 自体の失敗も設定画面内に収め、他の操作を妨げない
+  const checkForUpdates = async (): Promise<void> => {
+    setChecking(true);
+    setCheckError(false);
+    try {
+      await window.api.checkForUpdates();
+    } catch {
+      setCheckError(true);
+    } finally {
+      setChecking(false);
+    }
+  };
+  const updateBusy = checking || status.update.checking;
+  const updateCoolingDown = now < status.update.nextCheckAt;
+  let updateText = updateMessage(status.update);
+  if (updateBusy) {
+    updateText = '更新を確認中…';
+  } else if (checkError) {
+    updateText = '更新を確認できませんでした';
+  }
 
   const toggle = (key: 'recordOngoingOnStart' | 'pushEnabled' | 'notificationsEnabled'): void => {
     void window.api.updateSettings({ [key]: !settings[key] });
@@ -201,8 +226,43 @@ export function SettingsTab({
               ログを開く
             </button>
           </div>
+          <div className="divider" />
+          <div className="account-row">
+            <span role="status">
+              {updateText}
+              <div className="sub">
+                {updateCoolingDown
+                  ? `${Math.ceil((status.update.nextCheckAt - now) / 1000)} 秒後に再確認できます`
+                  : '新しいバージョンがあれば、リリースページからダウンロードできます'}
+              </div>
+            </span>
+            <button
+              className="btn btn-secondary sm"
+              disabled={updateBusy || updateCoolingDown}
+              onClick={() => void checkForUpdates()}
+            >
+              更新を確認
+            </button>
+          </div>
         </div>
       </section>
     </div>
   );
+}
+
+function updateMessage(update: UpdateStatus): string {
+  switch (update.result) {
+    case 'unchecked':
+      return '更新はまだ確認していません';
+    case 'current':
+      return '新しいバージョンはありません';
+    case 'available':
+      return `新しいバージョン v${update.release?.version ?? ''} があります`;
+    case 'unavailable':
+      return '公開された更新情報を取得できません';
+    case 'rate-limited':
+      return '更新の確認が一時的に制限されています';
+    case 'error':
+      return '更新を確認できませんでした。時間をおいて再確認してください';
+  }
 }

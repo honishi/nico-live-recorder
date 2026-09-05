@@ -24,6 +24,7 @@
     "cheerio": "^1.0.0",
     "ffmpeg-static": "^5.3.0",
     "protobufjs": "^8.8.0",
+    "semver": "^7.8.5",
     "set-cookie-parser": "^3.1.2",
     "undici": "^8.10.0",
     "ws": "^8.18.0"
@@ -33,6 +34,7 @@
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "@types/semver": "^7.8.0",
     "@types/set-cookie-parser": "^2.4.10",
     "@types/ws": "^8.5.0",
     "@vitejs/plugin-react": "^5.0.0",

@@ -17,10 +17,12 @@ import { FollowStatusCache } from './follow-status';
 import { parseUserIdInput, resolveUserNickname } from './nico-user';
 import type { RecordingManager } from './recording-manager';
 import type { SettingsStore } from './settings-store';
+import type { UpdateChecker } from './update-checker';
 import { MIN_FREE_SPACE_GB, POLL_INTERVAL_SEC, type NumberRange } from '../../shared/limits';
 
 export interface IpcContext {
   version: string;
+  updates: UpdateChecker;
   settings: SettingsStore;
   auth: NicoAuth;
   manager: RecordingManager;
@@ -34,6 +36,7 @@ export async function buildStatus(ctx: IpcContext): Promise<AppStatus> {
   const loggedIn = await ctx.auth.isLoggedIn();
   return {
     version: ctx.version,
+    update: ctx.updates.getStatus(),
     auth: { loggedIn },
     push: ctx.manager.getPushStatus(),
     detectorRunning: ctx.manager.detectorRunning,
@@ -89,6 +92,13 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   ctx.auth.on('change', () => followStatus.clear());
 
   ipcMain.handle(IPC.getStatus, () => buildStatus(ctx));
+  ipcMain.handle(IPC.checkForUpdates, () => ctx.updates.check());
+  ipcMain.handle(IPC.openReleasePage, async () => {
+    const release = ctx.updates.getStatus().release;
+    if (release) {
+      await shell.openExternal(release.url);
+    }
+  });
   ipcMain.handle(IPC.getSettings, () => ctx.settings.get());
   ipcMain.handle(IPC.updateSettings, (_event, patch: Partial<AppSettings>) =>
     ctx.settings.update(pickSettingsPatch(patch ?? {})),
