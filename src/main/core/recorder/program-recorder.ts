@@ -53,17 +53,21 @@ export function sanitizeFileName(name: string, maxLength = 60): string {
 }
 
 function formatTimestamp(date: Date): string {
+  // 端末のタイムゾーンに依存せず、日本時間の日時を組み立てる
+  const jst = new Date(date.getTime() + 9 * 60 * 60 * 1000);
   const pad = (n: number): string => String(n).padStart(2, '0');
   return (
-    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
-    `_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+    `${jst.getUTCFullYear()}${pad(jst.getUTCMonth() + 1)}${pad(jst.getUTCDate())}` +
+    `_${pad(jst.getUTCHours())}${pad(jst.getUTCMinutes())}${pad(jst.getUTCSeconds())}`
   );
 }
 
 export function buildBaseName(info: NicoLiveProgramInfo, attempt = 1): string {
   const begin = info.beginTime > 0 ? new Date(info.beginTime * 1000) : new Date();
+  // タイトルの長さや変更に左右されないよう、配信者 ID と番組 ID で識別する
+  const providerId = sanitizeFileName(info.providerId?.trim() || 'unknown');
   const suffix = attempt > 1 ? `_${attempt}` : '';
-  return `${formatTimestamp(begin)}_${info.nicoliveProgramId}_${sanitizeFileName(info.title)}${suffix}`;
+  return `${formatTimestamp(begin)}_${providerId}_${info.nicoliveProgramId}${suffix}`;
 }
 
 /**

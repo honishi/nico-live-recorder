@@ -41,6 +41,7 @@ describe('sanitizeFileName', () => {
 describe('buildBaseName', () => {
   const info = (patch: Partial<NicoLiveProgramInfo>): NicoLiveProgramInfo => ({
     nicoliveProgramId: 'lv123',
+    providerId: '12345678',
     title: 'タイトル',
     description: '',
     status: NicoLiveProgramStatus.onAir,
@@ -56,19 +57,52 @@ describe('buildBaseName', () => {
     ...patch,
   });
 
-  test('放送開始時刻 (ローカル時刻)、番組 ID、正規化したタイトルを _ で繋ぐ', () => {
-    const beginTime = Math.floor(new Date(2026, 8, 3, 1, 42, 49).getTime() / 1000);
-    expect(buildBaseName(info({ beginTime, title: 'a/b' }))).toBe('20260903_014249_lv123_a_b');
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  test.each(['UTC', 'America/Los_Angeles', 'Asia/Tokyo'])(
+    '端末のタイムゾーンが %s でも日本時間の放送開始日時、配信者 ID、番組 ID を使う',
+    (timezone) => {
+      vi.stubEnv('TZ', timezone);
+      const beginTime = Date.parse('2026-09-05T18:24:03Z') / 1000;
+      expect(buildBaseName(info({ beginTime }))).toBe('20260906_032403_12345678_lv123');
+    },
+  );
+
+  test('長いタイトルやタイトルの変更はファイル名に影響しない', () => {
+    const beginTime = Date.parse('2026-09-06T03:24:03+09:00') / 1000;
+    expect(buildBaseName(info({ beginTime, title: '長いタイトル🆗/\\'.repeat(100) }))).toBe(
+      '20260906_032403_12345678_lv123',
+    );
+    expect(buildBaseName(info({ beginTime, title: '変更後' }))).toBe(
+      '20260906_032403_12345678_lv123',
+    );
+  });
+
+  test.each([undefined, '', '   '])('配信者 ID が %j なら unknown を使う', (providerId) => {
+    const beginTime = Date.parse('2026-09-06T03:24:03+09:00') / 1000;
+    expect(buildBaseName(info({ beginTime, providerId }))).toBe('20260906_032403_unknown_lv123');
+  });
+
+  test('配信者 ID にファイル名として使えない文字があっても安全に保存する', () => {
+    const beginTime = Date.parse('2026-09-06T03:24:03+09:00') / 1000;
+    expect(buildBaseName(info({ beginTime, providerId: '../123:45' }))).toBe(
+      '20260906_032403_.._123_45_lv123',
+    );
   });
 
   test('2 回目以降は末尾に連番を付ける', () => {
-    const beginTime = Math.floor(new Date(2026, 8, 3, 1, 42, 49).getTime() / 1000);
-    expect(buildBaseName(info({ beginTime, title: 'x' }), 1)).toBe('20260903_014249_lv123_x');
-    expect(buildBaseName(info({ beginTime, title: 'x' }), 2)).toBe('20260903_014249_lv123_x_2');
+    const beginTime = Date.parse('2026-09-06T03:24:03+09:00') / 1000;
+    expect(buildBaseName(info({ beginTime }), 1)).toBe('20260906_032403_12345678_lv123');
+    expect(buildBaseName(info({ beginTime }), 2)).toBe('20260906_032403_12345678_lv123_2');
   });
 
   test('開始時刻が無ければ現在時刻を使う', () => {
-    expect(buildBaseName(info({ beginTime: 0 }))).toMatch(/^\d{8}_\d{6}_lv123_タイトル$/);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-12-31T15:00:00Z'));
+    expect(buildBaseName(info({ beginTime: 0 }))).toBe('20270101_000000_12345678_lv123');
   });
 });
 
@@ -78,11 +112,12 @@ describe('resolveAvailableAttempt', () => {
     try {
       const program = {
         nicoliveProgramId: 'lv123',
+        providerId: '12345678',
         title: 'x',
         description: '',
         status: NicoLiveProgramStatus.onAir,
         openTime: 0,
-        beginTime: Math.floor(new Date(2026, 8, 3, 1, 0, 0).getTime() / 1000),
+        beginTime: Date.parse('2026-09-06T03:24:03+09:00') / 1000,
         vposBaseTime: 0,
         endTime: 0,
         scheduledEndTime: 0,
@@ -94,6 +129,8 @@ describe('resolveAvailableAttempt', () => {
       expect(await resolveAvailableAttempt(dir, program, 1)).toBe(1);
       fs.writeFileSync(path.join(dir, `${buildBaseName(program, 1)}.ts`), '');
       fs.writeFileSync(path.join(dir, `${buildBaseName(program, 2)}.ts`), '');
+      // 放送中にタイトルが変わっても、既存の録画を上書きしない
+      program.title = '変更後のタイトル';
       expect(await resolveAvailableAttempt(dir, program, 1)).toBe(3);
       expect(await resolveAvailableAttempt(dir, program, 2)).toBe(3);
       expect(await resolveAvailableAttempt(dir, program, 5)).toBe(5);
