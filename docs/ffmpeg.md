@@ -77,7 +77,7 @@ macOS の署名時は、FFmpeg / ffprobe の署名を検証してから、パッ
 
 PR の CI とタグの Release の両方で、macOS arm64 と Windows x64 それぞれのネイティブランナーを使用します。Windows の実行結果は Windows ジョブで確認し、macOS の成功だけで検証済みとは扱いません。
 
-Release の説明には FFmpeg のライセンスと同梱ソースの所在を載せます。`npm run ffmpeg:verify-artifacts` で配布用 DMG / ZIP / NSIS インストーラを一時領域へ展開し、同じ検証を再実行します (Windows は 7-Zip が必要です)。Release はこれも成功してから下書きに添付します。下書き公開前に両 OS の成功を確認してください。古い `ffmpeg-static` 入り成果物を同じリリースに残さないでください。将来別サイトで配布するときも、配布ページに FFmpeg とライセンス・ソースの所在を表示します。
+FFmpeg のライセンスと同梱ソースの所在は README とアプリ内で案内し、Release の説明には定型文を追加しません。`npm run ffmpeg:verify-artifacts` で配布用 DMG / ZIP / NSIS インストーラを一時領域へ展開し、同じ検証を再実行します (Windows は 7-Zip が必要です)。Release はこれも成功してから下書きに添付します。下書き公開前に両 OS の成功を確認してください。古い `ffmpeg-static` 入り成果物を同じリリースに残さないでください。将来別サイトで配布するときも、配布ページに FFmpeg とライセンス・ソースの所在を表示します。
 
 本家の macOS Release では `--require-notarization` を付け、展開したアプリと FFmpeg / ffprobe の署名、公証チケット、Gatekeeper の受け入れ判定も必須にします。検証する署名元は `APPLE_TEAM_ID` で指定します。通常の CI / fork はこのオプションを付けず、未署名で従来の FFmpeg 検証を行います。
 

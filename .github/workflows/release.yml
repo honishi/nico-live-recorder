@@ -78,11 +78,6 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           draft: true
-          body: |
-            このアプリは FFmpeg / ffprobe (LGPL-2.1-or-later) を含みます。
-            ライセンス本文、著作権表示、対応ソースとビルド手順は各アプリ内の
-            resources/ffmpeg (macOS は Contents/Resources/ffmpeg) に同梱しています。
-            設定の「FFmpeg のライセンス・ソース」から参照できます。
           files: |
             release/*.dmg
             release/*.zip
