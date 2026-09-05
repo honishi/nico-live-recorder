@@ -144,7 +144,7 @@ export class ProgramDetector extends EventEmitter<ProgramDetectorEvents> {
       const age = Date.now() - new Date(program.createdAt).getTime();
       if (Number.isFinite(age) && age > this.maxPushAgeMs) {
         this.logger.info(`detector: stale push for ${programId} (${Math.round(age / 1000)}s old)`);
-        this.markSeen(programId);
+        // 古いのは通知だけで、番組はまだ放送中かもしれない。ポーリングで拾えるよう既知にしない
         return;
       }
     }

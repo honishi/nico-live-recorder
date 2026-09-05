@@ -166,6 +166,31 @@ describe('ProgramDetector', () => {
     detector.stop();
   });
 
+  test('古い push を捨てても、まだ放送中の番組は次のポーリングで拾える', async () => {
+    fetchFollowing.mockResolvedValueOnce([]).mockResolvedValue([following('lv9', '100')]);
+    const push = new EventEmitter();
+    const { detector, detected } = createDetector(push);
+    detector.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    push.emit('program', {
+      programId: 'lv9',
+      createdAt: new Date(Date.now() - 11 * 60 * 1000).toISOString(),
+      receivedAt: new Date(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detected).toHaveLength(0);
+    expect(getProgramInfo).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(detected).toHaveLength(1);
+    expect(detected[0]).toMatchObject({ programId: 'lv9', source: 'poll', alreadyOnAir: false });
+    // ポーリングで検知した後は、通常どおり重複を防ぐ
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(detected).toHaveLength(1);
+    detector.stop();
+  });
+
   test('push で解決に失敗した番組は、後のポーリングで拾える', async () => {
     getProgramInfo.mockRejectedValue(new Error('network'));
     fetchFollowing.mockResolvedValueOnce([]).mockResolvedValueOnce([following('lv9', '100')]);
