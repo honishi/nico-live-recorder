@@ -6,6 +6,8 @@ import path from 'node:path';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { recordVideo } from '../../../src/main/core/recorder/video-recorder';
+import { WatchSession } from '../../../src/main/core/nico/watch-session';
+import { FfmpegMuxer } from '../../../src/main/core/nico/ffmpeg';
 import {
   NicoLiveProgramStatus,
   type NicoLiveProgramInfo,
@@ -206,8 +208,48 @@ describe('recordVideo', () => {
   afterEach(async () => {
     await watch.close();
     await hls.close();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     fs.rmSync(dir, { recursive: true, force: true });
     delete process.env['FAKE_FFMPEG_EXIT'];
+  });
+
+  test.each([
+    ['stream', 'no stream'],
+    ['playlist', 'HTTP 503'],
+    ['ffmpeg', 'cannot start ffmpeg'],
+  ])('%s の初期化に失敗しても視聴接続を閉じる', async (stage, message) => {
+    const close = vi.spyOn(WatchSession.prototype, 'close');
+    if (stage === 'stream') {
+      vi.spyOn(WatchSession.prototype, 'waitForStream').mockRejectedValue(new Error('no stream'));
+    } else if (stage === 'playlist') {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response('unavailable', { status: 503 })),
+      );
+    } else {
+      vi.spyOn(FfmpegMuxer.prototype, 'start').mockImplementation(() => {
+        throw new Error('cannot start ffmpeg');
+      });
+    }
+
+    await expect(
+      recordVideo({
+        programId: 'lv1',
+        outputPath: path.join(dir, 'out.ts'),
+        ffmpegPath,
+        programInfo: programInfo(watch.url),
+      }),
+    ).rejects.toThrow(message);
+
+    expect(close).toHaveBeenCalledTimes(1);
+    // クライアント側の close だけでなく、偽サーバー側でも切断の完了を確かめる
+    const socket = watch.connections[0].socket;
+    if (socket.readyState !== socket.CLOSED) {
+      await once(socket, 'close');
+    }
+    expect(socket.readyState).toBe(socket.CLOSED);
+    expect(fs.existsSync(path.join(dir, 'out.ts'))).toBe(false);
   });
 
   test('映像と音声を復号して ffmpeg に流し、ENDLIST で完了する', async () => {

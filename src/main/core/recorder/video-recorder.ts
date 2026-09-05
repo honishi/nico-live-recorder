@@ -97,156 +97,162 @@ export async function recordVideo(
     return selectBestVariant(parseMultivariantPlaylist(await response.text(), stream.uri));
   };
 
-  await session.connect();
-  const initialStream = await session.waitForStream();
-  const tracks = await fetchMultivariant(initialStream);
-  logger.info(
-    `recording ${options.programId}: ${tracks.video.resolution ?? '?'} ${tracks.video.bandwidth}bps` +
-      (tracks.audioUri ? ' + separate audio' : ' (muxed audio)'),
-  );
-
-  const muxer = new FfmpegMuxer({
-    outputPath: options.outputPath,
-    ffmpegPath: options.ffmpegPath,
-    separateAudio: Boolean(tracks.audioUri),
-    logger,
-  });
-  const pipes = muxer.start();
-
-  // 403 時の cookie 更新は single-flight にする (映像・音声から同時に呼ばれる)。
-  // 更新直後にもう一方のトラックが古い cookie で 403 になっても、張り直しは繰り返さない
-  let refreshing: Promise<void> | undefined;
-  let refreshedAt = 0;
-  const refreshCredentials = (): Promise<void> => {
-    if (!refreshing && Date.now() - refreshedAt < REFRESH_COOLDOWN_MS) {
-      return Promise.resolve();
-    }
-    if (!refreshing) {
-      refreshing = (async () => {
-        const stream = await session.refreshStream();
-        const next = await fetchMultivariant(stream);
-        videoTrack.updateSource(next.video.uri);
-        if (next.audioUri) {
-          audioTrack?.updateSource(next.audioUri);
-        }
-      })().finally(() => {
-        refreshing = undefined;
-        refreshedAt = Date.now();
-      });
-    }
-    return refreshing;
-  };
-
-  const trackOptions = {
-    cookies: () => session.latestStreamInfo?.cookies ?? initialStream.cookies,
-    userAgent,
-    logger,
-    onForbidden: refreshCredentials,
-  };
-  const videoTrack = new HlsTrackDownloader({
-    ...trackOptions,
-    label: 'video',
-    playlistUrl: tracks.video.uri,
-  });
-  const audioTrack = tracks.audioUri
-    ? new HlsTrackDownloader({ ...trackOptions, label: 'audio', playlistUrl: tracks.audioUri })
-    : undefined;
-
-  let reason: VideoStopReason = 'endlist';
-  let finishing = false;
-  const stopTracks = (why: VideoStopReason): void => {
-    if (finishing) {
-      return;
-    }
-    finishing = true;
-    reason = why;
-    // 番組終了後も playlist に残りのセグメントが載るので少し待ってから止める
-    setTimeout(() => {
-      videoTrack.requestStop();
-      audioTrack?.requestStop();
-    }, GRACE_AFTER_END_MS);
-  };
-
-  session.on('ended', () => stopTracks('program-ended'));
-  session.on('disconnect', (why) => {
-    logger.warn(`watch session disconnected by server: ${why}`);
-  });
-  session.on('error', (error) => logger.warn('watch session error', error));
-
-  // 再接続は録画全体で 1 つだけ動かし、試行回数も全体で数える。再接続したソケットがすぐ切れても
-  // 別のループを起こさない (障害中に接続が束になって増えるのを防ぐ)。
-  // 再接続後にしばらく安定して続いたときだけ回数を戻し、長い録画で散発的な切断に耐えられるようにする
-  const reconnectBaseDelayMs = options.reconnectBaseDelayMs ?? WS_RECONNECT_BASE_DELAY_MS;
-  let reconnectTask: Promise<void> | undefined;
-  let reconnectAttempts = 0;
+  // 接続開始から後始末の対象にする。初期化の途中で失敗した場合も、作成済みの資源を解放する
+  let muxer: FfmpegMuxer | undefined;
   let stableTimer: NodeJS.Timeout | undefined;
-  const reconnect = async (): Promise<void> => {
-    while (reconnectAttempts < WS_RECONNECT_ATTEMPTS) {
-      reconnectAttempts += 1;
-      await delay(reconnectBaseDelayMs * reconnectAttempts);
-      if (finishing || signal?.aborted) {
-        return;
-      }
-      try {
-        await session.connect();
-        await session.waitForStream(true);
-        logger.info(
-          `watch session reconnected (attempt ${reconnectAttempts}/${WS_RECONNECT_ATTEMPTS})`,
-        );
-        stableTimer = setTimeout(() => {
-          reconnectAttempts = 0;
-        }, WS_RECONNECT_STABLE_MS);
-        stableTimer.unref();
-        return;
-      } catch (error) {
-        logger.warn(
-          `watch session reconnect ${reconnectAttempts}/${WS_RECONNECT_ATTEMPTS} failed`,
-          error,
-        );
-      }
-    }
-    // 上限に達したら、番組が終わったかを確認して止める
-    try {
-      const latest = await client.getProgramInfo();
-      stopTracks(latest.status === NicoLiveProgramStatus.ended ? 'program-ended' : 'disconnected');
-    } catch {
-      stopTracks('disconnected');
-    }
-  };
-  session.on('close', ({ intentional }) => {
-    if (stableTimer) {
-      clearTimeout(stableTimer);
-      stableTimer = undefined;
-    }
-    if (intentional || finishing || signal?.aborted || reconnectTask) {
-      return;
-    }
-    reconnectTask = reconnect().finally(() => {
-      reconnectTask = undefined;
+  let devFailTimer: NodeJS.Timeout | undefined;
+  let onAbort: (() => void) | undefined;
+  session.on('error', (error) => logger.warn('watch session error', error));
+  try {
+    await session.connect();
+    const initialStream = await session.waitForStream();
+    const tracks = await fetchMultivariant(initialStream);
+    logger.info(
+      `recording ${options.programId}: ${tracks.video.resolution ?? '?'} ${tracks.video.bandwidth}bps` +
+        (tracks.audioUri ? ' + separate audio' : ' (muxed audio)'),
+    );
+
+    muxer = new FfmpegMuxer({
+      outputPath: options.outputPath,
+      ffmpegPath: options.ffmpegPath,
+      separateAudio: Boolean(tracks.audioUri),
+      logger,
     });
-  });
+    const pipes = muxer.start();
 
-  const onAbort = (): void => {
-    finishing = true;
-    reason = 'aborted';
-  };
-  signal?.addEventListener('abort', onAbort, { once: true });
-
-  // 開発用: 再開処理を確かめるために、指定 ms 後に映像を失敗させる
-  const devFailAfterMs = Number(process.env['NLR_DEV_FAIL_VIDEO_AFTER_MS'] ?? 0);
-  let devFailure: Error | undefined;
-  const devFailTimer =
-    devFailAfterMs > 0
-      ? setTimeout(() => {
-          if (!finishing) {
-            devFailure = new Error('dev: injected video failure');
-            videoTrack.requestStop();
-            audioTrack?.requestStop();
+    // 403 時の cookie 更新は single-flight にする (映像・音声から同時に呼ばれる)。
+    // 更新直後にもう一方のトラックが古い cookie で 403 になっても、張り直しは繰り返さない
+    let refreshing: Promise<void> | undefined;
+    let refreshedAt = 0;
+    const refreshCredentials = (): Promise<void> => {
+      if (!refreshing && Date.now() - refreshedAt < REFRESH_COOLDOWN_MS) {
+        return Promise.resolve();
+      }
+      if (!refreshing) {
+        refreshing = (async () => {
+          const stream = await session.refreshStream();
+          const next = await fetchMultivariant(stream);
+          videoTrack.updateSource(next.video.uri);
+          if (next.audioUri) {
+            audioTrack?.updateSource(next.audioUri);
           }
-        }, devFailAfterMs)
+        })().finally(() => {
+          refreshing = undefined;
+          refreshedAt = Date.now();
+        });
+      }
+      return refreshing;
+    };
+
+    const trackOptions = {
+      cookies: () => session.latestStreamInfo?.cookies ?? initialStream.cookies,
+      userAgent,
+      logger,
+      onForbidden: refreshCredentials,
+    };
+    const videoTrack = new HlsTrackDownloader({
+      ...trackOptions,
+      label: 'video',
+      playlistUrl: tracks.video.uri,
+    });
+    const audioTrack = tracks.audioUri
+      ? new HlsTrackDownloader({ ...trackOptions, label: 'audio', playlistUrl: tracks.audioUri })
       : undefined;
 
-  try {
+    let reason: VideoStopReason = 'endlist';
+    let finishing = false;
+    const stopTracks = (why: VideoStopReason): void => {
+      if (finishing) {
+        return;
+      }
+      finishing = true;
+      reason = why;
+      // 番組終了後も playlist に残りのセグメントが載るので少し待ってから止める
+      setTimeout(() => {
+        videoTrack.requestStop();
+        audioTrack?.requestStop();
+      }, GRACE_AFTER_END_MS);
+    };
+
+    session.on('ended', () => stopTracks('program-ended'));
+    session.on('disconnect', (why) => {
+      logger.warn(`watch session disconnected by server: ${why}`);
+    });
+
+    // 再接続は録画全体で 1 つだけ動かし、試行回数も全体で数える。再接続したソケットがすぐ切れても
+    // 別のループを起こさない (障害中に接続が束になって増えるのを防ぐ)。
+    // 再接続後にしばらく安定して続いたときだけ回数を戻し、長い録画で散発的な切断に耐えられるようにする
+    const reconnectBaseDelayMs = options.reconnectBaseDelayMs ?? WS_RECONNECT_BASE_DELAY_MS;
+    let reconnectTask: Promise<void> | undefined;
+    let reconnectAttempts = 0;
+    const reconnect = async (): Promise<void> => {
+      while (reconnectAttempts < WS_RECONNECT_ATTEMPTS) {
+        reconnectAttempts += 1;
+        await delay(reconnectBaseDelayMs * reconnectAttempts);
+        if (finishing || signal?.aborted) {
+          return;
+        }
+        try {
+          await session.connect();
+          await session.waitForStream(true);
+          logger.info(
+            `watch session reconnected (attempt ${reconnectAttempts}/${WS_RECONNECT_ATTEMPTS})`,
+          );
+          stableTimer = setTimeout(() => {
+            reconnectAttempts = 0;
+          }, WS_RECONNECT_STABLE_MS);
+          stableTimer.unref();
+          return;
+        } catch (error) {
+          logger.warn(
+            `watch session reconnect ${reconnectAttempts}/${WS_RECONNECT_ATTEMPTS} failed`,
+            error,
+          );
+        }
+      }
+      // 上限に達したら、番組が終わったかを確認して止める
+      try {
+        const latest = await client.getProgramInfo();
+        stopTracks(
+          latest.status === NicoLiveProgramStatus.ended ? 'program-ended' : 'disconnected',
+        );
+      } catch {
+        stopTracks('disconnected');
+      }
+    };
+    session.on('close', ({ intentional }) => {
+      if (stableTimer) {
+        clearTimeout(stableTimer);
+        stableTimer = undefined;
+      }
+      if (intentional || finishing || signal?.aborted || reconnectTask) {
+        return;
+      }
+      reconnectTask = reconnect().finally(() => {
+        reconnectTask = undefined;
+      });
+    });
+
+    onAbort = (): void => {
+      finishing = true;
+      reason = 'aborted';
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    // 開発用: 再開処理を確かめるために、指定 ms 後に映像を失敗させる
+    const devFailAfterMs = Number(process.env['NLR_DEV_FAIL_VIDEO_AFTER_MS'] ?? 0);
+    let devFailure: Error | undefined;
+    devFailTimer =
+      devFailAfterMs > 0
+        ? setTimeout(() => {
+            if (!finishing) {
+              devFailure = new Error('dev: injected video failure');
+              videoTrack.requestStop();
+              audioTrack?.requestStop();
+            }
+          }, devFailAfterMs)
+        : undefined;
+
     const [videoResult, audioResult] = await Promise.all([
       videoTrack.run(pipes.video, signal),
       audioTrack && pipes.audio ? audioTrack.run(pipes.audio, signal) : Promise.resolve(undefined),
@@ -276,10 +282,12 @@ export async function recordVideo(
       ffmpegExitCode: exit.exitCode,
     };
   } catch (error) {
-    muxer.kill();
+    muxer?.kill();
     throw error;
   } finally {
-    signal?.removeEventListener('abort', onAbort);
+    if (onAbort) {
+      signal?.removeEventListener('abort', onAbort);
+    }
     if (stableTimer) {
       clearTimeout(stableTimer);
     }
