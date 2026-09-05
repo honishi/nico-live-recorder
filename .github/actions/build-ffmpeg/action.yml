@@ -1,0 +1,25 @@
+name: Build redistributable FFmpeg
+description: Build pinned LGPL FFmpeg and bundle corresponding source and notices
+runs:
+  using: composite
+  steps:
+    - uses: msys2/setup-msys2@v2
+      if: runner.os == 'Windows'
+      with:
+        msystem: UCRT64
+        path-type: inherit
+        install: >-
+          make diffutils
+          mingw-w64-ucrt-x86_64-gcc
+          mingw-w64-ucrt-x86_64-winpthreads
+    - name: Build FFmpeg (Windows)
+      if: runner.os == 'Windows'
+      shell: msys2 {0}
+      run: npm run ffmpeg:build
+    - name: Build FFmpeg (macOS / Linux)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: npm run ffmpeg:build
+    - name: Verify FFmpeg bundle
+      shell: bash
+      run: npm run ffmpeg:verify

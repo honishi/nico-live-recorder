@@ -187,6 +187,7 @@ export const IPC = {
   openOutputDir: 'app:openOutputDir',
   openPath: 'app:openPath',
   openLogFile: 'app:openLogFile',
+  openFfmpegLicenses: 'app:openFfmpegLicenses',
   checkForUpdates: 'app:checkForUpdates',
   openReleasePage: 'app:openReleasePage',
   reconnectPush: 'app:reconnectPush',

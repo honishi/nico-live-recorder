@@ -145,7 +145,11 @@ async function bootstrap(): Promise<void> {
 
   let ffmpegPath: string | undefined;
   try {
-    ffmpegPath = resolveFfmpegPath();
+    ffmpegPath = resolveFfmpegPath(
+      app.isPackaged
+        ? path.join(process.resourcesPath, 'ffmpeg')
+        : path.join(app.getAppPath(), 'resources', 'ffmpeg', `${process.platform}-${process.arch}`),
+    );
     logger.info(`ffmpeg: ${ffmpegPath}`);
   } catch (error) {
     logger.error('ffmpeg not found', error);

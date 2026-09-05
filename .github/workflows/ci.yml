@@ -28,3 +28,28 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # タグを打つ前にも、配布対象上で実体のライセンスと多重化を検証する。
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            args: --mac --arm64
+          - os: windows-latest
+            args: --win --x64
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - uses: ./.github/actions/build-ffmpeg
+      - run: npm run build
+      # afterPack が app 内の FFmpeg、対応ソース、多重化を検証する。
+      - run: npx electron-builder ${{ matrix.args }} --dir --publish never

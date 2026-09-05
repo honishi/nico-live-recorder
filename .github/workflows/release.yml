@@ -10,10 +10,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            args: --mac
+          - os: macos-15
+            args: --mac --arm64
           - os: windows-latest
-            args: --win
+            args: --win --x64
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -26,15 +26,21 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
-      # ffmpeg-static はインストール時に実行環境向けのバイナリを取得するため、OS ごとに npm ci する
       - run: npm ci
+      - uses: ./.github/actions/build-ffmpeg
       - run: npm test
       - run: npm run build
       - run: npx electron-builder ${{ matrix.args }} --publish never
+      - run: npm run ffmpeg:verify-artifacts
       - name: Upload to the GitHub release
         uses: softprops/action-gh-release@v3
         with:
           draft: true
+          body: |
+            このアプリは FFmpeg / ffprobe (LGPL-2.1-or-later) を含みます。
+            ライセンス本文、著作権表示、対応ソースとビルド手順は各アプリ内の
+            resources/ffmpeg (macOS は Contents/Resources/ffmpeg) に同梱しています。
+            設定の「FFmpeg のライセンス・ソース」から参照できます。
           files: |
             release/*.dmg
             release/*.zip

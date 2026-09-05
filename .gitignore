@@ -7,3 +7,5 @@ release/
 .claude/settings.local.json
 .codex/
 *.tsbuildinfo
+.cache/
+resources/ffmpeg/

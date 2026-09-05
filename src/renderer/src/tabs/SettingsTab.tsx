@@ -218,12 +218,23 @@ export function SettingsTab({
           <div className="account-row">
             <span>
               Nico Live Recorder v{status.version}
+              <div className="sub">FFmpeg / ffprobe: LGPL-2.1-or-later</div>
               <div className="sub mono ellipsis" title={status.logFilePath}>
                 ログの保存先: {status.logFilePath}
               </div>
             </span>
             <button className="btn btn-secondary sm" onClick={() => void window.api.openLogFile()}>
               ログを開く
+            </button>
+          </div>
+          <div className="divider" />
+          <div className="account-row">
+            <span className="sub">同梱 FFmpeg の著作権表示、ライセンス本文と対応ソース</span>
+            <button
+              className="btn btn-secondary sm"
+              onClick={() => void window.api.openFfmpegLicenses()}
+            >
+              FFmpeg のライセンス・ソース
             </button>
           </div>
           <div className="divider" />
