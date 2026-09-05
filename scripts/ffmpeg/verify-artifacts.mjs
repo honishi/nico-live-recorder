@@ -4,12 +4,18 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { verifyNotarizedApp } from '../mac/verify.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 const release = path.join(root, 'release');
 const extensions = process.platform === 'darwin' ? ['.zip', '.dmg'] : ['.exe'];
+const requireNotarization = process.argv.includes('--require-notarization');
 assert.ok(['darwin', 'win32'].includes(process.platform), '配布対象の OS 上で実行してください');
+if (requireNotarization) {
+  assert.equal(process.platform, 'darwin', '公証の検証は macOS 上で実行してください');
+  assert.match(process.env.APPLE_TEAM_ID ?? '', /^[A-Z0-9]{10}$/, 'APPLE_TEAM_ID が必要です');
+}
 const artifacts = readdirSync(release).filter(
   (name) =>
     name.startsWith('NicoLiveRecorder') &&
@@ -58,7 +64,10 @@ for (const name of artifacts) {
       } else {
         run('/usr/bin/ditto', ['-x', '-k', artifact, unpacked]);
       }
-      resources = path.join(unpacked, 'NicoLiveRecorder.app', 'Contents', 'Resources');
+      const app = path.join(unpacked, 'NicoLiveRecorder.app');
+      // 圧縮・展開を経た最終成果物で、署名と公証チケットが残っていることを確かめる。
+      if (requireNotarization) verifyNotarizedApp(app, process.env.APPLE_TEAM_ID);
+      resources = path.join(app, 'Contents', 'Resources');
     } else {
       // GitHub の Windows ランナーにある 7-Zip を使って NSIS 内の payload を展開する。
       const sevenZip = path.join(process.env.ProgramFiles, '7-Zip', '7z.exe');

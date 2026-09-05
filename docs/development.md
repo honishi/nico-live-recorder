@@ -85,7 +85,7 @@ test/                         src/main/ を鏡写しにしたテスト。偽サ�
 
 - PR と main への push で GitHub Actions (`.github/workflows/ci.yml`) が ubuntu と windows で format / lint / typecheck / test / build を実行します。macOS arm64 と Windows x64 では FFmpeg のビルドとパッケージ内実体の検証も行います。
 - `v0.1.0` のような `v` 始まりのタグを push すると、macOS (Apple Silicon) と Windows (x64) のパッケージを作り、下書きのリリースに添付します (`release.yml`)。内容を確認してから公開してください。
-- 署名と公証は行っていません (issue #22, #23)。
+- 本家の Release は macOS の署名・公証と、DMG / ZIP 展開後の Gatekeeper / FFmpeg 検証を必須にします。手動実行ではリリースを作らず、検証済み成果物を Actions の artifact に保存します。必要な Secrets と検証手順は [mac-signing.md](mac-signing.md) を参照してください (issue #22)。Windows の署名は issue #23 で扱います。
 
 ### 新しいバージョンの表示
 
