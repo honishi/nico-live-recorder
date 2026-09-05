@@ -5,9 +5,10 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 
 ## Issue と作業の流れ
 
-- やることは GitHub の issue で管理する。着手する作業は issue から始め、無ければ先に作る。
-- 優先度は `priority: high / medium / low`、種類は `type: infra / feature / chore` のラベルで表す。
-- commit の footer に `Closes #12` のように issue 番号を入れ、マージで issue を閉じる。ブランチ名に番号は付けない。
+- 機能追加や不具合修正など、継続して追跡・管理する作業は GitHub の issue から始め、対応する issue が無ければ先に作る。
+- 文書・規約の小さな修正、誤字修正、一時的な調査など、その場で完結する軽微な作業では、新しい issue を作らずに進める。
+- issue を作る場合、優先度は `priority: high / medium / low`、種類は `type: infra / feature / chore` のラベルで表す。
+- 対応する issue がある場合は、対応を完了する commit の footer に `Closes #12` のように issue 番号を入れ、マージで issue を閉じる。issue を使わない作業では footer の issue 番号は不要。ブランチ名に番号は付けない。
 
 ## ブランチとマージ
 
