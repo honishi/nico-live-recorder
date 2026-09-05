@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { once } from 'node:events';
+import { finished } from 'node:stream/promises';
 import { NicoClient } from '../../vendor/nico-client/NicoClient';
 import type { NicoComment, NicoLiveProgramInfo } from '../../vendor/nico-client/types';
 import { silentLogger, type Logger } from '../logger';
@@ -57,11 +58,25 @@ export async function recordComments(
     },
   });
 
+  // ファイルの失敗は受信待ちの間にも起きるので、生成直後から監視し、コメント取得も止める
+  const outputFailure = new AbortController();
+  const receiveSignal = signal
+    ? AbortSignal.any([signal, outputFailure.signal])
+    : outputFailure.signal;
   const file = fs.createWriteStream(options.outputPath, { flags: 'a', encoding: 'utf8' });
+  let fileError: Error | undefined;
+  const fileFinished = finished(file).catch((error: unknown) => {
+    fileError = error as Error;
+    outputFailure.abort();
+  });
   let count = 0;
   try {
     const stream = client.streamComments(
-      { signal, startPosition: 'now', prefetchBackward: options.prefetchBackward ?? true },
+      {
+        signal: receiveSignal,
+        startPosition: 'now',
+        prefetchBackward: options.prefetchBackward ?? true,
+      },
       options.programInfo,
     );
     for await (const comment of stream) {
@@ -72,9 +87,15 @@ export async function recordComments(
       count += 1;
       options.onComment?.(comment, count);
     }
+  } catch (error) {
+    // 受信側が AbortError を返しても、原因となった保存エラーを呼び出し側に伝える
+    throw fileError ?? error;
   } finally {
     file.end();
-    await once(file, 'finish').catch(() => undefined);
+    await fileFinished;
+  }
+  if (fileError) {
+    throw fileError;
   }
   logger.info(`comments: finished count=${count} aborted=${signal?.aborted === true}`);
   return {
