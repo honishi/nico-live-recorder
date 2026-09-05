@@ -72,6 +72,8 @@ src/main/app/                 Electron 側: 設定、ログイン、録画マネ
 src/renderer/                 React の設定ウィンドウ
 src/shared/                   main と renderer で共有する型・定数・整形
 resources/proto/              NDGR の protobuf 定義
+resources/tray/               トレイアイコン (16px と @2x。黒 = macOS のテンプレート / Windows の明テーマ、白 = Windows の暗テーマ)
+build/                        アプリアイコン (icns / ico と、その元になるサイズ別 PNG) と macOS の entitlements
 test/                         src/main/ を鏡写しにしたテスト。偽サーバーは test/helpers/
 ```
 
@@ -105,6 +107,10 @@ npm run package:win   # release/ に nsis インストーラ
 ```
 
 FFmpeg は公式ソースから LGPL-2.1-or-later の構成でビルドし、完全な対応ソースと許諾文を同梱します。パッケージ作成前に `npm run ffmpeg:build` を実行してください。macOS arm64 / Windows x64 それぞれのネイティブ環境で作成し、同梱した実体を `afterPack` で検証します。取得元、前提ツール、ライセンス条件、検証手順は [ffmpeg.md](ffmpeg.md) を参照してください。
+
+### アプリアイコン
+
+アプリアイコンとトレイアイコンは `docs/design/app-icon/` (Claude Design のハンドオフ) を正とします。出荷用の `build/icon.icns` と `build/icon.ico` は、1024px の 1 枚から縮小すると 16 / 32 / 64px で括弧が潰れるため、サイズ別に描き分けた `build/icons/*.png` から `npm run icons:build` (macOS 専用。`iconutil` と `sips` を使う) で組み立て、生成物ごとリポジトリに含めます。アイコンを更新したときだけ実行してください。開発起動でも Dock / タスクバーに同じアイコンを出します。
 
 ## ライセンス
 

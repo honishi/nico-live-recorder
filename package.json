@@ -19,6 +19,7 @@
     "package": "electron-vite build && electron-builder",
     "package:mac": "electron-vite build && electron-builder --mac",
     "package:win": "electron-vite build && electron-builder --win",
+    "icons:build": "node scripts/icons/build.mjs",
     "ffmpeg:build": "node scripts/ffmpeg/build.mjs",
     "ffmpeg:verify": "node --import tsx scripts/ffmpeg/verify.mjs",
     "ffmpeg:verify-artifacts": "node scripts/ffmpeg/verify-artifacts.mjs"

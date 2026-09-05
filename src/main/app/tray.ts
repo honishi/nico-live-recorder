@@ -1,6 +1,8 @@
+import path from 'node:path';
 import { formatBytes } from '../../shared/format';
 import { app, Menu, nativeImage, nativeTheme, Tray, type NativeImage } from 'electron';
 import type { RecordingInfo } from '../../shared/types';
+import type { AppLogger } from './app-logger';
 
 export interface TrayCallbacks {
   showWindow: () => void;
@@ -11,18 +13,30 @@ export interface TrayCallbacks {
 
 export type TrayState = 'idle' | 'recording' | 'logged-out';
 
+/** 状態ごとの画像ファイル名の先頭。待機 = 輪、録画中 = 塗り、未ログイン = 破線の輪 */
+const ICON_BASENAMES: Record<TrayState, string> = {
+  idle: 'trayIdle',
+  recording: 'trayRecording',
+  'logged-out': 'trayOffline',
+};
+
 /**
  * トレイ (macOS ではメニューバー) の常駐アイコンとメニュー。
- * 円ひとつで状態を表す: 待機 = 輪、録画中 = 塗り、未ログイン = 破線の輪
+ * 画像は docs/design/app-icon/ で確定した 16px (@2x で 32px) の単色 PNG を iconDir から読む
  */
 export class AppTray {
   private readonly tray: Tray;
+  private readonly icons = new Map<string, NativeImage>();
   private recordings: RecordingInfo[] = [];
   private summary = '';
   private state: TrayState = 'idle';
 
-  constructor(private readonly callbacks: TrayCallbacks) {
-    this.tray = new Tray(buildIcon('idle'));
+  constructor(
+    private readonly iconDir: string,
+    private readonly logger: AppLogger,
+    private readonly callbacks: TrayCallbacks,
+  ) {
+    this.tray = new Tray(this.icon('idle'));
     this.tray.setToolTip(app.name);
     this.tray.on('click', () => {
       if (process.platform !== 'darwin') {
@@ -30,7 +44,7 @@ export class AppTray {
       }
     });
     // Windows はテーマに応じて白黒を切り替える
-    nativeTheme.on('updated', () => this.tray.setImage(buildIcon(this.state)));
+    nativeTheme.on('updated', () => this.tray.setImage(this.icon(this.state)));
     this.update([], '待機中', 'idle');
   }
 
@@ -38,13 +52,41 @@ export class AppTray {
     this.recordings = recordings.filter((r) => r.state === 'recording' || r.state === 'starting');
     this.summary = summary;
     this.state = state;
-    this.tray.setImage(buildIcon(state));
+    this.tray.setImage(this.icon(state));
     this.tray.setToolTip(`${app.name}: ${summary}`);
     this.tray.setContextMenu(this.buildMenu());
   }
 
   destroy(): void {
     this.tray.destroy();
+  }
+
+  /**
+   * 状態に合う画像を返す。一度読んだものは使い回す。
+   * macOS は黒のテンプレート画像を渡し、メニューバーの明暗に合わせた反転は OS に任せる。
+   * Windows はテーマに合わせて白 / 黒を選ぶ。@2x は nativeImage が同じ場所から自動で拾う
+   */
+  private icon(state: TrayState): NativeImage {
+    const isMac = process.platform === 'darwin';
+    const variant = !isMac && nativeTheme.shouldUseDarkColors ? 'White' : 'Template';
+    const file = path.join(this.iconDir, `${ICON_BASENAMES[state]}${variant}.png`);
+    const cached = this.icons.get(file);
+    if (cached) {
+      return cached;
+    }
+    const image = nativeImage.createFromPath(file);
+    if (image.isEmpty()) {
+      this.logger.warn(`tray icon not found: ${file}`);
+    } else {
+      const { width, height } = image.getSize();
+      const scales = image.getScaleFactors().join('/');
+      this.logger.debug(`tray icon loaded: ${file} (${width}x${height}, scale ${scales})`);
+    }
+    if (isMac) {
+      image.setTemplateImage(true);
+    }
+    this.icons.set(file, image);
+    return image;
   }
 
   private buildMenu(): Menu {
@@ -72,44 +114,4 @@ export class AppTray {
       { label: '終了', click: () => this.callbacks.quit() },
     ]);
   }
-}
-
-/**
- * 16px (@2x で 32px) の単色アイコンをその場で描く。
- * macOS はテンプレート画像として扱い、システムが配色を決める。
- * Windows は nativeTheme に合わせて白 / 黒を選ぶ
- */
-function buildIcon(state: TrayState): NativeImage {
-  const size = 32;
-  const buffer = Buffer.alloc(size * size * 4);
-  const center = (size - 1) / 2;
-  const outer = 12;
-  const ringWidth = 2.4; // 線 5/34 相当
-  const isMac = process.platform === 'darwin';
-  const light = !isMac && nativeTheme.shouldUseDarkColors;
-  const color = light ? 0xff : 0x00;
-
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const dx = x - center;
-      const dy = y - center;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const ring = dist <= outer && dist >= outer - ringWidth;
-      // 破線: 円周を 8 分割し、交互に描く
-      const angle = Math.atan2(dy, dx) + Math.PI;
-      const dashed = Math.floor((angle / (2 * Math.PI)) * 8) % 2 === 0;
-      const on = state === 'recording' ? dist <= outer : state === 'idle' ? ring : ring && dashed;
-      const offset = (y * size + x) * 4;
-      // BGRA
-      buffer[offset] = color;
-      buffer[offset + 1] = color;
-      buffer[offset + 2] = color;
-      buffer[offset + 3] = on ? 0xff : 0x00;
-    }
-  }
-  const image = nativeImage.createFromBitmap(buffer, { width: size, height: size, scaleFactor: 2 });
-  if (isMac) {
-    image.setTemplateImage(true);
-  }
-  return image;
 }

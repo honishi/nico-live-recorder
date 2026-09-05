@@ -35,6 +35,13 @@ if (!gotLock) {
   app.quit();
 }
 
+/** 開発起動の Windows でタスクバーにアプリアイコンを出す。パッケージ版は exe に埋め込んだ ico が使われる */
+function devWindowIcon(): string | undefined {
+  return !app.isPackaged && process.platform === 'win32'
+    ? path.join(app.getAppPath(), 'build', 'icon.ico')
+    : undefined;
+}
+
 /** 保存した位置とサイズが現在のディスプレイに収まるときだけ復元する */
 function restoredBounds(saved: WindowBounds | undefined): Partial<WindowBounds> {
   if (!saved || saved.width < WINDOW_MIN_WIDTH || saved.height < WINDOW_MIN_HEIGHT) {
@@ -66,6 +73,7 @@ function createMainWindow(settings: SettingsStore): BrowserWindow {
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
     title: 'Nico Live Recorder',
+    icon: devWindowIcon(),
     show: false,
     autoHideMenuBar: true,
     webPreferences: {
@@ -115,6 +123,11 @@ async function bootstrap(): Promise<void> {
   const userData = app.getPath('userData');
   const logger = new AppLogger(path.join(userData, 'logs'), app.isPackaged ? 'info' : 'debug');
   logger.info(`${app.name} ${app.getVersion()} starting (${process.platform} ${process.arch})`);
+
+  // 開発起動の macOS で Dock にアプリアイコンを出す (パッケージ版は同梱の icns が使われる)
+  if (!app.isPackaged && process.platform === 'darwin') {
+    app.dock?.setIcon(path.join(app.getAppPath(), 'build', 'icon.png'));
+  }
 
   configureProtoRootDir(
     app.isPackaged
@@ -198,7 +211,11 @@ async function bootstrap(): Promise<void> {
   };
   registerIpcHandlers(ctx);
 
-  tray = new AppTray({
+  // トレイ画像の置き場所。パッケージ版は extraResources でコピーした先、開発時はリポジトリの resources/
+  const trayIconDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'tray')
+    : path.join(app.getAppPath(), 'resources', 'tray');
+  tray = new AppTray(trayIconDir, logger, {
     showWindow: showMainWindow,
     openOutputDir: () => void shell.openPath(settings.get().outputDir),
     stopRecording: (programId) => manager.stopRecording(programId),
