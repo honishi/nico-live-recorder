@@ -1,23 +1,23 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import type { Writable } from 'node:stream';
 import { silentLogger, type Logger } from '../logger';
 
-/**
- * 同梱 ffmpeg のパスを解決する。
- * 環境変数 NICO_FFMPEG_PATH があればそれを優先し、無ければ ffmpeg-static のバイナリを使う。
- * パッケージ後は asar の外 (app.asar.unpacked) に展開されたパスへ読み替える。
- */
-export function resolveFfmpegPath(): string {
+/** 同梱 FFmpeg を解決する。CLI の開発実行はリポジトリ直下を作業ディレクトリにする。 */
+export function resolveFfmpegPath(
+  bundleDir = path.resolve('resources', 'ffmpeg', `${process.platform}-${process.arch}`),
+): string {
   const override = process.env['NICO_FFMPEG_PATH'];
   if (override && override.trim().length > 0) {
     return override.trim();
   }
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const staticPath = require('ffmpeg-static') as string | null;
-  if (!staticPath) {
-    throw new Error('ffmpeg-static からバイナリのパスを取得できませんでした');
+  // パッケージ版では呼び出し元が Resources/ffmpeg を渡す。旧バイナリへはフォールバックしない。
+  const binary = path.join(bundleDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
+  if (!existsSync(binary)) {
+    throw new Error(`同梱 FFmpeg がありません: ${binary} (開発時は npm run ffmpeg:build を実行)`);
   }
-  return staticPath.replace('app.asar', 'app.asar.unpacked');
+  return binary;
 }
 
 export interface FfmpegMuxerOptions {

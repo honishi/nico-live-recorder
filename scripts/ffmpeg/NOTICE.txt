@@ -1,0 +1,28 @@
+FFmpeg
+https://ffmpeg.org/
+Copyright (c) 2000-2026 the FFmpeg developers
+
+This application includes the FFmpeg and ffprobe executables under the
+GNU Lesser General Public License version 2.1 or later (LGPL-2.1-or-later).
+FFmpeg is a separate process; the application does not link its libraries.
+FFmpeg is provided WITHOUT ANY WARRANTY; see COPYING.LGPLv2.1.
+
+The complete, unmodified corresponding FFmpeg source archive is included in
+source/ alongside build instructions (rebuild.sh), configuration and toolchain
+records. Individual copyright notices and additional permissive license terms
+are preserved in that archive. No FFmpeg source patches have been applied.
+LICENSE.md describes upstream's license choices; GPL/nonfree/version3 options
+and external codec libraries are disabled in these executables.
+
+You may use, modify and redistribute FFmpeg under its own license. The MIT
+license of NicoLiveRecorder does not replace or restrict these rights.
+To use a rebuilt executable, replace ffmpeg (ffmpeg.exe on Windows) in this
+directory or set NICO_FFMPEG_PATH to its absolute path before starting the app.
+
+On Windows, toolchain-licenses/ contains the MinGW-w64 runtime/header notices
+and the GCC Runtime Library Exception. GCC runtime code is distributed under
+GPLv3 with the GCC Runtime Library Exception 3.1, which permits this eligible
+compilation to be distributed under the terms of the independent modules.
+No external FFmpeg codec libraries or MSYS2 runtime DLLs are bundled.
+
+FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.

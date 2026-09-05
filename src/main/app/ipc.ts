@@ -1,4 +1,5 @@
-import { BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import path from 'node:path';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import {
   codedError,
   ERROR_CODES,
@@ -128,6 +129,13 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   });
   ipcMain.handle(IPC.openLogFile, () => {
     shell.showItemInFolder(ctx.logger.logFilePath);
+  });
+  // 利用者指定の FFmpeg ではなく、アプリと一緒に配布した資料を開く。
+  ipcMain.handle(IPC.openFfmpegLicenses, () => {
+    const directory = app.isPackaged
+      ? path.join(process.resourcesPath, 'ffmpeg')
+      : path.join(app.getAppPath(), 'resources', 'ffmpeg', `${process.platform}-${process.arch}`);
+    shell.showItemInFolder(path.join(directory, 'NOTICE.txt'));
   });
   ipcMain.handle(IPC.reconnectPush, () => ctx.manager.restartDetection());
 

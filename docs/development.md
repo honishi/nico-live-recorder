@@ -31,6 +31,7 @@ Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` など�
 
 ```bash
 npm install
+npm run ffmpeg:build # 録画用 FFmpeg をビルド (前提ツールは下記参照)
 npm run dev          # electron-vite の開発モードで起動
 npm run format       # prettier
 npm run lint         # eslint (型情報を使うルールを含む)
@@ -82,7 +83,7 @@ test/                         src/main/ を鏡写しにしたテスト。偽サ�
 
 ## CI とリリース
 
-- PR と main への push で GitHub Actions (`.github/workflows/ci.yml`) が ubuntu と windows で format / lint / typecheck / test / build を実行します。
+- PR と main への push で GitHub Actions (`.github/workflows/ci.yml`) が ubuntu と windows で format / lint / typecheck / test / build を実行します。macOS arm64 と Windows x64 では FFmpeg のビルドとパッケージ内実体の検証も行います。
 - `v0.1.0` のような `v` 始まりのタグを push すると、macOS (Apple Silicon) と Windows (x64) のパッケージを作り、下書きのリリースに添付します (`release.yml`)。内容を確認してから公開してください。
 - 署名と公証は行っていません (issue #22, #23)。
 
@@ -103,12 +104,8 @@ npm run package:mac   # release/ に dmg / zip
 npm run package:win   # release/ に nsis インストーラ
 ```
 
-ffmpeg は `ffmpeg-static` から取り込みます。この npm パッケージはインストール時に実行環境向けのバイナリだけを取得するため、別プラットフォーム向けにビルドする場合は次のように対象を指定して `npm install` し直してください。
-
-```bash
-npm_config_platform=win32 npm_config_arch=x64 npm install
-```
+FFmpeg は公式ソースから LGPL-2.1-or-later の構成でビルドし、完全な対応ソースと許諾文を同梱します。パッケージ作成前に `npm run ffmpeg:build` を実行してください。macOS arm64 / Windows x64 それぞれのネイティブ環境で作成し、同梱した実体を `afterPack` で検証します。取得元、前提ツール、ライセンス条件、検証手順は [ffmpeg.md](ffmpeg.md) を参照してください。
 
 ## ライセンス
 
-MIT。同梱する ffmpeg のライセンス (GPL) は `ffmpeg-static` の配布物に従います。
+アプリ本体は MIT。別プロセスとして実行する同梱 FFmpeg / ffprobe は LGPL-2.1-or-later です。ライセンス本文、著作権表示、対応ソースとビルド手順をアプリに同梱します。

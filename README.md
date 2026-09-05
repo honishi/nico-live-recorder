@@ -78,4 +78,6 @@ Windows と macOS で動きます。
 
 ## ライセンス
 
-MIT。同梱する ffmpeg のライセンス (GPL) は `ffmpeg-static` の配布物に従います。
+アプリ本体は MIT ライセンスです。同梱する [FFmpeg](https://ffmpeg.org/) / ffprobe は LGPL-2.1-or-later です (Copyright (c) 2000-2026 the FFmpeg developers)。
+
+ライセンス本文、著作権表示、完全な対応ソースとビルド手順はアプリに同梱しています。設定の「情報」→「FFmpeg のライセンス・ソース」から参照できます。配置先は Windows では `resources/ffmpeg`、macOS ではアプリ内の `Contents/Resources/ffmpeg` です。

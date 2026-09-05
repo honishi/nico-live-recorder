@@ -10,6 +10,7 @@ export default tseslint.config(
   {
     ignores: [
       'out/**',
+      '.cache/**',
       'dist/**',
       'release/**',
       'node_modules/**',
@@ -55,6 +56,7 @@ export default tseslint.config(
       'test/**',
       '*.ts',
       '*.mjs',
+      '**/*.cjs',
     ],
     languageOptions: { globals: globals.node },
   },
@@ -85,7 +87,7 @@ export default tseslint.config(
   },
   // JS ファイルは型情報付きルールの対象外
   {
-    files: ['**/*.mjs', '**/*.js'],
+    files: ['**/*.mjs', '**/*.js', '**/*.cjs'],
     ...tseslint.configs.disableTypeChecked,
   },
   // prettier と衝突する整形系ルールを無効化する (最後に置く)

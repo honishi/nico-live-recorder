@@ -26,6 +26,7 @@ const api = {
   openOutputDir: (): Promise<void> => ipcRenderer.invoke(IPC.openOutputDir),
   openPath: (target: string): Promise<void> => ipcRenderer.invoke(IPC.openPath, target),
   openLogFile: (): Promise<void> => ipcRenderer.invoke(IPC.openLogFile),
+  openFfmpegLicenses: (): Promise<void> => ipcRenderer.invoke(IPC.openFfmpegLicenses),
   reconnectPush: (): Promise<void> => ipcRenderer.invoke(IPC.reconnectPush),
   addTarget: (input: string): Promise<TargetAddResult> => ipcRenderer.invoke(IPC.addTarget, input),
   restoreTarget: (target: TargetUser): Promise<AppSettings> =>

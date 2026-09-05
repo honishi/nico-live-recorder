@@ -6,21 +6,25 @@ directories:
 files:
   - out/**
   - '!**/.DS_Store'
-# ffmpeg バイナリは asar の外に置かないと spawn できない
-asarUnpack:
-  - node_modules/ffmpeg-static/**
+# 同梱した実体と資料を afterPack で検証し、失敗した成果物は公開させない。
+afterPack: scripts/ffmpeg/after-pack.cjs
 extraResources:
   - from: resources/proto
     to: proto
+  - from: resources/ffmpeg/${platform}-${arch}
+    to: ffmpeg
 npmRebuild: false
 mac:
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64]
+    - target: zip
+      arch: [arm64]
   category: public.app-category.utilities
 win:
   target:
-    - nsis
+    - target: nsis
+      arch: [x64]
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
