@@ -73,6 +73,8 @@ npm run package:win  # Windows x64 上
 
 electron-builder の `afterPack` でもこの検証を必ず行います。開発ディレクトリではなく、`.app` / `win-unpacked` の Resources にコピーされた実体を検証します。資料欠落、異なる CPU/OS、旧バイナリ混入、多重化失敗でパッケージ作成を止めます。ホストと異なる OS/CPU へのクロスパッケージングは受け付けません。`NICO_FFMPEG_PATH` でこのゲートを回避することはできません。
 
+macOS の署名時は、FFmpeg / ffprobe の署名を検証してから、パッケージ内の manifest の両バイナリのハッシュだけを更新します。その後アプリ全体を署名するため、署名済み成果物にも同じハッシュ検証を適用できます。順序とローカル検証の手順は [mac-signing.md](mac-signing.md) を参照してください。
+
 PR の CI とタグの Release の両方で、macOS arm64 と Windows x64 それぞれのネイティブランナーを使用します。Windows の実行結果は Windows ジョブで確認し、macOS の成功だけで検証済みとは扱いません。
 
 Release の説明には FFmpeg のライセンスと同梱ソースの所在を載せます。`npm run ffmpeg:verify-artifacts` で配布用 DMG / ZIP / NSIS インストーラを一時領域へ展開し、同じ検証を再実行します (Windows は 7-Zip が必要です)。Release はこれも成功してから下書きに添付します。下書き公開前に両 OS の成功を確認してください。古い `ffmpeg-static` 入り成果物を同じリリースに残さないでください。将来別サイトで配布するときも、配布ページに FFmpeg とライセンス・ソースの所在を表示します。

@@ -15,6 +15,16 @@ extraResources:
     to: ffmpeg
 npmRebuild: false
 mac:
+  # Electron と同梱バイナリを署名し、最後にアプリ全体の署名を確定する。
+  sign: scripts/mac/sign.mjs
+  type: distribution
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+  binaries:
+    - Contents/Resources/ffmpeg/ffmpeg
+    - Contents/Resources/ffmpeg/ffprobe
   target:
     - target: dmg
       arch: [arm64]
