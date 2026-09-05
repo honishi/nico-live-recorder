@@ -107,6 +107,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private push?: WebPushManager;
   private detector?: ProgramDetector;
   private readonly active = new Map<string, ActiveRecording>();
+  /** 検知器を作り直しても、ユーザーが止めた放送を自動で再開しない */
+  private readonly manuallyStopped = new Set<string>();
   /** 開始処理中 (番組情報の取得など active に入る前) の番組。同じ番組の二重開始を防ぐ */
   private readonly starting = new Map<string, Promise<RecordingInfo>>();
   private readonly history: HistoryStore;
@@ -141,8 +143,14 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       this.authExpired = false;
       void this.restartDetection();
     });
+    let detectionSettings = detectionKey(this.settings.get());
     this.settings.on('change', (settings) => {
-      void this.restartDetection();
+      // 通知や保存先の変更で初回ポーリングに戻さない。検知に関わる変更だけを反映する
+      const next = detectionKey(settings);
+      if (next !== detectionSettings) {
+        detectionSettings = next;
+        void this.restartDetection();
+      }
       // 空き容量は保存先かしきい値が変わったときだけ測り直す (対象の追加などでは statfs を走らせない)
       if (
         settings.outputDir !== this.diskChecked?.outputDir ||
@@ -403,6 +411,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     for (const programId of this.active.keys()) {
       detector.markSeen(programId);
     }
+    for (const programId of this.manuallyStopped) {
+      detector.markSeen(programId);
+    }
     detector.on('program', (program) => void this.handleDetected(program));
     // ポーリングの成否からセッション切れを判定してバナーに出す
     detector.on('polled', () => {
@@ -434,6 +445,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   }
 
   private async handleDetected(program: DetectedProgram): Promise<void> {
+    // 停止前から解決中だった古い通知にも、停止の意思を適用する
+    if (this.manuallyStopped.has(program.programId)) {
+      return;
+    }
     const settings = this.settings.get();
     const target = settings.targets.find(
       (t) => t.enabled && program.providerId !== undefined && t.userId === program.providerId,
@@ -513,6 +528,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     const pending = this.starting.get(programId);
     if (pending) {
       return pending;
+    }
+    if (source === 'manual') {
+      this.manuallyStopped.delete(programId);
     }
     const promise = this.doStartRecording(programId, source, meta).finally(() => {
       this.starting.delete(programId);
@@ -758,6 +776,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       return false;
     }
     recording.info.state = 'finishing';
+    this.manuallyStopped.add(programId);
     recording.controller.abort();
     this.logger.info(`[rec] stop requested ${programId}`);
     this.emitChange();
@@ -953,4 +972,17 @@ function sanitizeDirName(name: string): string {
     .trim()
     .replace(/[. ]+$/g, '');
   return cleaned.length > 0 ? cleaned : 'unknown';
+}
+
+/** 対象の並び順や表示名を除き、検知を組み直す必要がある設定だけを比較する */
+function detectionKey(settings: AppSettings): string {
+  return JSON.stringify([
+    settings.pushEnabled,
+    settings.pollIntervalSec,
+    settings.recordOngoingOnStart,
+    settings.targets
+      .filter((target) => target.enabled)
+      .map((target) => target.userId)
+      .sort(),
+  ]);
 }
