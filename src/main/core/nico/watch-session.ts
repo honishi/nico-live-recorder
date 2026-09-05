@@ -34,6 +34,8 @@ export interface WatchSessionOptions {
   latency?: 'low' | 'high';
   /** `stream` メッセージ待ちのタイムアウト */
   streamTimeoutMs?: number;
+  /** 接続開始から WebSocket の open までの上限 */
+  connectTimeoutMs?: number;
 }
 
 export interface WatchSessionCloseInfo {
@@ -74,6 +76,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
   private readonly quality: string;
   private readonly latency: 'low' | 'high';
   private readonly streamTimeoutMs: number;
+  private readonly connectTimeoutMs: number;
 
   private keepSeatTimer?: NodeJS.Timeout;
   private latestStream?: HlsStreamInfo;
@@ -90,6 +93,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
     this.quality = options.quality ?? 'abr';
     this.latency = options.latency ?? 'high';
     this.streamTimeoutMs = options.streamTimeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
+    this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
   }
 
   get latestStreamInfo(): HlsStreamInfo | undefined {
@@ -101,7 +105,10 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
   }
 
   /** WebSocket を開き、startWatching を送る。open まで待って解決する */
-  connect(): Promise<void> {
+  connect(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+      return Promise.reject(new DOMException('Aborted', 'AbortError'));
+    }
     if (this.closedForever) {
       return Promise.reject(new Error('WatchSession は既に close されています'));
     }
@@ -118,8 +125,26 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
       const ws = new WebSocket(this.url, { headers });
       this.ws = ws;
       let opened = false;
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`WebSocket 接続が ${this.connectTimeoutMs}ms 以内に完了しませんでした`));
+        ws.terminate();
+      }, this.connectTimeoutMs);
+      // open 前でも停止を受け付ける。terminate が後から出す error は既存のハンドラで受ける
+      const onAbort = (): void => {
+        cleanup();
+        this.intentionallyClosed.add(ws);
+        reject(new DOMException('Aborted', 'AbortError'));
+        ws.terminate();
+      };
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
 
       ws.on('open', () => {
+        cleanup();
         opened = true;
         this.logger.debug('watch ws opened');
         this.send({
@@ -140,6 +165,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
       });
       ws.on('message', (raw) => this.handleMessage(rawDataToString(raw)));
       ws.on('error', (error) => {
+        cleanup();
         this.logger.warn('watch ws error', error);
         if (!opened) {
           reject(error);
@@ -148,6 +174,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
         }
       });
       ws.on('close', (code, reasonBuf) => {
+        cleanup();
         const reason = reasonBuf.toString();
         this.logger.debug(`watch ws closed code=${code} reason=${reason}`);
         this.stopKeepSeat();
@@ -165,7 +192,10 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
   /**
    * 次の `stream` メッセージを待つ。既に受信済みで `fresh` が false なら即座に返す。
    */
-  waitForStream(fresh = false): Promise<HlsStreamInfo> {
+  waitForStream(fresh = false, signal?: AbortSignal): Promise<HlsStreamInfo> {
+    if (signal?.aborted) {
+      return Promise.reject(new DOMException('Aborted', 'AbortError'));
+    }
     if (!fresh && this.latestStream) {
       return Promise.resolve(this.latestStream);
     }
@@ -180,6 +210,10 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
         cleanup();
         resolve(info);
       };
+      const onAbort = (): void => {
+        cleanup();
+        reject(new DOMException('Aborted', 'AbortError'));
+      };
       const onClose = (info: WatchSessionCloseInfo): void => {
         // 張り直しで自分が閉じた古いソケットの close は、新しい接続の stream 待ちを妨げない
         if (info.intentional && !this.closedForever) {
@@ -192,9 +226,11 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
         clearTimeout(timer);
         this.off('stream', onStream);
         this.off('close', onClose);
+        signal?.removeEventListener('abort', onAbort);
       };
       this.on('stream', onStream);
       this.on('close', onClose);
+      signal?.addEventListener('abort', onAbort, { once: true });
     });
   }
 
@@ -202,10 +238,10 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
    * 接続を張り直して新しい HLS 配信情報 (cookie 更新) を取得する。
    * 鍵やセグメントの取得が 403 になったときに使う (streamlink と同じ回復手段)。
    */
-  async refreshStream(): Promise<HlsStreamInfo> {
+  async refreshStream(signal?: AbortSignal): Promise<HlsStreamInfo> {
     this.logger.info('watch ws reconnecting to refresh stream credentials');
-    await this.connect();
-    return this.waitForStream(true);
+    await this.connect(signal);
+    return this.waitForStream(true, signal);
   }
 
   close(): void {
