@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import type { HistoryPage, RecordingInfo } from '@shared/types';
 import { EmptyState } from '../components/Shell';
+import { ShowRecordingButton } from '../components/ShowRecordingButton';
 import { formatBytes, formatCount, formatDateTime, formatDuration } from '../lib/format';
 import { StateBadge } from './RecordingsTab';
 
@@ -114,6 +115,7 @@ export function HistoryTab({ historyVersion, now, onShowFile, onShowLog }: Props
               <span className="num">時間</span>
               <span className="num col-size">サイズ</span>
               <span className="num col-comments">コメント</span>
+              <span aria-hidden="true" />
             </div>
             <div className="table-scroll">
               {items.length === 0 && (
@@ -153,6 +155,7 @@ export function HistoryTab({ historyVersion, now, onShowFile, onShowLog }: Props
                     {r.videoExists === false ? '—' : formatBytes(r.videoBytes)}
                   </span>
                   <span className="num col-comments">{formatCount(r.commentCount)}</span>
+                  <ShowRecordingButton recording={r} onShowFile={onShowFile} />
                 </div>
               ))}
             </div>
