@@ -1,6 +1,7 @@
 // 開発用: コメント取得だけを試す。番組 ID を省略すると直近の放送からコメント数が最多のものを選ぶ
 //   npx tsx scripts/record-comments.ts [lvXXXX] [秒数] [出力ファイル]
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { createConsoleLogger } from '../src/main/core/logger';
 import { recordComments } from '../src/main/core/recorder/comment-recorder';
 import { NicoClient } from '../src/main/vendor/nico-client/NicoClient';
@@ -24,7 +25,8 @@ async function main(): Promise<void> {
   const [idArg, secondsArg, outArg] = process.argv.slice(2);
   const programId = idArg && /^lv\d+$/.test(idArg) ? idArg : await pickBusiestRecentProgram();
   const seconds = Number(secondsArg ?? 30);
-  const outputPath = path.resolve(outArg ?? `./recordings/${programId}.comments.jsonl`);
+  const outputPath = path.resolve(outArg ?? `./recordings/${programId}.comments.csv`);
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
   const logger = createConsoleLogger('comments');
   const controller = new AbortController();
   setTimeout(() => controller.abort(), seconds * 1000);

@@ -14,7 +14,7 @@ nico-live-recorder の仕組み、開発の手順、コード構成、リリー�
   ├─ 視聴 WebSocket (startWatching) → HLS の URI と cookie を取得
   ├─ 映像・音声の playlist を追跡し、セグメントを取得して AES-128 を復号
   ├─ ffmpeg に 2 本のパイプで渡し、1 本の .ts に多重化
-  └─ NDGR からコメントを受信し .comments.jsonl に追記
+  └─ NDGR からコメントを受信し .comments.csv に追記
 ```
 
 - push 通知は **ログイン中のアカウントがフォローしている配信者** の放送開始にだけ届きます。アプリはフォロー状態の確認だけを行い、フォロー操作はしません。

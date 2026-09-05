@@ -107,7 +107,7 @@ export async function recordProgram(
   const baseName = buildBaseName(info, attempt);
   const videoPath = path.join(options.outputDir, `${baseName}.ts`);
   const commentsPath =
-    options.commentsPath ?? path.join(options.outputDir, `${baseName}.comments.jsonl`);
+    options.commentsPath ?? path.join(options.outputDir, `${baseName}.comments.csv`);
   const metadataPath = path.join(options.outputDir, `${baseName}.json`);
   options.onPaths?.({ attempt, videoPath, commentsPath });
 

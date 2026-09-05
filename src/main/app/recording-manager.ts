@@ -579,8 +579,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     );
     const previousPaths = previousParts.map((p) => p.path);
     const previousBytes = sumSizes(previousParts);
+    // 旧 JSONL は変更せず残し、CSV だけを再開先として引き継ぐ
     const previousCommentsPath =
-      previous?.commentsPath && (await fileExists(previous.commentsPath))
+      previous?.commentsPath?.endsWith('.csv') && (await fileExists(previous.commentsPath))
         ? previous.commentsPath
         : undefined;
     const info: RecordingInfo = {

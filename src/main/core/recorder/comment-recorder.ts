@@ -29,17 +29,79 @@ export interface CommentRecordResult {
   aborted: boolean;
 }
 
-/** JSON Lines の 1 行として書き出す形式 (Date は ISO 文字列にする) */
-export interface CommentRecord extends Omit<NicoComment, 'at'> {
+// 閲覧時によく使う投稿時刻・番号・本文を先頭にし、列順を固定する
+const COMMENT_COLUMNS = [
+  'at',
+  'no',
+  'content',
+  'vpos',
+  'rawUserId',
+  'hashedUserId',
+  'accountStatus',
+  'position',
+  'size',
+  'color',
+  'font',
+  'opacity',
+  'id',
+  'liveId',
+] as const satisfies readonly (keyof NicoComment)[];
+const CSV_HEADER = '\uFEFF' + COMMENT_COLUMNS.join(',') + '\n';
+
+/** CSV の各列に保存する値 (投稿時刻は日本時間、RGB 色は #RRGGBB にする) */
+export interface CommentRecord extends Omit<NicoComment, 'at' | 'color'> {
   at: string;
+  color: string;
 }
 
 export function toCommentRecord(comment: NicoComment): CommentRecord {
-  return { ...comment, at: comment.at.toISOString() };
+  const at = new Date(comment.at.getTime() + 9 * 60 * 60 * 1000)
+    .toISOString()
+    .replace(/Z$/, '+09:00');
+  const color =
+    typeof comment.color === 'string'
+      ? comment.color
+      : '#' +
+        [comment.color.r, comment.color.g, comment.color.b]
+          .map((value) => value.toString(16).padStart(2, '0'))
+          .join('')
+          .toUpperCase();
+  return { ...comment, at, color };
+}
+
+export function toCommentCsv(comment: NicoComment): string {
+  const record = toCommentRecord(comment);
+  // 本文の改行・タブや数式に見える文字も保持し、CSV の引用符だけをエスケープする
+  return (
+    COMMENT_COLUMNS.map((column) => `"${String(record[column]).replaceAll('"', '""')}"`).join(',') +
+    '\n'
+  );
+}
+
+/** 全文を読み込まず、先頭だけで空ファイルか同じ列の CSV かを確かめる */
+async function needsCsvHeader(outputPath: string): Promise<boolean> {
+  let existing: fs.promises.FileHandle;
+  try {
+    existing = await fs.promises.open(outputPath, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+  try {
+    const header = Buffer.alloc(Buffer.byteLength(CSV_HEADER));
+    const { bytesRead } = await existing.read(header, 0, header.length, 0);
+    if (bytesRead === 0) return true;
+    if (bytesRead !== header.length || header.toString('utf8') !== CSV_HEADER) {
+      throw new Error(`コメント CSV のヘッダーが一致しないため追記できません: ${outputPath}`);
+    }
+    return false;
+  } finally {
+    await existing.close();
+  }
 }
 
 /**
- * NDGR からコメントを受信し、JSON Lines で追記保存する。
+ * NDGR からコメントを受信し、BOM・ヘッダー付き UTF-8 の CSV で追記保存する。
  * 番組終了 (NicoClient が検知) か abort で終了する。
  */
 export async function recordComments(
@@ -48,6 +110,7 @@ export async function recordComments(
 ): Promise<CommentRecordResult> {
   const logger = options.logger ?? silentLogger;
   const startedAt = new Date();
+  const writeHeader = await needsCsvHeader(options.outputPath);
 
   // ファイルの失敗は受信待ちの間にも起きるので、生成直後から監視し、コメント取得も止める
   const outputFailure = new AbortController();
@@ -62,6 +125,10 @@ export async function recordComments(
   });
   let count = 0;
   try {
+    // コメントが 0 件でもヘッダーを残し、再開時は既存のヘッダーと BOM を重複させない
+    if (writeHeader && !file.write(CSV_HEADER)) {
+      await once(file, 'drain', { signal: receiveSignal });
+    }
     // 再接続時に過去分を取り直しても、同じコメントはこの録画内で二重に保存しない
     const seen = new Set<string>();
     let programInfo = options.programInfo;
@@ -93,7 +160,7 @@ export async function recordComments(
           if (seen.has(key)) {
             continue;
           }
-          const line = JSON.stringify(toCommentRecord(comment)) + '\n';
+          const line = toCommentCsv(comment);
           if (!file.write(line)) {
             await once(file, 'drain', { signal: receiveSignal });
           }

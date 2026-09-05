@@ -173,7 +173,7 @@ function finishedResult(call: RecordCall, patch: Record<string, unknown> = {}): 
     call.options.onPaths?.({
       attempt,
       videoPath: `${base}.ts`,
-      commentsPath: `${base}.comments.jsonl`,
+      commentsPath: `${base}.comments.csv`,
     });
   }
   return {
@@ -182,7 +182,7 @@ function finishedResult(call: RecordCall, patch: Record<string, unknown> = {}): 
     attempt,
     baseName: 'rec',
     videoPath: `${base}.ts`,
-    commentsPath: `${base}.comments.jsonl`,
+    commentsPath: `${base}.comments.csv`,
     metadataPath: `${base}.json`,
     video: { reason: 'endlist', video: { segments: 1, bytes: 1 } },
     errors: [],
@@ -279,7 +279,7 @@ describe('RecordingManager', () => {
     await waitFor(() => history.get('lv1')?.state === 'done');
     const entry = history.get('lv1')!;
     expect(entry.videoPaths).toEqual([`${entry.outputDir}/rec.ts`]);
-    expect(entry.commentsPath).toBe(`${entry.outputDir}/rec.comments.jsonl`);
+    expect(entry.commentsPath).toBe(`${entry.outputDir}/rec.comments.csv`);
     expect(entry.endedAt).toBeDefined();
     expect(manager.hasActiveRecordings()).toBe(false);
   });
@@ -298,13 +298,39 @@ describe('RecordingManager', () => {
     expect(second.options.attempt).toBe(2);
     expect(second.options.prefetchBackwardComments).toBe(false);
     expect(second.options.programInfo?.webSocketUrl).toBe('wss://watch.example/2');
-    expect(second.options.commentsPath).toBe(first.options.outputDir + '/rec.comments.jsonl');
+    expect(second.options.commentsPath).toBe(first.options.outputDir + '/rec.comments.csv');
 
     second.resolve(finishedResult(second));
     await waitFor(() => history.get('lv1')?.state === 'done');
     expect(history.get('lv1')?.videoPaths).toHaveLength(2);
     expect(history.get('lv1')?.attempt).toBe(2);
   });
+
+  test.each(['csv', 'jsonl'])(
+    '履歴の %s を持つ番組を再開すると、CSV だけを引き継ぐ',
+    async (extension) => {
+      const commentsPath = path.join(dir, `previous.comments.${extension}`);
+      const original = extension === 'csv' ? 'existing csv\n' : '{"content":"過去のコメント"}\n';
+      fs.writeFileSync(commentsPath, original);
+      history.upsert({
+        programId: 'lv1',
+        title: 'タイトル',
+        source: 'manual',
+        state: 'failed',
+        startedAt: new Date().toISOString(),
+        commentCount: 42,
+        videoBytes: 0,
+        outputDir: dir,
+        commentsPath,
+      });
+      await manager.startRecording('lv1', 'manual');
+      const call = await nextRecordCall(0);
+      expect(call.options.commentsPath).toBe(extension === 'csv' ? commentsPath : undefined);
+      expect(call.options.prefetchBackwardComments).toBe(extension !== 'csv');
+      expect((await manager.getRecordings())[0].commentCount).toBe(extension === 'csv' ? 42 : 0);
+      expect(fs.readFileSync(commentsPath, 'utf8')).toBe(original);
+    },
+  );
 
   test('再開前の確認で番組情報が取れなくても、終了扱いにせずもう一度試す', async () => {
     await manager.startRecording('lv1', 'manual');
@@ -324,7 +350,7 @@ describe('RecordingManager', () => {
     const videoPath = path.join(first.options.outputDir, 'rec.ts');
     fs.mkdirSync(first.options.outputDir, { recursive: true });
     fs.writeFileSync(videoPath, 'x'.repeat(100));
-    sendPaths(first, 1, videoPath, `${videoPath}.jsonl`);
+    sendPaths(first, 1, videoPath, `${videoPath}.csv`);
 
     // サイズ監視でファイルを観測してから、フォルダごと消す
     await expectVideoBytes(manager, 100);
@@ -363,7 +389,7 @@ describe('RecordingManager', () => {
     const firstPath = path.join(first.options.outputDir, 'rec.ts');
     fs.mkdirSync(first.options.outputDir, { recursive: true });
     fs.writeFileSync(firstPath, 'x'.repeat(100));
-    sendPaths(first, 1, firstPath, `${firstPath}.jsonl`);
+    sendPaths(first, 1, firstPath, `${firstPath}.csv`);
     await expectVideoBytes(manager, 100);
     first.resolve(
       finishedResult(first, { video: { reason: 'idle', video: {} }, videoPath: firstPath }),
@@ -377,7 +403,7 @@ describe('RecordingManager', () => {
 
     const secondPath = path.join(second.options.outputDir, 'rec_2.ts');
     fs.writeFileSync(secondPath, 'y'.repeat(50));
-    sendPaths(second, 2, secondPath, `${firstPath}.jsonl`);
+    sendPaths(second, 2, secondPath, `${firstPath}.csv`);
     await expectVideoBytes(manager, 150);
     return { firstPath, secondPath, second };
   }
@@ -439,7 +465,7 @@ describe('RecordingManager', () => {
     const third = await nextRecordCall(2);
     const thirdPath = path.join(third.options.outputDir, 'rec_3.ts');
     fs.writeFileSync(thirdPath, 'z'.repeat(30));
-    sendPaths(third, 3, thirdPath, `${firstPath}.jsonl`);
+    sendPaths(third, 3, thirdPath, `${firstPath}.csv`);
     await expectVideoBytes(manager, 130);
   }
 
