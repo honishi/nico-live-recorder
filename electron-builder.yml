@@ -1,4 +1,4 @@
-appId: net.honishi.nico-live-recorder
+appId: com.honishi.nico-live-recorder
 productName: NicoLiveRecorder
 directories:
   buildResources: build
