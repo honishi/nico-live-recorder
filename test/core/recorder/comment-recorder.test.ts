@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { Writable } from 'node:stream';
 import { recordComments } from '../../../src/main/core/recorder/comment-recorder';
 import type { NicoComment, StreamOptions } from '../../../src/main/vendor/nico-client/types';
 
@@ -17,11 +18,12 @@ vi.mock('../../../src/main/vendor/nico-client/NicoClient', () => ({
           return;
         }
         yield comment;
-        await new Promise((resolve) => setTimeout(resolve, 10));
       }
       // 番組が続いている間は abort されるまで待つ
-      while (!options.signal?.aborted) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
+      if (!options.signal?.aborted) {
+        await new Promise<void>((resolve) => {
+          options.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
       }
     }
   },
@@ -57,7 +59,31 @@ describe('recordComments', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('最初のコメントを待っている間のオープン失敗を捕捉し、受信も止める', async () => {
+    comments.length = 0;
+    await expect(
+      recordComments({ programId: 'lv1', outputPath: path.join(dir, 'missing', 'c.jsonl') }),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(streamCalls[0].signal?.aborted).toBe(true);
+  });
+
+  test('drain を待たない書き込みの失敗も捕捉し、受信を止めて元のエラーを返す', async () => {
+    const error = new Error('disk full');
+    const file = new Writable({
+      write(_chunk, _encoding, callback) {
+        queueMicrotask(() => callback(error));
+      },
+    });
+    vi.spyOn(fs, 'createWriteStream').mockReturnValue(file as fs.WriteStream);
+    await expect(
+      recordComments({ programId: 'lv1', outputPath: path.join(dir, 'c.jsonl') }),
+    ).rejects.toBe(error);
+    expect(streamCalls[0].signal?.aborted).toBe(true);
+    expect(file.destroyed).toBe(true);
   });
 
   test('受信したコメントを 1 行 1 JSON で追記し、件数を通知する', async () => {
