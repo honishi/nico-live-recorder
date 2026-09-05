@@ -4,6 +4,5 @@ dist/
 release/
 resources/proto/
 package-lock.json
-docs/design/
 .cache/
 resources/ffmpeg/

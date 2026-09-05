@@ -22,7 +22,7 @@ const ICON_BASENAMES: Record<TrayState, string> = {
 
 /**
  * トレイ (macOS ではメニューバー) の常駐アイコンとメニュー。
- * 画像は docs/design/app-icon/ で確定した 16px (@2x で 32px) の単色 PNG を iconDir から読む
+ * 画像は 16px (@2x で 32px) の単色 PNG を iconDir (resources/tray/) から読む
  */
 export class AppTray {
   private readonly tray: Tray;

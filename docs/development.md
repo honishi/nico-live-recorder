@@ -57,8 +57,6 @@ NLR_USER_DATA=/tmp/nlr-userdata NLR_OUTPUT_DIR=/tmp/nlr-recordings npm run dev
 
 失敗後の再開処理は `NLR_DEV_FAIL_VIDEO_AFTER_MS=8000` のように設定して起動すると、映像を強制的に失敗させて確認できます。
 
-画面のデザインは `docs/design/` (Claude Design のハンドオフ) を正としています。
-
 ### コード構成
 
 ```
@@ -110,7 +108,7 @@ FFmpeg は公式ソースから LGPL-2.1-or-later の構成でビルドし、完
 
 ### アプリアイコン
 
-アプリアイコンとトレイアイコンは `docs/design/app-icon/` (Claude Design のハンドオフ) を正とします。出荷用の `build/icon.icns` と `build/icon.ico` は、1024px の 1 枚から縮小すると 16 / 32 / 64px で括弧が潰れるため、サイズ別に描き分けた `build/icons/*.png` から `npm run icons:build` (macOS 専用。`iconutil` と `sips` を使う) で組み立て、生成物ごとリポジトリに含めます。アイコンを更新したときだけ実行してください。開発起動でも Dock / タスクバーに同じアイコンを出します。
+アプリアイコンは `build/icons/` のサイズ別 PNG、トレイアイコンは `resources/tray/` の PNG が元データです。出荷用の `build/icon.icns` と `build/icon.ico` は、1024px の 1 枚から縮小すると 16 / 32 / 64px で括弧が潰れるため、サイズ別に描き分けた `build/icons/*.png` から `npm run icons:build` (macOS 専用。`iconutil` と `sips` を使う) で組み立て、生成物ごとリポジトリに含めます。アイコンを更新したときだけ実行してください。開発起動でも Dock / タスクバーに同じアイコンを出します。
 
 ## ライセンス
 
