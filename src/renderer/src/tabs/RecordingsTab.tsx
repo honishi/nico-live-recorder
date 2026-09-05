@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactElement } from 'react';
 import type { RecordingInfo } from '@shared/types';
 import { EmptyState } from '../components/Shell';
+import { ShowRecordingButton } from '../components/ShowRecordingButton';
 import { describeError } from '../lib/errors';
 import { formatBytes, formatCount, formatDuration, isToday } from '../lib/format';
 
@@ -66,6 +67,7 @@ export function RecordingsTab(props: Props): ReactElement {
             <span className="num">時間</span>
             <span className="num col-size">サイズ</span>
             <span className="num col-comments">コメント</span>
+            <span aria-hidden="true" />
           </div>
           <div className="table-scroll">
             {recent.length === 0 ? (
@@ -96,6 +98,7 @@ export function RecordingsTab(props: Props): ReactElement {
                     {r.videoExists === false ? '—' : formatBytes(r.videoBytes)}
                   </span>
                   <span className="num col-comments">{formatCount(r.commentCount)}</span>
+                  <ShowRecordingButton recording={r} onShowFile={props.onShowFile} />
                 </div>
               ))
             )}
@@ -152,13 +155,7 @@ function RecordingCard({
         <button className="btn btn-danger sm" disabled={stopping} onClick={() => onStop(r)}>
           {stopping ? '停止中…' : '停止'}
         </button>
-        <button
-          className="btn btn-secondary sm"
-          disabled={!r.videoPath}
-          onClick={() => r.videoPath && onShowFile(r.videoPath)}
-        >
-          表示
-        </button>
+        <ShowRecordingButton recording={r} onShowFile={onShowFile} />
       </div>
     </div>
   );

@@ -726,7 +726,7 @@ select {
 }
 
 .cols-recent {
-  grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px 68px 62px;
+  grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px 68px 62px 52px;
 }
 
 .cols-targets {
@@ -734,21 +734,21 @@ select {
 }
 
 .cols-history {
-  grid-template-columns: 96px 66px minmax(80px, 1fr) minmax(160px, 2.2fr) 58px 64px 58px;
+  grid-template-columns: 96px 66px minmax(80px, 1fr) minmax(160px, 2.2fr) 58px 64px 58px 52px;
 }
 
-/* 狭い幅では「コメント」→「サイズ」の順に列を落とす */
+/* 狭い幅では「コメント」→「サイズ」の順に列を落とし、「表示」は残す */
 @media (max-width: 860px) {
   .col-comments {
     display: none;
   }
 
   .cols-recent {
-    grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px 68px;
+    grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px 68px 52px;
   }
 
   .cols-history {
-    grid-template-columns: 96px 66px minmax(80px, 1fr) minmax(160px, 2.2fr) 58px 64px;
+    grid-template-columns: 96px 66px minmax(80px, 1fr) minmax(160px, 2.2fr) 58px 64px 52px;
   }
 }
 
@@ -758,11 +758,11 @@ select {
   }
 
   .cols-recent {
-    grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px;
+    grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px 52px;
   }
 
   .cols-history {
-    grid-template-columns: 96px 66px minmax(80px, 1fr) minmax(160px, 2.2fr) 58px;
+    grid-template-columns: 96px 66px minmax(80px, 1fr) minmax(160px, 2.2fr) 58px 52px;
   }
 }
 
