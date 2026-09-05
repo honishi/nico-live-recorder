@@ -233,7 +233,7 @@ function Onboarding({ loginPending, onLogin, onChooseOutputDir }: Props): ReactE
         {[
           ['STEP 1', 'ニコニコにログイン'],
           ['STEP 2', '録画したい配信者をフォロー'],
-          ['STEP 3', '対象に追加して待つだけ'],
+          ['STEP 3', '録画対象に追加して待つだけ'],
         ].map(([label, text]) => (
           <div key={label} className="step">
             <span className="label">{label}</span>

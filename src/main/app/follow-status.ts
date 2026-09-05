@@ -1,7 +1,7 @@
 import type { FollowCheckResult } from '../../shared/types';
 import { checkFollowing } from './nico-user';
 
-/** 確認できた結果を保持する時間。対象タブを開き直すたびに全員分を取りに行かないようにする */
+/** 確認できた結果を保持する時間。録画対象タブを開き直すたびに全員分を取りに行かないようにする */
 const RESULT_TTL_MS = 5 * 60 * 1000;
 /** 失敗 (unknown) を保持する時間。API の不調時に連打しない程度に短くする */
 const UNKNOWN_TTL_MS = 30 * 1000;
@@ -18,7 +18,7 @@ export interface FollowStatusOptions {
 
 /**
  * フォロー状態の問い合わせをまとめる。数分のキャッシュ、同じユーザーの問い合わせの合流、
- * 同時実行数の制限で、対象タブを開くたびに全対象へ並列アクセスすることを避ける
+ * 同時実行数の制限で、録画対象タブを開くたびに全対象へ並列アクセスすることを避ける
  */
 export class FollowStatusCache {
   private readonly check: NonNullable<FollowStatusOptions['check']>;
