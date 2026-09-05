@@ -13,8 +13,12 @@ extraResources:
     to: proto
   - from: resources/ffmpeg/${platform}-${arch}
     to: ffmpeg
+  - from: resources/tray
+    to: tray
 npmRebuild: false
+# アイコンはサイズ別に描き分けた build/icons/*.png から scripts/icons/build.mjs で組む (1 枚からの縮小は小サイズで潰れる)
 mac:
+  icon: build/icon.icns
   # Electron と同梱バイナリを署名し、最後にアプリ全体の署名を確定する。
   sign: scripts/mac/sign.mjs
   type: distribution
@@ -32,6 +36,7 @@ mac:
       arch: [arm64]
   category: public.app-category.utilities
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
