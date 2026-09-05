@@ -51,5 +51,6 @@ jobs:
       - run: npm ci
       - uses: ./.github/actions/build-ffmpeg
       - run: npm run build
-      # afterPack が app 内の FFmpeg、対応ソース、多重化を検証する。
-      - run: npx electron-builder ${{ matrix.args }} --dir --publish never
+      # Release と同じ形式を作り、圧縮・インストーラへの格納後も実体を検証する。
+      - run: npx electron-builder ${{ matrix.args }} --publish never
+      - run: npm run ffmpeg:verify-artifacts

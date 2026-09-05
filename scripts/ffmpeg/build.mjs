@@ -54,9 +54,13 @@ const work = mkdtempSync(path.join(cache, 'build-'));
 run('tar', ['-xf', sourceName, '-C', path.basename(work)], cache);
 const sourceDir = path.join(work, `ffmpeg-${source.version}`);
 const args = configureArgs();
+// Windows の make ターゲットにも .exe が必要。コピー対象・再ビルド手順と同じ名前を使う。
+const binaries = ['ffmpeg', 'ffprobe'].map(
+  (name) => name + (process.platform === 'win32' ? '.exe' : ''),
+);
 console.log(`Building FFmpeg ${source.version} for ${target}`);
 run('bash', ['./configure', ...args], sourceDir);
-run('make', [`-j${Math.min(availableParallelism(), 8)}`, 'ffmpeg', 'ffprobe'], sourceDir);
+run('make', [`-j${Math.min(availableParallelism(), 8)}`, ...binaries], sourceDir);
 
 // バイナリとその対応ソース・許諾文を一組として作り、途中失敗した組を配布しない。
 const staging = path.join(work, 'bundle');
@@ -88,9 +92,6 @@ for (const name of [
 ]) {
   copyFileSync(path.join(sourceDir, name), path.join(sourceOut, path.basename(name)));
 }
-const binaries = ['ffmpeg', 'ffprobe'].map(
-  (name) => name + (process.platform === 'win32' ? '.exe' : ''),
-);
 for (const name of binaries) {
   copyFileSync(path.join(sourceDir, name), path.join(staging, name));
   chmodSync(path.join(staging, name), 0o755);
@@ -105,7 +106,7 @@ for (const name of binaries) {
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 writeFileSync(
   path.join(sourceOut, 'rebuild.sh'),
-  `#!/usr/bin/env bash\n# SPDX-License-Identifier: MIT (see packaging/COPYING.build-scripts)\nset -eu\ncd "$(dirname "$0")"\ntar -xf ${quote(sourceName)}\ncd ${quote(`ffmpeg-${source.version}`)}\nbash ./configure ${args.map(quote).join(' ')}\nmake -j2 ffmpeg ffprobe\n`,
+  `#!/usr/bin/env bash\n# SPDX-License-Identifier: MIT (see packaging/COPYING.build-scripts)\nset -eu\ncd "$(dirname "$0")"\ntar -xf ${quote(sourceName)}\ncd ${quote(`ffmpeg-${source.version}`)}\nbash ./configure ${args.map(quote).join(' ')}\nmake -j2 ${binaries.map(quote).join(' ')}\n`,
 );
 let toolchain = `Target: ${target}\n${run(args.includes('--cc=clang') ? 'clang' : 'gcc', ['--version'])}\n${run('make', ['--version'])}`;
 if (process.platform === 'darwin') {
