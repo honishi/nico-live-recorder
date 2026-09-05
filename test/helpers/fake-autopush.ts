@@ -16,6 +16,8 @@ export interface FakeAutoPush {
   notify(channelId: string, data: string): void;
   /** 最新の接続を close フレーム無しで切る (サーバー側の異常切断を真似る) */
   drop(): void;
+  /** 次の HELLO 応答を保留し、返した関数で送信を再開する */
+  holdNextHello(): () => void;
   close(): Promise<void>;
 }
 
@@ -32,18 +34,30 @@ export async function startFakeAutoPush(): Promise<FakeAutoPush> {
   const hellos: Record<string, unknown>[] = [];
   const acks: Record<string, unknown>[] = [];
   let latest: WebSocket | undefined;
+  let nextHelloResponse: Promise<void> | undefined;
 
   wss.on('connection', (socket) => {
     latest = socket;
     socket.on('message', (raw: RawData) => {
       const message = JSON.parse(rawToString(raw)) as Record<string, unknown>;
       switch (message['messageType']) {
-        case 'hello':
+        case 'hello': {
           hellos.push(message);
-          socket.send(
-            JSON.stringify({ messageType: 'hello', status: 200, uaid, use_webpush: true }),
-          );
+          // 接続済みでも HELLO 応答は未処理、という順序をテストから作れるようにする。
+          const sendResponse = (): void => {
+            socket.send(
+              JSON.stringify({ messageType: 'hello', status: 200, uaid, use_webpush: true }),
+            );
+          };
+          const responseGate = nextHelloResponse;
+          nextHelloResponse = undefined;
+          if (responseGate) {
+            void responseGate.then(sendResponse);
+          } else {
+            sendResponse();
+          }
           break;
+        }
         case 'register': {
           const channelId = String(message['channelID']);
           channels.push({ channelId, key: message['key'] as string | undefined });
@@ -82,6 +96,13 @@ export async function startFakeAutoPush(): Promise<FakeAutoPush> {
       );
     },
     drop: () => latest?.terminate(),
+    holdNextHello: () => {
+      let release!: () => void;
+      nextHelloResponse = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return release;
+    },
     close: async () => {
       for (const client of wss.clients) {
         client.terminate();

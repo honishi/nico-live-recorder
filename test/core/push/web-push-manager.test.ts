@@ -211,9 +211,10 @@ describe('WebPushManager', () => {
   });
 
   test('サーバーから切られても再接続して同じ購読を復元し、error や warn は出さない', async () => {
-    installFetch();
+    const fetchLog = installFetch();
     const store = memoryStore();
     const logs: { level: string; text: string }[] = [];
+    let releaseHello: (() => void) | undefined;
     setPushLogger({
       debug: (...args) => logs.push({ level: 'debug', text: args.map(String).join(' ') }),
       info: (...args) => logs.push({ level: 'info', text: args.map(String).join(' ') }),
@@ -227,14 +228,34 @@ describe('WebPushManager', () => {
         autoPushEndpoint: autopush.url,
       });
       await manager.start();
-      const uaid = store.state!.uaid;
+      const saved = structuredClone(store.state!);
+      const channelIds = [saved.channelId, saved.canary!.channelId];
+      const registrations = fetchLog.filter((l) => l.url.includes('api.push.nicovideo.jp')).length;
+      logs.length = 0;
 
+      // HELLO 応答を保留して、以前の待機条件だけでは処理完了を保証しない順序を再現する。
+      releaseHello = autopush.holdNextHello();
       autopush.drop();
       // 1 秒後に再接続し、保存済みの uaid で hello する
       await waitFor(() => autopush.hellos.length === 2, 5000);
-      expect(autopush.hellos[1]).toMatchObject({ uaid });
+      expect(autopush.hellos[1]).toMatchObject({ uaid: saved.uaid, channelIDs: channelIds });
       await waitFor(() => manager!.getStatus().state === 'connected', 5000);
+      expect(logs.some((l) => /reconnected after \d+s/.test(l.text))).toBe(false);
+      expect(logs.some((l) => l.text.includes('Restored channel IDs from HELLO'))).toBe(false);
 
+      // connected は WebSocket の開通だけを表すので、HELLO 成功後のログまで待つ。
+      releaseHello();
+      await waitFor(() => logs.some((l) => /reconnected after \d+s/.test(l.text)), 5000);
+      expect(logs).toContainEqual({
+        level: 'debug',
+        text: `[AutoPush] Restored channel IDs from HELLO: ${channelIds.join(',')}`,
+      });
+      expect(manager.getStatus()).toMatchObject({ state: 'connected', uaid: saved.uaid });
+      expect(store.state).toEqual(saved);
+      expect(autopush.channels).toHaveLength(2);
+      expect(fetchLog.filter((l) => l.url.includes('api.push.nicovideo.jp')).length).toBe(
+        registrations,
+      );
       expect(logs.filter((l) => l.level !== 'debug')).toEqual([]);
       expect(
         logs.some((l) =>
@@ -243,6 +264,7 @@ describe('WebPushManager', () => {
       ).toBe(true);
       expect(logs.some((l) => /reconnected after \d+s/.test(l.text))).toBe(true);
     } finally {
+      releaseHello?.();
       setPushLogger({
         debug: () => undefined,
         info: () => undefined,
