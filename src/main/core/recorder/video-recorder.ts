@@ -65,6 +65,9 @@ export async function recordVideo(
   const logger = options.logger ?? silentLogger;
   const userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
   const startedAt = new Date();
+  // 片方のトラックが止まったら、他方の取得・認証更新も中断して再開判断へ戻す
+  const tracksController = new AbortController();
+  const tracksSignal = AbortSignal.any([tracksController.signal, ...(signal ? [signal] : [])]);
 
   const client = new NicoClient(options.programId, { cookies: options.cookies, userAgent });
   const info = options.programInfo ?? (await client.getProgramInfo(signal));
@@ -86,7 +89,7 @@ export async function recordVideo(
   const fetchMultivariant = async (stream: HlsStreamInfo) => {
     const response = await fetch(stream.uri, {
       headers: { 'user-agent': userAgent, cookie: cookieHeaderFor(stream.cookies, stream.uri) },
-      signal: AbortSignal.any([AbortSignal.timeout(20_000), ...(signal ? [signal] : [])]),
+      signal: AbortSignal.any([AbortSignal.timeout(20_000), tracksSignal]),
     });
     if (!response.ok) {
       throw new Error(`multivariant playlist の取得に失敗しました (HTTP ${response.status})`);
@@ -136,7 +139,7 @@ export async function recordVideo(
       }
       if (!refreshing) {
         refreshing = (async () => {
-          const stream = await session.refreshStream(signal);
+          const stream = await session.refreshStream(tracksSignal);
           const next = await fetchMultivariant(stream);
           videoTrack.updateSource(next.video.uri);
           if (next.audioUri) {
@@ -251,10 +254,36 @@ export async function recordVideo(
           }, devFailAfterMs)
         : undefined;
 
-    const [videoResult, audioResult] = await Promise.all([
-      videoTrack.run(pipes.video, signal),
-      audioTrack && pipes.audio ? audioTrack.run(pipes.audio, signal) : Promise.resolve(undefined),
+    const runTrack = async (track: HlsTrackDownloader, pipe: Writable): Promise<TrackResult> => {
+      try {
+        const result = await track.run(pipe, tracksSignal);
+        if (result.reason === 'idle') {
+          finishing = true;
+          reason = 'idle';
+          tracksController.abort();
+        }
+        return result;
+      } catch (error) {
+        tracksController.abort();
+        throw error;
+      } finally {
+        // 終わった入力はすぐ閉じる。ffmpeg がもう一方の入力を読み進められるようにする
+        pipe.end();
+      }
+    };
+    const [videoOutcome, audioOutcome] = await Promise.allSettled([
+      runTrack(videoTrack, pipes.video),
+      audioTrack && pipes.audio ? runTrack(audioTrack, pipes.audio) : Promise.resolve(undefined),
     ]);
+    // 両方の後始末を待ってから失敗を伝え、古い取得処理を次の録画に持ち越さない
+    if (videoOutcome.status === 'rejected') {
+      throw videoOutcome.reason;
+    }
+    if (audioOutcome.status === 'rejected') {
+      throw audioOutcome.reason;
+    }
+    const videoResult = videoOutcome.value;
+    const audioResult = audioOutcome.value;
     if (devFailure) {
       throw devFailure;
     }
@@ -283,6 +312,7 @@ export async function recordVideo(
     muxer?.kill();
     throw error;
   } finally {
+    tracksController.abort();
     signal?.removeEventListener('abort', onAbort);
     if (stableTimer) {
       clearTimeout(stableTimer);
@@ -293,3 +323,4 @@ export async function recordVideo(
     session.close();
   }
 }
+import type { Writable } from 'node:stream';

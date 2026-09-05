@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import { recordVideo } from '../../../src/main/core/recorder/video-recorder';
 import { WatchSession } from '../../../src/main/core/nico/watch-session';
 import { FfmpegMuxer } from '../../../src/main/core/nico/ffmpeg';
+import { HlsTrackDownloader } from '../../../src/main/core/nico/hls';
 import {
   NicoLiveProgramStatus,
   type NicoLiveProgramInfo,
@@ -304,6 +305,35 @@ describe('recordVideo', () => {
       }),
     ).rejects.toThrow(/ffmpeg exited with code 3/);
   });
+
+  test.each([0, 1])(
+    'トラック %i が idle なら他方を止めて再開可能な結果を返す',
+    async (idleIndex) => {
+      let index = 0;
+      const stopped = vi.fn();
+      vi.spyOn(HlsTrackDownloader.prototype, 'run').mockImplementation(async (_pipe, signal) => {
+        if (index++ === idleIndex) {
+          return { reason: 'idle', segments: 1, bytes: 1 };
+        }
+        if (!signal?.aborted) {
+          await new Promise<void>((resolve) =>
+            signal?.addEventListener('abort', () => resolve(), { once: true }),
+          );
+        }
+        stopped();
+        return { reason: 'aborted', segments: 1, bytes: 1 };
+      });
+      const result = await recordVideo({
+        programId: 'lv1',
+        outputPath: path.join(dir, 'out.ts'),
+        ffmpegPath,
+        programInfo: programInfo(watch.url),
+      });
+      expect(result.reason).toBe('idle');
+      expect(stopped).toHaveBeenCalledTimes(1);
+      expect(result.ffmpegExitCode).toBe(0);
+    },
+  );
 
   test('ライブ中に abort すると aborted で終わり、ffmpeg は正常終了する', async () => {
     hls.live = true;
