@@ -65,7 +65,6 @@ const END_PROGRAM_REASON = 'END_PROGRAM';
  * ニコ生の視聴 WebSocket (wsapi/v2/watch) のクライアント。
  * startWatching を送って HLS 配信情報 (URI + cookie) を受け取り、
  * 接続中は ping への応答と keepSeat の送信で視聴席を維持する。
- * streamlink の nicolive プラグインの WebSocket 処理を TypeScript に移したもの。
  */
 export class WatchSession extends EventEmitter<WatchSessionEvents> {
   private ws?: WebSocket;
@@ -236,7 +235,7 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
 
   /**
    * 接続を張り直して新しい HLS 配信情報 (cookie 更新) を取得する。
-   * 鍵やセグメントの取得が 403 になったときに使う (streamlink と同じ回復手段)。
+   * 鍵やセグメントの取得が 403 になったときに使う。
    */
   async refreshStream(signal?: AbortSignal): Promise<HlsStreamInfo> {
     this.logger.info('watch ws reconnecting to refresh stream credentials');

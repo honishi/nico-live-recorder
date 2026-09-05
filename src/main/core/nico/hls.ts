@@ -341,7 +341,7 @@ export class HlsTrackDownloader {
         if (lastSeq === undefined && !this.startFromBeginning) {
           fresh = fresh.slice(-LIVE_EDGE_SEGMENTS);
         }
-        // /blank/ セグメントは配信休止中のダミー映像なので除外する (streamlink と同じ)
+        // /blank/ セグメントは配信休止中のダミー映像なので除外する
         fresh = fresh.filter((s) => !s.uri.includes('/blank/'));
 
         for (const segment of fresh) {
