@@ -357,7 +357,7 @@ export class HlsTrackDownloader {
             data = await this.fetchWithRetry(segment.uri, signal, playlistUrl);
           } catch (error) {
             if (error instanceof HlsHttpError && error.status === 404) {
-              this.logger.warn(`${this.label}: segment ${segment.seq} expired, skipping`);
+              this.logger.debug(`${this.label}: segment ${segment.seq} expired, skipping`);
               lastSeq = segment.seq;
               continue;
             }
