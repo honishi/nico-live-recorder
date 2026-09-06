@@ -263,9 +263,10 @@ describe('RecordingManager', () => {
     const started = await manager.startRecording('lv1', 'manual');
     expect(started).toMatchObject({ providerName: 'alice', title: 'タイトル' });
     expect(['starting', 'recording']).toContain(started.state);
-    expect(started.outputDir).toBe(path.join(dir, 'out', 'alice'));
+    expect(started.outputDir).toBe(path.join(dir, 'out', '100_alice'));
 
     const call = await nextRecordCall(0);
+    expect(call.options.outputDir).toBe(started.outputDir);
     expect(call.options.attempt).toBe(1);
     expect(call.options.prefetchBackwardComments).toBe(true);
     // 開始時点で履歴に残り (クラッシュ時の復元用)、進行中の状態は active 側で持つ
@@ -282,6 +283,34 @@ describe('RecordingManager', () => {
     expect(entry.commentsPath).toBe(`${entry.outputDir}/rec.comments.csv`);
     expect(entry.endedAt).toBeDefined();
     expect(manager.hasActiveRecordings()).toBe(false);
+  });
+
+  test.each([
+    ['100', '配信者/名:*?. ', '100_配信者_名___'],
+    ['../100', 'alice', '.._100_alice'],
+    ['100', undefined, '100'],
+    ['100', '', '100'],
+    ['100', '   ', '100'],
+    [undefined, 'alice', 'unknown_alice'],
+    ['', 'alice', 'unknown_alice'],
+    [undefined, undefined, 'unknown'],
+  ] as const)(
+    '配信者 ID %j・名前 %j の保存フォルダは %s',
+    async (providerId, providerName, folder) => {
+      getProgramInfo.mockResolvedValueOnce(info({ providerId, providerName }));
+      const started = await manager.startRecording('lv1', 'manual');
+      const call = await nextRecordCall(0);
+      expect(started.outputDir).toBe(path.join(dir, 'out', folder));
+      expect(call.options.outputDir).toBe(started.outputDir);
+    },
+  );
+
+  test('同名の配信者でも ID が異なれば別のフォルダに保存する', async () => {
+    const first = await manager.startRecording('lv1', 'manual');
+    getProgramInfo.mockResolvedValueOnce(info({ nicoliveProgramId: 'lv2', providerId: '200' }));
+    const second = await manager.startRecording('lv2', 'manual');
+    expect(first.outputDir).toBe(path.join(dir, 'out', '100_alice'));
+    expect(second.outputDir).toBe(path.join(dir, 'out', '200_alice'));
   });
 
   test('映像が異常終了したら、最新の番組情報で連番の別ファイルとして再開する', async () => {

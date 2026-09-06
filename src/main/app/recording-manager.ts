@@ -567,9 +567,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
     const providerName = meta.providerName ?? programInfo.providerName;
     const providerId = meta.providerId ?? programInfo.providerId;
+    // 同名の配信者を区別できるように ID を先頭に付け、名前がなければ ID だけを使う
+    const providerDirId = sanitizeDirName(providerId ?? 'unknown');
     const outputDir = path.join(
       settings.outputDir,
-      sanitizeDirName(providerName ?? providerId ?? 'unknown'),
+      providerName?.trim() ? `${providerDirId}_${sanitizeDirName(providerName)}` : providerDirId,
     );
     // 同じ番組を録り直す場合 (クラッシュ後の再起動など) は、前回のファイルとコメント数を引き継ぐ。
     // 履歴にはファイル生成前の候補パスも残り得るので、実在するものだけを対象にする
