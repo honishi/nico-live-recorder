@@ -7,7 +7,7 @@
 
 ## インストール
 
-[Releases](https://github.com/honishi/nico-live-recorder/releases) からダウンロードしてください。
+[Releases](https://github.com/honishi/nico-live-recorder/releases/latest) からダウンロードしてください。
 
 - **macOS (Apple Silicon)**: `.dmg` を開き、アプリを「アプリケーション」フォルダへ移動します。
 - **Windows (x64)**: `.exe` を実行します。現在は未署名のため、「Windows によって PC が保護されました」と出た場合は「詳細情報」→「実行」を選んでください。
