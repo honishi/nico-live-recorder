@@ -22,7 +22,9 @@ interface FetchLog {
   init?: RequestInit;
 }
 
-function installFetch(options: { registerStatus?: number } = {}): FetchLog[] {
+function installFetch(
+  options: { registerStatus?: number; unregisterStatus?: number } = {},
+): FetchLog[] {
   const log: FetchLog[] = [];
   vi.stubGlobal(
     'fetch',
@@ -43,7 +45,10 @@ function installFetch(options: { registerStatus?: number } = {}): FetchLog[] {
         );
       }
       if (url.includes('api.push.nicovideo.jp')) {
-        return new Response('{}', { status: options.registerStatus ?? 200 });
+        return new Response('{}', {
+          status:
+            (init?.method === 'DELETE' ? options.unregisterStatus : options.registerStatus) ?? 200,
+        });
       }
       if (url.includes('push.example')) {
         return new Response('', { status: 201 });
@@ -285,5 +290,136 @@ describe('WebPushManager', () => {
     await expect(manager.start()).rejects.toThrow(/HTTP 403/);
     expect(store.state?.niconicoRegistered).toBe(false);
     expect(manager.getStatus()).toMatchObject({ state: 'error', niconicoRegistered: false });
+  });
+
+  test.each([false, true])(
+    'reset は保存済み購読を両サーバーから解除して破棄する (停止中: %s)',
+    async (stopped) => {
+      const log = installFetch();
+      const store = memoryStore();
+      const options = {
+        store,
+        cookieHeader: async () => 'user_session=abc',
+        autoPushEndpoint: autopush.url,
+      };
+      manager = new WebPushManager(options);
+      await manager.start();
+      const saved = structuredClone(store.state!);
+      if (stopped) {
+        await manager.stop();
+        manager = new WebPushManager(options);
+      }
+
+      await manager.reset();
+
+      const request = log.find((entry) => entry.init?.method === 'DELETE');
+      expect(request?.init?.headers).toMatchObject({ Cookie: 'user_session=abc' });
+      expect(JSON.parse(request!.init!.body as string)).toEqual({
+        destApp: 'nico_account_webpush',
+        endpoint: { endpoint: saved.endpoint },
+      });
+      await waitFor(() => autopush.unregistered.length === 2);
+      expect(autopush.unregistered).toEqual([saved.channelId, saved.canary!.channelId]);
+      expect(store.state).toBeUndefined();
+      expect(manager.getStatus()).toMatchObject({
+        state: 'stopped',
+        niconicoRegistered: false,
+        endpoint: undefined,
+      });
+      // 解除のための接続では購読を新規登録しない
+      expect(
+        log.filter(
+          (entry) => entry.init?.method === 'POST' && entry.url.includes('api.push.nicovideo.jp'),
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  test('ニコニコの解除に失敗しても購読を破棄し、次回は新規登録する', async () => {
+    const log = installFetch({ unregisterStatus: 503 });
+    const store = memoryStore();
+    let cookie = 'user_session=old';
+    const warn = vi.fn();
+    manager = new WebPushManager({
+      store,
+      cookieHeader: async () => cookie,
+      autoPushEndpoint: autopush.url,
+      logger: { debug() {}, info() {}, warn, error() {} },
+    });
+    await manager.start();
+    const oldEndpoint = store.state!.endpoint;
+
+    await manager.reset();
+    expect(store.state).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith('push: unregister from niconico failed', expect.any(Error));
+    await waitFor(() => autopush.unregistered.length === 2);
+    cookie = 'user_session=new';
+    await manager.start();
+
+    expect(store.state!.endpoint).not.toBe(oldEndpoint);
+    const registrations = log.filter(
+      (entry) => entry.init?.method === 'POST' && entry.url.includes('api.push.nicovideo.jp'),
+    );
+    expect(registrations).toHaveLength(2);
+    expect(registrations[1].init?.headers).toMatchObject({ Cookie: cookie });
+  });
+
+  test('AutoPush に再接続できなくても保存済み購読を破棄する', async () => {
+    installFetch();
+    const store = memoryStore();
+    manager = new WebPushManager({
+      store,
+      cookieHeader: async () => 'user_session=abc',
+      autoPushEndpoint: autopush.url,
+    });
+    await manager.start();
+    await manager.stop();
+    // 閉じたローカルサーバーを使い、外部通信なしで接続失敗を再現する
+    const unavailable = await startFakeAutoPush();
+    await unavailable.close();
+    manager = new WebPushManager({
+      store,
+      cookieHeader: async () => 'user_session=abc',
+      autoPushEndpoint: unavailable.url,
+    });
+    await manager.reset();
+    expect(store.state).toBeUndefined();
+    expect(manager.getStatus().state).toBe('stopped');
+  });
+
+  test('保存済み購読がなければ reset は外部に接続しない', async () => {
+    const log = installFetch();
+    manager = new WebPushManager({
+      store: memoryStore(),
+      cookieHeader: async () => 'user_session=abc',
+      autoPushEndpoint: autopush.url,
+    });
+    await manager.reset();
+    expect(log).toEqual([]);
+    expect(autopush.hellos).toEqual([]);
+  });
+
+  test('起動中の reset は登録完了を待ち、作成された購読を解除する', async () => {
+    const log = installFetch();
+    const store = memoryStore();
+    manager = new WebPushManager({
+      store,
+      cookieHeader: async () => 'user_session=abc',
+      autoPushEndpoint: autopush.url,
+    });
+    const release = autopush.holdNextHello();
+    const starting = manager.start();
+    await waitFor(() => autopush.hellos.length === 1);
+    const resetting = manager.reset();
+    release();
+    await Promise.all([starting, resetting]);
+    expect(
+      log
+        .filter((entry) => entry.url.includes('api.push.nicovideo.jp'))
+        .map((entry) => entry.init?.method),
+    ).toEqual(['POST', 'DELETE']);
+    expect(store.state).toBeUndefined();
+    expect(manager.getStatus().state).toBe('stopped');
+    await waitFor(() => autopush.unregistered.length === 2);
   });
 });

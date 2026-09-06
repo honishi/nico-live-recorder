@@ -188,7 +188,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   });
 
   ipcMain.handle(IPC.login, () => ctx.auth.login(ctx.getMainWindow()));
-  ipcMain.handle(IPC.logout, () => ctx.auth.logout());
+  ipcMain.handle(IPC.logout, () => ctx.manager.logout());
 
   ipcMain.handle(IPC.startRecording, async (_event, input: string) => {
     const match = String(input ?? '').match(/(lv\d+)/);

@@ -160,22 +160,38 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
 
   /** 購読を完全に破棄する (ニコニコ側の登録解除も試みる) */
   reset(): Promise<void> {
+    // 先行処理を待っている間に、解除より後ろへ修復処理が積まれるのを防ぐ
+    this.stopRepairTimer();
     return this.runExclusive(async () => {
       this.stopRepairTimer();
+      // push 無効・対象なしで未起動でも、保存済みの購読を解除する
+      this.state ??= await this.store.load().catch((error) => {
+        this.logger.warn('push: failed to load subscription for unregister', error);
+        return undefined;
+      });
       if (this.state?.endpoint) {
         await this.unregisterFromNiconico(this.state.endpoint).catch((error) =>
           this.logger.warn('push: unregister from niconico failed', error),
         );
       }
-      if (this.client) {
+      // 停止中の購読は既存の UAID で接続し、チャネル解除だけを行う
+      if (this.state && !this.client?.isConnectionOpen()) {
+        await this.connectAutoPush(this.state.uaid, [
+          this.state.channelId,
+          ...(this.state.canary ? [this.state.canary.channelId] : []),
+        ]).catch((error) => this.logger.warn('push: connect for unregister failed', error));
+      }
+      if (this.client?.isConnectionOpen()) {
         for (const channelId of [this.state?.channelId, this.state?.canary?.channelId]) {
           if (channelId) {
-            await this.client.unregisterChannel(channelId).catch(() => undefined);
+            await this.client
+              .unregisterChannel(channelId)
+              .catch((error) => this.logger.warn('push: unregister channel failed', error));
           }
         }
-        this.client.disconnect();
-        this.client = undefined;
       }
+      this.client?.disconnect();
+      this.client = undefined;
       this.state = undefined;
       this.cryptoKeys = undefined;
       await this.store.clear();

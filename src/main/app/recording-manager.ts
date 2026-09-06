@@ -114,6 +114,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   private readonly history: HistoryStore;
   private historyVersionCounter = 0;
   private restarting?: Promise<void>;
+  private loggingOut?: Promise<void>;
   /** 再起動の実行中に別の変更が来た (終わってから最新の設定でもう一度回す) */
   private restartAgain = false;
   private stopped = false;
@@ -344,6 +345,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
   /** ログイン状態や設定の変更を反映して検知を組み直す */
   restartDetection(): Promise<void> {
+    if (this.loggingOut) {
+      return Promise.resolve();
+    }
     if (this.restarting) {
       // 設定は実行の先頭で読むので、途中で来た変更は合流させるだけでは反映されない
       this.restartAgain = true;
@@ -361,7 +365,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   }
 
   private async doRestartDetection(): Promise<void> {
-    if (this.stopped) {
+    if (this.stopped || this.loggingOut) {
       return;
     }
     this.detector?.stop();
@@ -369,6 +373,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
     const settings = this.settings.get();
     const loggedIn = await this.auth.isLoggedIn();
+    // Cookie の読み出し中にログアウトが始まった場合も、検知を再開しない
+    if (this.loggingOut) {
+      return;
+    }
     if (!loggedIn) {
       this.logger.info('detection paused: not logged in');
       await this.stopPush();
@@ -402,6 +410,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       await this.stopPush();
     }
 
+    // push の停止待ちにログアウトが始まった場合も、検知器を作らない
+    if (this.loggingOut) {
+      return;
+    }
     const detector = new ProgramDetector({
       push: this.push,
       cookieHeader: () => this.auth.getCookieHeader(),
@@ -414,7 +426,12 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     for (const programId of this.manuallyStopped) {
       detector.markSeen(programId);
     }
-    detector.on('program', (program) => void this.handleDetected(program));
+    detector.on('program', (program) => {
+      // 停止前から取得中だった通知は、検知器を止めた後に届いても録画しない
+      if (this.detector === detector && !this.loggingOut) {
+        void this.handleDetected(program);
+      }
+    });
     // ポーリングの成否からセッション切れを判定してバナーに出す
     detector.on('polled', () => {
       if (this.authExpired) {
@@ -442,6 +459,39 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     }
     await this.push.stop().catch(() => undefined);
     this.push = undefined;
+  }
+
+  /** Cookie を削除する前に、アカウントに紐づく push 購読を破棄する */
+  logout(): Promise<void> {
+    if (this.loggingOut) {
+      return this.loggingOut;
+    }
+    this.detector?.stop();
+    this.detector = undefined;
+    this.loggingOut = (async () => {
+      try {
+        // 進行中の検知再起動が push を操作し終わってから解除する
+        await this.restarting;
+        const push =
+          this.push ??
+          new WebPushManager({
+            store: this.pushStore,
+            cookieHeader: () => this.auth.getCookieHeader(),
+            logger: prefixLogger(this.logger, 'push'),
+          });
+        await push.reset();
+      } catch (error) {
+        this.logger.warn('push: cleanup on logout failed', error);
+      } finally {
+        // 解除に失敗しても Cookie の削除と画面への通知は行う
+        this.push = undefined;
+        await this.auth.logout();
+      }
+    })().finally(() => {
+      this.loggingOut = undefined;
+      this.emitChange();
+    });
+    return this.loggingOut;
   }
 
   private async handleDetected(program: DetectedProgram): Promise<void> {

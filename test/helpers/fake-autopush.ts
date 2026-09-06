@@ -12,6 +12,7 @@ export interface FakeAutoPush {
   /** 受信した hello メッセージ */
   hellos: Record<string, unknown>[];
   acks: Record<string, unknown>[];
+  unregistered: string[];
   /** 通知を最新の接続に送る */
   notify(channelId: string, data: string): void;
   /** 最新の接続を close フレーム無しで切る (サーバー側の異常切断を真似る) */
@@ -33,6 +34,7 @@ export async function startFakeAutoPush(): Promise<FakeAutoPush> {
   const channels: FakeAutoPush['channels'] = [];
   const hellos: Record<string, unknown>[] = [];
   const acks: Record<string, unknown>[] = [];
+  const unregistered: string[] = [];
   let latest: WebSocket | undefined;
   let nextHelloResponse: Promise<void> | undefined;
 
@@ -71,6 +73,16 @@ export async function startFakeAutoPush(): Promise<FakeAutoPush> {
           );
           break;
         }
+        case 'unregister':
+          unregistered.push(String(message['channelID']));
+          socket.send(
+            JSON.stringify({
+              messageType: 'unregister',
+              status: 200,
+              channelID: message['channelID'],
+            }),
+          );
+          break;
         case 'ack':
           acks.push(message);
           break;
@@ -90,6 +102,7 @@ export async function startFakeAutoPush(): Promise<FakeAutoPush> {
     channels,
     hellos,
     acks,
+    unregistered,
     notify: (channelId, data) => {
       latest?.send(
         JSON.stringify({ messageType: 'notification', channelID: channelId, version: 'v1', data }),

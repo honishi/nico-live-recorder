@@ -80,7 +80,8 @@ vi.mock('../../src/main/core/detector/program-detector', () => ({
 }));
 
 // push は接続せず、起動・停止だけを記録する
-const pushManagers = vi.hoisted(() => [] as { started: boolean }[]);
+const pushManagers = vi.hoisted(() => [] as { started: boolean; stop(): Promise<void> }[]);
+const resetPush = vi.hoisted(() => vi.fn<() => Promise<void>>());
 vi.mock('../../src/main/core/push/web-push-manager', async () => {
   const { EventEmitter: Emitter } = await import('node:events');
   return {
@@ -95,6 +96,10 @@ vi.mock('../../src/main/core/push/web-push-manager', async () => {
       }
       async stop(): Promise<void> {
         this.started = false;
+      }
+      async reset(): Promise<void> {
+        this.started = false;
+        await resetPush();
       }
       getStatus(): unknown {
         return { state: this.started ? 'connected' : 'stopped', niconicoRegistered: false };
@@ -132,12 +137,26 @@ function info(patch: Partial<NicoLiveProgramInfo> = {}): NicoLiveProgramInfo {
 
 function fakeAuth(): NicoAuth {
   const auth = new EventEmitter() as unknown as NicoAuth;
+  let loggedIn = true;
   Object.assign(auth, {
-    isLoggedIn: async () => true,
-    getCookieHeader: async () => 'user_session=x',
-    getCookieRecord: async () => ({ user_session: 'x' }),
+    isLoggedIn: async () => loggedIn,
+    getCookieHeader: async () => (loggedIn ? 'user_session=x' : undefined),
+    getCookieRecord: async () => (loggedIn ? { user_session: 'x' } : undefined),
+    logout: vi.fn(async () => {
+      loggedIn = false;
+      auth.emit('change', false);
+    }),
   });
   return auth;
+}
+
+/** 非同期処理の途中でログアウトする順序を、実時間に頼らず固定する */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 /** 録画本体の呼び出しを 1 件取り出す (まだ来ていなければ待つ) */
@@ -195,6 +214,7 @@ describe('RecordingManager', () => {
   let settings: SettingsStore;
   let history: HistoryStore;
   let manager: RecordingManager;
+  let auth: NicoAuth;
 
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -202,18 +222,20 @@ describe('RecordingManager', () => {
     recordCalls.length = 0;
     detectors.length = 0;
     pushManagers.length = 0;
+    resetPush.mockReset().mockResolvedValue(undefined);
     getProgramInfo.mockReset();
     getProgramInfo.mockResolvedValue(info());
     settings = new SettingsStore(path.join(dir, 'settings.json'), path.join(dir, 'out'));
     settings.update({ pushEnabled: false });
     history = new HistoryStore(path.join(dir, 'history.json'));
+    auth = fakeAuth();
     manager = createManager();
   });
 
   function createManager(overrides: Partial<RecordingManagerOptions> = {}): RecordingManager {
     return new RecordingManager({
       settings,
-      auth: fakeAuth(),
+      auth,
       pushStore: {
         load: async () => undefined,
         save: async () => undefined,
@@ -734,6 +756,92 @@ describe('RecordingManager', () => {
     await manager.startRecording('lv1', 'manual');
     await nextRecordCall(1);
     expect(recordCalls).toHaveLength(2);
+  });
+
+  test('ログアウトは検知を止め、push 解除後に Cookie を削除する。重複要求と設定変更でも再開しない', async () => {
+    const logoutAuth = vi.spyOn(auth, 'logout');
+    settings.update({ pushEnabled: true });
+    settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    await manager.start();
+    const detector = detectors.at(-1)!;
+    const push = pushManagers.at(-1)!;
+    const gate = deferred<void>();
+    resetPush.mockImplementation(async () => {
+      expect(await auth.getCookieHeader()).toBe('user_session=x');
+      expect(detector.running).toBe(false);
+      await gate.promise;
+    });
+
+    const logout = manager.logout();
+    expect(manager.logout()).toBe(logout);
+    await waitFor(() => resetPush.mock.calls.length === 1);
+    expect(logoutAuth).not.toHaveBeenCalled();
+    const detectorCount = detectors.length;
+    settings.update({ pollIntervalSec: 60 });
+    await manager.restartDetection();
+    expect(detectors).toHaveLength(detectorCount);
+    // 停止前から取得中だった通知が遅れて届いても録画しない
+    detector.emit('program', { programId: 'lv1', providerId: '100', source: 'push' });
+    expect(getProgramInfo).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await logout;
+    expect(logoutAuth).toHaveBeenCalledOnce();
+    expect(await auth.isLoggedIn()).toBe(false);
+    expect(push.started).toBe(false);
+    expect(manager.detectorRunning).toBe(false);
+    await manager.restartDetection();
+    expect(manager.detectorRunning).toBe(false);
+  });
+
+  test('push が未起動でも解除し、解除に失敗してもログアウトする', async () => {
+    const logoutAuth = vi.spyOn(auth, 'logout');
+    await manager.start();
+    expect(pushManagers).toHaveLength(0);
+    resetPush.mockRejectedValue(new Error('cleanup failed'));
+    await manager.logout();
+    expect(resetPush).toHaveBeenCalledOnce();
+    expect(logoutAuth).toHaveBeenCalledOnce();
+    expect(await auth.isLoggedIn()).toBe(false);
+  });
+
+  test('ログイン確認待ちの検知再起動はログアウトで再開せず、購読解除へ進む', async () => {
+    const logoutAuth = vi.spyOn(auth, 'logout');
+    const gate = deferred<boolean>();
+    vi.spyOn(auth, 'isLoggedIn').mockReturnValueOnce(gate.promise);
+    const restarting = manager.restartDetection();
+    const logout = manager.logout();
+    settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    gate.resolve(true);
+    await Promise.all([restarting, logout]);
+    expect(detectors).toHaveLength(0);
+    expect(resetPush).toHaveBeenCalledOnce();
+    expect(logoutAuth).toHaveBeenCalledOnce();
+  });
+
+  test('ログアウトしても進行中の録画は停止しない', async () => {
+    await manager.startRecording('lv1', 'manual');
+    const call = await nextRecordCall(0);
+    await manager.logout();
+    expect(call.signal?.aborted).toBe(false);
+    expect(manager.hasActiveRecordings()).toBe(true);
+  });
+
+  test('push 停止待ちの検知再起動もログアウトで再開しない', async () => {
+    settings.update({ pushEnabled: true });
+    settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    await manager.start();
+    const gate = deferred<void>();
+    const stop = vi.spyOn(pushManagers.at(-1)!, 'stop').mockReturnValue(gate.promise);
+    settings.update({ pushEnabled: false });
+    await waitFor(() => stop.mock.calls.length === 1);
+    const detectorCount = detectors.length;
+    const logout = manager.logout();
+    gate.resolve();
+    await logout;
+    expect(detectors).toHaveLength(detectorCount);
+    expect(manager.detectorRunning).toBe(false);
+    expect(resetPush).toHaveBeenCalledOnce();
   });
 
   test('検知の再起動中に来た設定変更は、終わってから最新の設定で反映する', async () => {
