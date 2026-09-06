@@ -15,7 +15,7 @@ import {
 import type { AppLogger } from './app-logger';
 import type { NicoAuth } from './auth';
 import { FollowStatusCache } from './follow-status';
-import { parseUserIdInput, resolveUserNickname } from './nico-user';
+import { checkFollowing, parseUserIdInput, resolveUserNickname } from './nico-user';
 import type { RecordingManager } from './recording-manager';
 import type { SettingsStore } from './settings-store';
 import type { UpdateChecker } from './update-checker';
@@ -89,7 +89,9 @@ function pickUiPatch(patch: Partial<UiState>): Partial<UiState> {
 
 export function registerIpcHandlers(ctx: IpcContext): void {
   // フォロー状態は数分キャッシュし、ログイン状態が変わったら捨てる
-  const followStatus = new FollowStatusCache();
+  const followStatus = new FollowStatusCache({
+    check: (userId, cookie) => checkFollowing(userId, cookie, ctx.logger),
+  });
   ctx.auth.on('change', () => followStatus.clear());
 
   ipcMain.handle(IPC.getStatus, () => buildStatus(ctx));

@@ -1,4 +1,6 @@
+import { inspect } from 'node:util';
 import { DEFAULT_USER_AGENT } from '../vendor/nico-client/internal/userAgent';
+import { silentLogger, type Logger } from '../core/logger';
 import { codedError, ERROR_CODES, type FollowCheckResult } from '../../shared/types';
 
 const NICKNAME_API = 'https://api.live2.nicovideo.jp/api/v1/user/nickname';
@@ -45,6 +47,7 @@ export async function resolveUserNickname(userId: string): Promise<string> {
 export async function checkFollowing(
   userId: string,
   cookieHeader: string,
+  logger: Logger = silentLogger,
 ): Promise<FollowCheckResult> {
   try {
     const response = await fetch(`${FOLLOW_STATUS_API}/${encodeURIComponent(userId)}.json`, {
@@ -60,15 +63,33 @@ export async function checkFollowing(
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) {
+      // 本文や Cookie は記録せず、HTTP ステータスと再試行の目安だけを残す
+      logger.debug(
+        `[follow] user ${userId}: HTTP ${response.status}, retry-after=${response.headers.get('retry-after') ?? 'none'}`,
+      );
       await response.text().catch(() => '');
       return 'unknown';
     }
-    const json = (await response.json()) as { data?: { following?: boolean } };
-    if (typeof json.data?.following === 'boolean') {
+
+    // JSON の構文エラーには本文の断片が含まれるため、例外そのものはログに出さない
+    let json: { data?: { following?: boolean } } | null;
+    try {
+      json = (await response.json()) as typeof json;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      logger.debug(`[follow] user ${userId}: invalid JSON response`);
+      return 'unknown';
+    }
+    if (typeof json?.data?.following === 'boolean') {
       return json.data.following ? 'following' : 'not-following';
     }
+    logger.debug(`[follow] user ${userId}: invalid response (data.following is not boolean)`);
     return 'unknown';
-  } catch {
+  } catch (error) {
+    // fetch failed の内側の cause (接続エラーなど) も残し、画面では従来どおり不明として扱う
+    logger.debug(`[follow] user ${userId}: request failed`, inspect(error, { depth: 3 }));
     return 'unknown';
   }
 }
