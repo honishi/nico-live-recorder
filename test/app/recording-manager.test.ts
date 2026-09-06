@@ -819,12 +819,74 @@ describe('RecordingManager', () => {
     expect(logoutAuth).toHaveBeenCalledOnce();
   });
 
-  test('ログアウトしても進行中の録画は停止しない', async () => {
+  test('ログアウトは全録画の終了と履歴保存を待ってから push 解除と Cookie 削除へ進む', async () => {
+    await manager.startRecording('lv1', 'manual');
+    await manager.startRecording('lv2', 'manual');
+    const first = await nextRecordCall(0);
+    const second = await nextRecordCall(1);
+    const logoutAuth = vi.spyOn(auth, 'logout');
+    const flush = vi.spyOn(history, 'flush');
+    expect(manager.getActiveRecordingCount()).toBe(2);
+    resetPush.mockImplementation(async () => {
+      expect(manager.hasActiveRecordings()).toBe(false);
+      expect(flush).toHaveBeenCalled();
+      expect(history.get('lv1')).toMatchObject({ state: 'done' });
+      expect(history.get('lv2')).toMatchObject({ state: 'done' });
+    });
+
+    const logout = manager.logout();
+    await waitFor(() => first.signal?.aborted === true && second.signal?.aborted === true);
+    expect(resetPush).not.toHaveBeenCalled();
+    expect(logoutAuth).not.toHaveBeenCalled();
+    await expect(manager.startRecording('lv3', 'manual')).rejects.toThrow('ログアウト処理中');
+    first.resolve(finishedResult(first, { video: { reason: 'aborted', video: {} } }));
+    await waitFor(() => history.get('lv1')?.state === 'done');
+    expect(logoutAuth).not.toHaveBeenCalled();
+    second.resolve(finishedResult(second, { video: { reason: 'aborted', video: {} } }));
+    await logout;
+    expect(logoutAuth).toHaveBeenCalledOnce();
+    expect(manager.getActiveRecordingCount()).toBe(0);
+  });
+
+  test('ログアウトは番組情報の取得中の録画開始を取り消す', async () => {
+    const gate = deferred<NicoLiveProgramInfo>();
+    getProgramInfo.mockReturnValue(gate.promise);
+    const starting = manager.startRecording('lv1', 'manual');
+    const cancelled = expect(starting).rejects.toThrow('ログアウトのため');
+    await waitFor(() => getProgramInfo.mock.calls.length === 1);
+    expect(manager.getActiveRecordingCount()).toBe(1);
+    const logout = manager.logout();
+    gate.resolve(info());
+    await Promise.all([cancelled, logout]);
+    expect(recordCalls).toHaveLength(0);
+    expect(manager.getActiveRecordingCount()).toBe(0);
+  });
+
+  test('ログアウトは再開待ちの録画を終了し、次のパートを作らない', async () => {
     await manager.startRecording('lv1', 'manual');
     const call = await nextRecordCall(0);
+    call.resolve(finishedResult(call, { video: { reason: 'idle', video: {} } }));
+    await waitFor(async () => (await manager.getRecordings())[0]?.state === 'starting');
     await manager.logout();
-    expect(call.signal?.aborted).toBe(false);
-    expect(manager.hasActiveRecordings()).toBe(true);
+    expect(history.get('lv1')?.state).toBe('done');
+    expect(recordCalls).toHaveLength(1);
+  });
+
+  test('ログアウトが再開前の番組情報取得と重なっても録画を再開しない', async () => {
+    await manager.startRecording('lv1', 'manual');
+    const call = await nextRecordCall(0);
+    const gate = deferred<NicoLiveProgramInfo>();
+    getProgramInfo.mockReturnValue(gate.promise);
+    call.resolve(finishedResult(call, { video: { reason: 'idle', video: {} } }));
+    await waitFor(async () => (await manager.getRecordings())[0]?.state === 'starting');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await waitFor(() => getProgramInfo.mock.calls.length === 2);
+    const logout = manager.logout();
+    await waitFor(() => call.signal?.aborted === true);
+    gate.resolve(info());
+    await logout;
+    expect(history.get('lv1')?.state).toBe('done');
+    expect(recordCalls).toHaveLength(1);
   });
 
   test('push 停止待ちの検知再起動もログアウトで再開しない', async () => {

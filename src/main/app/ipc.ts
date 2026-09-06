@@ -188,7 +188,36 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   });
 
   ipcMain.handle(IPC.login, () => ctx.auth.login(ctx.getMainWindow()));
-  ipcMain.handle(IPC.logout, () => ctx.manager.logout());
+  // 確認中・解除中の重複要求をまとめ、キャンセルなら購読や Cookie に触れない
+  let pendingLogout: Promise<void> | undefined;
+  ipcMain.handle(IPC.logout, () => {
+    pendingLogout ??= (async () => {
+      const recordingCount = ctx.manager.getActiveRecordingCount();
+      const options: Electron.MessageBoxOptions = {
+        type: 'question',
+        title: 'ログアウト',
+        message: 'ニコニコからログアウトしますか？',
+        detail:
+          recordingCount > 0
+            ? `録画中・開始処理中の ${recordingCount} 件を終了し、放送開始の監視を停止します。録画済みのファイルは保存されます。`
+            : '放送開始の監視を停止します。確認中に録画が始まった場合も終了します。録画済みのファイルは保存されます。',
+        buttons: ['キャンセル', 'ログアウト'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      };
+      const window = ctx.getMainWindow();
+      const result = await (window
+        ? dialog.showMessageBox(window, options)
+        : dialog.showMessageBox(options));
+      if (result.response === 1) {
+        await ctx.manager.logout();
+      }
+    })().finally(() => {
+      pendingLogout = undefined;
+    });
+    return pendingLogout;
+  });
 
   ipcMain.handle(IPC.startRecording, async (_event, input: string) => {
     const match = String(input ?? '').match(/(lv\d+)/);

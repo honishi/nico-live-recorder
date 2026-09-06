@@ -194,6 +194,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     return this.active.size > 0;
   }
 
+  /** 確認ダイアログ用。番組情報の取得中と録画中を重複なく数える */
+  getActiveRecordingCount(): number {
+    return new Set([...this.starting.keys(), ...this.active.keys()]).size;
+  }
+
   /** 合計サイズから削除済みを除くため、条件に合う全件でファイルの有無を確認する */
   async getHistoryPage(query: HistoryQuery): Promise<HistoryPage> {
     const matched = await HistoryStore.checkExistence(this.history.match(query));
@@ -472,6 +477,23 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       try {
         // 進行中の検知再起動が push を操作し終わってから解除する
         await this.restarting;
+        // 新しい開始を止めた上で、録画ファイルと履歴の書き込み完了を待つ
+        const recordings = [...this.active.values()];
+        for (const programId of this.starting.keys()) {
+          this.manuallyStopped.add(programId);
+        }
+        for (const recording of recordings) {
+          this.stopRecording(recording.info.programId);
+        }
+        await Promise.allSettled([
+          ...this.starting.values(),
+          ...recordings.map((recording) => recording.done),
+        ]);
+        try {
+          this.history.flush();
+        } catch (error) {
+          this.logger.error('history: flush on logout failed', error);
+        }
         const push =
           this.push ??
           new WebPushManager({
@@ -570,6 +592,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     source: RecordingSource,
     meta: { title?: string; providerId?: string; providerName?: string } = {},
   ): Promise<RecordingInfo> {
+    // 確認後は、別ウィンドウや遅れて届いた要求から新しい録画を始めない
+    if (this.loggingOut) {
+      return Promise.reject(new Error('ログアウト処理中のため録画を開始できません'));
+    }
     const existing = this.active.get(programId);
     if (existing) {
       return Promise.resolve(existing.info);
@@ -605,10 +631,6 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     }
     if (programInfo.status === NicoLiveProgramStatus.ended || !programInfo.webSocketUrl) {
       throw codedError(ERROR_CODES.programUnavailable, programInfo.status);
-    }
-    // 終了処理が始まっていたら、ここで新しい録画を立ち上げない
-    if (this.stopped) {
-      throw new Error('shutting down');
     }
     this.detector?.markSeen(programId);
     if (this.diskLow) {
@@ -650,6 +672,12 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       videoPaths: previousPaths.length > 0 ? previousPaths : undefined,
       commentsPath: previousCommentsPath,
     };
+    // 番組情報や既存ファイルの取得中に終了・ログアウトが始まった場合も起動しない
+    if (this.stopped || this.loggingOut) {
+      throw new Error(
+        this.loggingOut ? 'ログアウトのため録画開始を取り消しました' : 'shutting down',
+      );
+    }
     const controller = new AbortController();
     const recording: ActiveRecording = {
       info,
@@ -772,6 +800,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               this.logger.warn(`[rec] could not check ${programId} before resuming`, error);
               return undefined;
             });
+          // 番組情報の取得中に停止された場合も、次の録画パートへ進まない
+          if (controller.signal.aborted) {
+            outcome = 'done';
+            break;
+          }
           if (latest?.status === NicoLiveProgramStatus.ended) {
             this.logger.info(`[rec] ${programId} has ended, not resuming`);
             outcome = 'done';

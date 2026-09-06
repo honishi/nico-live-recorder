@@ -23,6 +23,7 @@ export function App(): ReactElement {
   const [logFilter, setLogFilter] = useState<string>();
   const [toast, setToast] = useState<ToastMessage>();
   const [loginPending, setLoginPending] = useState(false);
+  const [logoutPending, setLogoutPending] = useState(false);
   const toastId = useRef(0);
 
   // 初期状態の取得と、main からの更新通知の購読
@@ -86,6 +87,18 @@ export function App(): ReactElement {
   const chooseOutputDir = useCallback(async () => {
     await window.api.chooseOutputDir();
   }, []);
+
+  // 確認ダイアログと登録解除が完了するまで、ログアウトボタンを無効にする
+  const logout = useCallback(async () => {
+    setLogoutPending(true);
+    try {
+      await window.api.logout();
+    } catch {
+      showToast('ログアウトできませんでした。もう一度お試しください。');
+    } finally {
+      setLogoutPending(false);
+    }
+  }, [showToast]);
 
   const onAlertAction = useCallback(
     (alert: AppAlert) => {
@@ -221,8 +234,9 @@ export function App(): ReactElement {
             status={status}
             now={now}
             loginPending={loginPending}
+            logoutPending={logoutPending}
             onLogin={() => void login()}
-            onLogout={() => void window.api.logout()}
+            onLogout={() => void logout()}
             onChooseOutputDir={chooseOutputDir}
           />
         )}

@@ -9,6 +9,7 @@ interface Props {
   status: AppStatus;
   now: number;
   loginPending: boolean;
+  logoutPending: boolean;
   onLogin: () => void;
   onLogout: () => void;
   onChooseOutputDir: () => Promise<void>;
@@ -19,6 +20,7 @@ export function SettingsTab({
   status,
   now,
   loginPending,
+  logoutPending,
   onLogin,
   onLogout,
   onChooseOutputDir,
@@ -200,8 +202,8 @@ export function SettingsTab({
               </span>
             )}
             {status.auth.loggedIn ? (
-              <button className="btn btn-secondary sm" onClick={onLogout}>
-                ログアウト
+              <button className="btn btn-secondary sm" disabled={logoutPending} onClick={onLogout}>
+                {logoutPending ? 'ログアウト処理中…' : 'ログアウト'}
               </button>
             ) : (
               <button className="btn btn-primary sm" disabled={loginPending} onClick={onLogin}>
