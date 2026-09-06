@@ -1,6 +1,6 @@
 # 同梱 FFmpeg のビルドと再配布
 
-issue #33。アプリ本体の MIT ライセンスと、別プロセスで実行する FFmpeg / ffprobe の LGPL-2.1-or-later を分けて扱います。録画・復号機能そのものの法的評価は対象外です。
+アプリ本体の MIT ライセンスと、別プロセスで実行する FFmpeg / ffprobe の LGPL-2.1-or-later を分けて扱います。録画・復号機能そのものの法的評価は対象外です。
 
 ## 選定
 
@@ -99,4 +99,4 @@ macOS arm64 で、ビルドした FFmpeg / ffprobe、パッケージ内の実体
 
 パッケージ内の FFmpeg を指定して `scripts/record.ts lv351328853 30 ./.cache/ffmpeg/live-recordings` を実行し、映像 14 セグメント・音声を保存、FFmpeg 終了コード 0、録画エラーなしを確認しました。検証データは `.cache/ffmpeg/` に隔離しています。
 
-Windows バイナリのビルド・実行と NSIS 展開検証はローカルでは未実行です。上記 CI / Release の Windows ジョブで確認する必要があります。macOS の検証結果を Windows の検証結果として扱いません。
+このローカル検証では Windows バイナリのビルド・実行と NSIS 展開検証は未実行でした。その後の Release 手動実行で、Windows の NSIS 作成・展開後の FFmpeg 検証と macOS の署名・公証を確認しています。結果は [macOS 署名文書の CI 検証記録](mac-signing.md) を参照してください。

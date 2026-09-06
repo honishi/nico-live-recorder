@@ -13,15 +13,18 @@ nico-live-recorder の仕組み、開発の手順、コード構成、リリー�
 録画
   ├─ 視聴 WebSocket (startWatching) → HLS の URI と cookie を取得
   ├─ 映像・音声の playlist を追跡し、セグメントを取得して AES-128 を復号
-  ├─ ffmpeg に 2 本のパイプで渡し、1 本の .ts に多重化
+  ├─ ffmpeg にパイプで渡し、再エンコードせず 1 本の .ts に多重化
   └─ NDGR からコメントを受信し .comments.csv に追記
 ```
 
 - push 通知は **ログイン中のアカウントがフォローしている配信者** の放送開始にだけ届きます。アプリはフォロー状態の確認だけを行い、フォロー操作はしません。
-- 有効な録画対象が 0 件のときは、ポーリングも push の接続も止めます (外部にアクセスしない)。
+- 未ログイン、または有効な録画対象が 0 件のときは、ポーリングも push の接続も止めます。パッケージ版の更新確認やユーザー操作による通信は別に行います。
+- 映像と音声が別 playlist の場合は ffmpeg の fd3 / fd4 に渡します。音声込みの playlist では fd3 だけを使います。master playlist の中で帯域が最大の映像を選びます。
 - HLS を ffmpeg に直接渡さないのは、ニコニコが同名の CloudFront cookie をパス別に複数配るためです (ffmpeg の cookie 管理は名前単位で、正しく送れません)。
 - playlist の再取得は RFC 8216 の下限 (変化ありなら target duration、なしならその半分) を守ります。視聴 WebSocket の再接続は録画ごとに 1 本だけ動かし、試行回数も録画全体で数えます。
-- 映像が途中で止まっても番組が続いていれば、連番付きの別ファイル (`_2.ts`, `_3.ts`, …) で再開します。録画中に出力ファイルが消されたことも検知して、別ファイルで再開します。
+- 映像が途中で止まったら、放送終了や視聴接続情報の有無を確認して、連番付きの別ファイル (`_2.ts`, `_3.ts`, …) で再開を試みます。開始を含め最大 10 回、待機は 5 秒から倍増して最大 60 秒です。録画中に出力ファイルが消されたことも検知して、別ファイルで再開します。これらの再開判断は `RecordingManager` が行います。
+- コメント保存の失敗だけなら映像録画を続けます。映像が異常終了した場合はコメント取得もいったん止め、再開時に同じ CSV への追記を再開します。CSV の新規作成時だけ取得可能な過去コメントも取得します。
+- 手動停止した番組はアプリの実行中は再検知しても録画しません。手動録画で再開できます。録画中は OS の自動スリープを抑止し、終了時は録画の停止とログの書き出しを待ちます (それぞれ最大 15 秒 / 2 秒)。
 - 放送検知の実装は [chrome-nico-alert](https://github.com/honishi/chrome-nico-alert)、コメント取得は stream-journal の nico-client を元にしています。
 
 ## 開発
@@ -30,7 +33,7 @@ Node のバージョンは `.node-version` に固定しています (nodenv な�
 Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` などに使う npm 11 が同梱されます。
 
 ```bash
-npm install
+npm ci
 npm run ffmpeg:build # 録画用 FFmpeg をビルド (前提ツールは下記参照)
 npm run dev          # electron-vite の開発モードで起動
 npm run format       # prettier
@@ -46,13 +49,17 @@ Electron を起動せずに録画部分だけを試すスクリプトもあり�
 npx tsx scripts/record.ts lv123456789 30 ./recordings      # 30 秒だけ録画
 npx tsx scripts/record-comments.ts                          # コメント取得のみ
 NICO_USER_SESSION=... npx tsx scripts/push-listen.ts        # push 購読の疎通確認
-npm run build && npx tsx scripts/e2e-screenshots.ts         # アプリを起動して各タブのスクリーンショット
+npm run build && npx tsx scripts/e2e-screenshots.ts ./.cache/screenshots # macOS で各タブの撮影と実放送の手動録画確認
 ```
 
-検証用に起動するときは、必ず `NLR_USER_DATA` (設定の置き場所) と `NLR_OUTPUT_DIR` (保存先の既定値) を一時ディレクトリにして、本番の設定や録画に触らないようにしてください。`e2e-screenshots.ts` は設定済みです。
+スクリプトはリポジトリ直下で実行します。`record.ts` は録画秒数を省略すると番組終了または Ctrl-C まで動作し、アプリ側の別ファイルへの自動再開は行いません。ログインが必要な放送には `NICO_USER_SESSION` で `user_session` Cookie を渡せます。`record-comments.ts` は既定で直近の放送から 1 件を選び、30 秒取得します。`push-listen.ts` は push とフォロー中番組のポーリングを確認し、録画は行いません。
+
+検証用に起動するときは、必ず `NLR_USER_DATA` (設定の置き場所) と `NLR_OUTPUT_DIR` (保存先の既定値) を一時ディレクトリにして、本番の設定や録画に触らないようにしてください。`NLR_OUTPUT_DIR` は保存済みの設定を上書きしないため、未使用の userData を指定します。`e2e-screenshots.ts` は出力先の下に両方を設定し、CDP のポート 9334 を使います。撮影に加えて実放送を取得し、約 12 秒の録画も行います。
 
 ```bash
-NLR_USER_DATA=/tmp/nlr-userdata NLR_OUTPUT_DIR=/tmp/nlr-recordings npm run dev
+# macOS / Linux のシェル
+nlr_check_dir=$(mktemp -d)
+NLR_USER_DATA="$nlr_check_dir/userdata" NLR_OUTPUT_DIR="$nlr_check_dir/recordings" npm run dev
 ```
 
 失敗後の再開処理は `NLR_DEV_FAIL_VIDEO_AFTER_MS=8000` のように設定して起動すると、映像を強制的に失敗させて確認できます。
@@ -70,9 +77,10 @@ src/main/app/                 Electron 側: 設定、ログイン、録画マネ
 src/renderer/                 React の設定ウィンドウ
 src/shared/                   main と renderer で共有する型・定数・整形
 resources/proto/              NDGR の protobuf 定義
+resources/ffmpeg/             OS/CPU 別の FFmpeg とライセンス・対応ソース (生成物、Git 対象外)
 resources/tray/               トレイアイコン (16px と @1.25x / @1.5x / @2x。黒 = macOS のテンプレート / Windows の明テーマ、白 = Windows の暗テーマ)
 build/                        アプリアイコン (icns / ico と、その元になるサイズ別 PNG) と macOS の entitlements
-test/                         src/main/ を鏡写しにしたテスト。偽サーバーは test/helpers/
+test/                         main・shared・vendor のテスト。偽サーバーは test/helpers/、多重化用メディアは test/fixtures/ffmpeg/
 ```
 
 ### ログ
@@ -85,14 +93,14 @@ test/                         src/main/ を鏡写しにしたテスト。偽サ�
 
 - PR と main への push で GitHub Actions (`.github/workflows/ci.yml`) が ubuntu と windows で format / lint / typecheck / test / build を実行します。macOS arm64 と Windows x64 では FFmpeg のビルドとパッケージ内実体の検証も行います。
 - `v0.1.0` のような `v` 始まりのタグを push すると、macOS (Apple Silicon) と Windows (x64) のパッケージを作り、下書きのリリースに添付します (`release.yml`)。内容を確認してから公開してください。
-- 本家の Release は macOS の署名・公証と、DMG / ZIP 展開後の Gatekeeper / FFmpeg 検証を必須にします。手動実行ではリリースを作らず、検証済み成果物を Actions の artifact に保存します。必要な Secrets と検証手順は [mac-signing.md](mac-signing.md) を参照してください (issue #22)。Windows の署名は issue #23 で扱います。
+- 本家の Release は macOS の署名・公証と、DMG / ZIP 展開後の Gatekeeper / FFmpeg 検証を必須にします。Windows は未署名の NSIS を作り、展開後の FFmpeg を検証します。手動実行ではリリースを作らず、検証済み成果物を Actions の artifact に保存します。必要な Secrets と検証手順は [mac-signing.md](mac-signing.md) を参照してください。
 
 ### 新しいバージョンの表示
 
 - パッケージ版は起動時と 6 時間ごとに、GitHub Releases の最新の正式リリースを認証なしで確認します。設定タブの「情報」から手動確認もできます。開発起動では自動確認しません。
 - 更新があれば画面上部にバージョンと「リリースページを開く」を表示します。ダウンロード・アプリの置き換えはユーザーが手動で行います。アプリからの自動インストール・再起動はありません。
-- 現在の非公開リポジトリや正式リリースがない場合は API が 404 を返すため、「公開された更新情報を取得できません」と表示します。「更新なし」とは区別し、録画・検知は継続します。GitHub のトークンはアプリに持たせません。
-- リポジトリを公開し、成果物を添付した正式リリースを公開すれば、次回の確認から利用できます。コードや設定の切り替え、更新用メタデータ、署名・公証はこの通知機能には不要です。未署名アプリの起動時の制限は別途残ります。
+- リポジトリが非公開、または正式リリースがなく API が 404 を返す場合は、「公開された更新情報を取得できません」と表示します。「更新なし」とは区別し、録画・検知は継続します。GitHub のトークンはアプリに持たせません。
+- 通知先は `src/main/app/update-checker.ts` の `honishi/nico-live-recorder` に固定しています。fork から別のリポジトリのリリースを案内する場合は、この参照先も変更します。通知用メタデータファイルは不要です。配布時の署名・公証要件は上記のリリース手順に従います。
 - 公開時は `package.json` のバージョンとタグ (`v0.2.0` など) を一致させ、その正式リリースを GitHub の Latest に指定してください。下書きとプレリリースは通知しません。バージョンは SemVer で比較します。
 - 手動確認も最低 60 秒間隔に制限します。通信は 10 秒で中断し、API 制限時は最低 1 時間、解除時刻が先ならそこまで待ちます。通信失敗時も、既に検知した更新の案内は保持します。確認状態はメモリ内だけに保持します。
 - 公開前の確認は `test/app/update-checker.test.ts` で API をモックします。公開後は旧バージョンのパッケージ版で、実リリースの通知とリンクを macOS / Windows それぞれで確認してください。

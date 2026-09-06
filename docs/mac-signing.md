@@ -1,6 +1,6 @@
 # macOS の署名と公証
 
-issue #22。GitHub Releases で配布する DMG / ZIP 向けの Developer ID 署名を使います。
+GitHub Releases で配布する DMG / ZIP 向けの Developer ID 署名を使います。
 Bundle ID は `com.honishi.nico-live-recorder`、表示名は `NicoLiveRecorder` です。
 
 ## リリース CI
@@ -133,6 +133,8 @@ security find-identity -v -p codesigning
 `forceCodeSigning` を指定すると、署名用証明書がなければ失敗します。
 
 ```bash
+npm ci
+npm run ffmpeg:build
 npm run build
 npx electron-builder --mac --arm64 --dir --publish never \
   -c.directories.output=.cache/mac-sign-check \
