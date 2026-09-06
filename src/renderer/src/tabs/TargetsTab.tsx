@@ -152,7 +152,7 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
             <span>有効</span>
             <span>名前</span>
             <span>ユーザー ID</span>
-            <span>フォロー</span>
+            <span>フォロー状態</span>
             <span />
           </div>
           <div className="table-scroll" ref={scrollRoot}>
