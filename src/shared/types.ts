@@ -82,6 +82,7 @@ export interface LogEntry {
 
 export interface AuthStatus {
   loggedIn: boolean;
+  revision: number;
 }
 
 export interface PushStatusInfo {
@@ -145,9 +146,19 @@ export interface AppStatus {
 
 export type FollowCheckResult = 'following' | 'not-following' | 'unknown';
 
+/** フォロー確認の結果と、次に問い合わせてよい時刻。時刻は epoch ミリ秒 */
+export interface FollowStatus {
+  result?: FollowCheckResult;
+  stale: boolean;
+  state: 'done' | 'waiting' | 'paused' | 'stopped';
+  retryAt: number;
+  /** 特定のユーザーだけでなく、確認 API 全体の休止 */
+  servicePaused?: boolean;
+}
+
 export interface TargetAddResult {
   target: TargetUser;
-  follow: FollowCheckResult;
+  follow: FollowStatus;
   /** 既に登録済みだった (追加はしていない) */
   alreadyExists: boolean;
 }

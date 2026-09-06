@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { silentLogger } from '../../src/main/core/logger';
 import type { BrowserWindow, MessageBoxOptions, MessageBoxReturnValue } from 'electron';
-import { IPC } from '../../src/shared/types';
+import { IPC, type FollowStatus, type TargetAddResult } from '../../src/shared/types';
 import { registerIpcHandlers, type IpcContext } from '../../src/main/app/ipc';
 
 // ネイティブダイアログと IPC を差し替え、承認前にログアウトへ進まないことを確認する
@@ -87,5 +88,59 @@ describe('ログアウトの確認', () => {
     showMessageBox.mockResolvedValue({ response: 1, checkboxChecked: false });
     await logout();
     expect(performLogout).toHaveBeenCalledOnce();
+  });
+});
+
+describe('フォロー確認とログイン切替', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  test('Cookie取得中にアカウントが変わったら旧Cookieで通信しない', async () => {
+    handle.mockClear();
+    let finish!: (cookie: string) => void;
+    const auth = Object.assign(new EventEmitter(), {
+      revision: 0,
+      getCookieHeader: vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    });
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    registerIpcHandlers({ auth } as unknown as IpcContext);
+    const checkFollow = handle.mock.calls.find(
+      ([channel]) => channel === IPC.checkFollow,
+    )![1] as unknown as (event: unknown, userId: string) => Promise<FollowStatus>;
+    const pending = checkFollow({}, '1');
+    auth.revision += 1;
+    auth.emit('change', true);
+    finish('old-cookie');
+    expect(await pending).toMatchObject({ state: 'waiting' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  test('画面で503を受けた休止期間は対象追加にも適用する', async () => {
+    handle.mockClear();
+    const auth = Object.assign(new EventEmitter(), {
+      revision: 0,
+      getCookieHeader: async () => 'cookie',
+    });
+    const fetch = vi.fn(async () => new Response('', { status: 503 }));
+    vi.stubGlobal('fetch', fetch);
+    registerIpcHandlers({
+      auth,
+      logger: silentLogger,
+      settings: { get: () => ({ targets: [{ userId: '2', name: 'target', enabled: true }] }) },
+    } as unknown as IpcContext);
+    const checkFollow = handle.mock.calls.find(
+      ([channel]) => channel === IPC.checkFollow,
+    )![1] as unknown as (event: unknown, userId: string) => Promise<FollowStatus>;
+    const addTarget = handle.mock.calls.find(
+      ([channel]) => channel === IPC.addTarget,
+    )![1] as unknown as (event: unknown, input: string) => Promise<TargetAddResult>;
+    expect(await checkFollow({}, '1')).toMatchObject({ state: 'paused' });
+    expect((await addTarget({}, '2')).follow).toMatchObject({ state: 'paused' });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

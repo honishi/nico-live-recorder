@@ -3,7 +3,7 @@ import {
   IPC,
   type AppSettings,
   type AppStatus,
-  type FollowCheckResult,
+  type FollowStatus,
   type HistoryPage,
   type HistoryQuery,
   type RecordingInfo,
@@ -35,8 +35,8 @@ const api = {
     ipcRenderer.invoke(IPC.removeTarget, userId),
   setTargetEnabled: (userId: string, enabled: boolean): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.setTargetEnabled, userId, enabled),
-  checkFollow: (userId: string): Promise<FollowCheckResult> =>
-    ipcRenderer.invoke(IPC.checkFollow, userId),
+  checkFollow: (userId: string, manual = false): Promise<FollowStatus> =>
+    ipcRenderer.invoke(IPC.checkFollow, userId, manual),
   login: (): Promise<boolean> => ipcRenderer.invoke(IPC.login),
   logout: (): Promise<void> => ipcRenderer.invoke(IPC.logout),
   startRecording: (input: string): Promise<RecordingInfo> =>

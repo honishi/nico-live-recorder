@@ -1,136 +1,170 @@
 import { FollowStatusCache } from '../../src/main/app/follow-status';
-import type { FollowCheckResult } from '../../src/shared/types';
+import type { FollowingResponse } from '../../src/main/app/nico-user';
+
+// 時間だけを進めて通信開始と休止を検証し、実ネットワークや実時間には依存しない
+function setup() {
+  let now = 0;
+  const check = vi
+    .fn<(...args: string[]) => Promise<FollowingResponse>>()
+    .mockResolvedValue({ result: 'following' });
+  const cache = new FollowStatusCache({ check, now: () => now });
+  return {
+    check,
+    cache,
+    time: (at: number) => {
+      now = at;
+    },
+  };
+}
 
 describe('FollowStatusCache', () => {
-  /** 呼び出しを記録し、resolve を外から制御できる偽の問い合わせ */
-  function fakeCheck(): {
-    check: (userId: string, cookie: string) => Promise<FollowCheckResult>;
-    calls: string[];
-    inFlight: () => number;
-    maxInFlight: () => number;
-    resolveAll: (result?: FollowCheckResult) => void;
-  } {
-    const calls: string[] = [];
-    const pending: Array<(result: FollowCheckResult) => void> = [];
-    let inFlight = 0;
-    let maxInFlight = 0;
-    return {
-      check: (userId) => {
-        calls.push(userId);
-        inFlight += 1;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        return new Promise((resolve) => {
-          pending.push((result) => {
-            inFlight -= 1;
-            resolve(result);
-          });
-        });
-      },
-      calls,
-      inFlight: () => inFlight,
-      maxInFlight: () => maxInFlight,
-      resolveAll: (result = 'following') => {
-        for (const resolve of pending.splice(0)) {
-          resolve(result);
-        }
-      },
-    };
-  }
-
-  test('結果はしばらく保持し、同じユーザーの問い合わせはまとめる', async () => {
-    let now = 0;
-    const fake = fakeCheck();
-    const cache = new FollowStatusCache({ check: fake.check, now: () => now, resultTtlMs: 1000 });
-
-    const first = cache.get('1', 'c');
-    const second = cache.get('1', 'c');
-    expect(fake.calls).toEqual(['1']);
-    fake.resolveAll('following');
-    expect(await Promise.all([first, second])).toEqual(['following', 'following']);
-
-    // 期限内はキャッシュ、期限が切れたら取り直す
-    now = 999;
-    expect(await cache.get('1', 'c')).toBe('following');
-    expect(fake.calls).toHaveLength(1);
-    now = 1000;
-    const again = cache.get('1', 'c');
-    expect(fake.calls).toHaveLength(2);
-    fake.resolveAll('not-following');
-    expect(await again).toBe('not-following');
+  test('1秒未満の連続開始を防ぎ、待機中の対象を勝手に送信しない', async () => {
+    const { check, cache, time } = setup();
+    await cache.get('1', 'cookie');
+    time(999);
+    expect(await cache.get('2', 'cookie')).toMatchObject({ state: 'waiting', result: undefined });
+    time(10_000);
+    expect(check).toHaveBeenCalledTimes(1);
+    await cache.get('3', 'cookie');
+    expect(check.mock.calls.map(([id]) => id)).toEqual(['1', '3']);
   });
 
-  test('unknown は短くしか保持せず、clear で全部捨てる', async () => {
-    let now = 0;
-    const fake = fakeCheck();
-    const cache = new FollowStatusCache({
-      check: fake.check,
-      now: () => now,
-      resultTtlMs: 1000,
-      unknownTtlMs: 100,
+  test('実行は1件だけで、同じユーザーは合流する', async () => {
+    const { check, cache, time } = setup();
+    let finish!: (response: FollowingResponse) => void;
+    check.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const first = cache.get('1', 'cookie');
+    expect(cache.get('1', 'cookie')).toBe(first);
+    time(10_000);
+    expect(await cache.get('2', 'cookie')).toMatchObject({ state: 'waiting' });
+    expect(check).toHaveBeenCalledTimes(1);
+    finish({ result: 'following' });
+    await first;
+    await cache.get('2', 'cookie');
+    expect(check).toHaveBeenCalledTimes(2);
+  });
+
+  test('成功結果は5分保持し、再取得失敗では前回の値を残す', async () => {
+    const { check, cache, time } = setup();
+    expect(await cache.get('1', 'cookie')).toEqual({
+      result: 'following',
+      stale: false,
+      state: 'done',
+      retryAt: 300_000,
     });
-    const first = cache.get('1', 'c');
-    fake.resolveAll('unknown');
-    expect(await first).toBe('unknown');
-    now = 100;
-    const second = cache.get('1', 'c');
-    expect(fake.calls).toHaveLength(2);
-    fake.resolveAll('following');
-    expect(await second).toBe('following');
-
-    cache.clear();
-    void cache.get('1', 'c');
-    expect(fake.calls).toHaveLength(3);
-    fake.resolveAll();
+    time(299_999);
+    await cache.get('1', 'cookie');
+    expect(check).toHaveBeenCalledTimes(1);
+    time(300_000);
+    check.mockResolvedValueOnce({ result: 'unknown', retryable: true });
+    expect(await cache.get('1', 'cookie')).toMatchObject({
+      result: 'following',
+      stale: true,
+      state: 'paused',
+    });
+    time(330_000);
+    expect(await cache.get('1', 'cookie')).toMatchObject({
+      result: 'following',
+      stale: false,
+      state: 'done',
+    });
   });
 
-  test('clear の後は進行中の問い合わせに合流せず、その結果も保存しない', async () => {
-    const fake = fakeCheck();
-    const cache = new FollowStatusCache({ check: fake.check });
+  test('503相当の失敗で全対象を休止し、3回再試行したら停止する', async () => {
+    const { check, cache, time } = setup();
+    check.mockResolvedValue({ result: 'unknown', retryable: true });
+    expect(await cache.get('1', 'cookie')).toMatchObject({
+      state: 'paused',
+      retryAt: 30_000,
+      servicePaused: true,
+    });
+    time(29_999);
+    expect(await cache.get('2', 'cookie', true)).toMatchObject({ state: 'paused' });
+    expect(check).toHaveBeenCalledTimes(1);
+    time(30_000);
+    expect(await cache.get('2', 'cookie')).toMatchObject({ state: 'paused', retryAt: 90_000 });
+    time(90_000);
+    expect(await cache.get('3', 'cookie')).toMatchObject({ state: 'paused', retryAt: 210_000 });
+    time(210_000);
+    expect(await cache.get('4', 'cookie')).toMatchObject({ state: 'stopped', retryAt: 330_000 });
+    time(329_999);
+    await cache.get('5', 'cookie', true);
+    time(1_000_000);
+    expect(await cache.get('6', 'cookie')).toMatchObject({ state: 'stopped' });
+    expect(check).toHaveBeenCalledTimes(4);
+    check.mockResolvedValue({ result: 'following' });
+    expect(await cache.get('6', 'cookie', true)).toMatchObject({ state: 'done' });
+    expect(check).toHaveBeenCalledTimes(5);
+  });
+
+  test('Retry-Afterを守り、成功後は別の失敗済み対象も自動再確認できる', async () => {
+    const { check, cache, time } = setup();
+    check.mockResolvedValueOnce({ result: 'unknown', retryable: true, retryAt: 600_000 });
+    await cache.get('1', 'cookie');
+    time(599_999);
+    await cache.get('2', 'cookie', true);
+    expect(check).toHaveBeenCalledTimes(1);
+    time(600_000);
+    await cache.get('2', 'cookie');
+    time(601_000);
+    expect(await cache.get('1', 'cookie')).toMatchObject({ state: 'done' });
+    expect(check).toHaveBeenCalledTimes(3);
+  });
+
+  test('認証エラーや不正応答は自動再試行せず、手動操作も30秒待つ', async () => {
+    const { check, cache, time } = setup();
+    check.mockResolvedValueOnce({ result: 'unknown', retryable: false });
+    expect(await cache.get('1', 'cookie')).toMatchObject({ state: 'stopped', retryAt: 30_000 });
+    time(29_999);
+    await cache.get('1', 'cookie', true);
+    time(30_000);
+    await cache.get('1', 'cookie');
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(await cache.get('1', 'cookie', true)).toMatchObject({ state: 'done' });
+  });
+
+  test('ログイン切替で旧結果を採用せず、古い通信の終了までは次を開始しない', async () => {
+    const { check, cache, time } = setup();
+    let finish!: (response: FollowingResponse) => void;
+    check.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     const old = cache.get('1', 'old-cookie');
     cache.clear();
-    // 新しいログイン状態の問い合わせは別に始まる
-    const fresh = cache.get('1', 'new-cookie');
-    expect(fake.calls).toEqual(['1', '1']);
-    fake.resolveAll('following');
-    expect(await old).toBe('following');
-    expect(await fresh).toBe('following');
-
-    // 旧世代の結果は保存されず、新世代の結果だけがキャッシュに残る
-    expect(await cache.get('1', 'new-cookie')).toBe('following');
-    expect(fake.calls).toHaveLength(2);
+    time(2000);
+    expect(await cache.get('1', 'new-cookie')).toMatchObject({
+      state: 'waiting',
+      result: undefined,
+    });
+    finish({ result: 'following' });
+    const obsolete = await old;
+    expect(obsolete.state).toBe('waiting');
+    expect(obsolete.result).toBeUndefined();
+    expect(await cache.get('1', 'new-cookie')).toMatchObject({ state: 'done' });
+    expect(check.mock.calls).toEqual([
+      ['1', 'old-cookie'],
+      ['1', 'new-cookie'],
+    ]);
   });
 
-  test('clear の前から順番待ちしていた問い合わせは、古い cookie で外部に出ない', async () => {
-    const fake = fakeCheck();
-    const cache = new FollowStatusCache({ check: fake.check, maxConcurrent: 1 });
-    const running = cache.get('1', 'old-cookie');
-    const waiting = cache.get('2', 'old-cookie');
+  test('キャッシュ破棄でも開始間隔は飛ばさず、旧アカウントの休止は解除する', async () => {
+    const { check, cache, time } = setup();
+    check.mockResolvedValueOnce({ result: 'unknown', retryable: true });
+    await cache.get('1', 'old-cookie');
     cache.clear();
-    const fresh = cache.get('3', 'new-cookie');
-    // 実行中の 1 件が終わると、待っていた旧世代は check を呼ばずに unknown で終わり、新世代だけが外部に出る
-    fake.resolveAll('following');
-    expect(await running).toBe('following');
-    expect(await waiting).toBe('unknown');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fake.calls).toEqual(['1', '3']);
-    fake.resolveAll('following');
-    expect(await fresh).toBe('following');
-  });
-
-  test('同時に問い合わせるのは上限までで、残りは順番待ちする', async () => {
-    const fake = fakeCheck();
-    const cache = new FollowStatusCache({ check: fake.check, maxConcurrent: 3 });
-    const results = Array.from({ length: 10 }, (_, i) => cache.get(String(i), 'c'));
-    await Promise.resolve();
-    expect(fake.inFlight()).toBe(3);
-
-    // 枠が空くたびに次が始まり、最大でも上限を超えない
-    while (fake.inFlight() > 0) {
-      fake.resolveAll();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-    expect(await Promise.all(results)).toHaveLength(10);
-    expect(fake.calls).toHaveLength(10);
-    expect(fake.maxInFlight()).toBe(3);
+    expect(await cache.get('1', 'new-cookie')).toMatchObject({
+      state: 'waiting',
+      result: undefined,
+    });
+    time(1000);
+    expect(await cache.get('1', 'new-cookie')).toMatchObject({ state: 'done' });
   });
 });

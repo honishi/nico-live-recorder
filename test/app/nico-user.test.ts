@@ -1,6 +1,7 @@
 import {
   checkFollowing,
   parseUserIdInput,
+  parseFollowRetryAfter,
   resolveUserNickname,
 } from '../../src/main/app/nico-user';
 import { ERROR_CODES, parseErrorCode } from '../../src/shared/types';
@@ -56,19 +57,19 @@ describe('resolveUserNickname / checkFollowing', () => {
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ data: { following: true } }))),
     );
-    expect(await checkFollowing('1', 'user_session=x')).toBe('following');
+    expect(await checkFollowing('1', 'user_session=x')).toMatchObject({ result: 'following' });
 
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(JSON.stringify({ data: { following: false } }))),
     );
-    expect(await checkFollowing('1', 'user_session=x')).toBe('not-following');
+    expect(await checkFollowing('1', 'user_session=x')).toMatchObject({ result: 'not-following' });
 
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('{}', { status: 403 })),
     );
-    expect(await checkFollowing('1', 'user_session=x')).toBe('unknown');
+    expect(await checkFollowing('1', 'user_session=x')).toMatchObject({ result: 'unknown' });
 
     vi.stubGlobal(
       'fetch',
@@ -76,7 +77,7 @@ describe('resolveUserNickname / checkFollowing', () => {
         throw new Error('offline');
       }),
     );
-    expect(await checkFollowing('1', 'user_session=x')).toBe('unknown');
+    expect(await checkFollowing('1', 'user_session=x')).toMatchObject({ result: 'unknown' });
   });
 
   test.each([401, 403, 429, 503])(
@@ -100,7 +101,9 @@ describe('resolveUserNickname / checkFollowing', () => {
         ),
       );
 
-      expect(await checkFollowing('123', 'user_session=private-cookie', logger)).toBe('unknown');
+      expect(await checkFollowing('123', 'user_session=private-cookie', logger)).toMatchObject({
+        result: 'unknown',
+      });
       expect(logger.debug).toHaveBeenCalledExactlyOnceWith(
         `[follow] user 123: HTTP ${status}, retry-after=60`,
       );
@@ -126,7 +129,9 @@ describe('resolveUserNickname / checkFollowing', () => {
       vi.fn(async () => new Response(body)),
     );
 
-    expect(await checkFollowing('123', 'user_session=x', logger)).toBe('unknown');
+    expect(await checkFollowing('123', 'user_session=x', logger)).toMatchObject({
+      result: 'unknown',
+    });
     expect(logger.debug).toHaveBeenCalledExactlyOnceWith(`[follow] user 123: ${reason}`);
   });
 
@@ -139,7 +144,9 @@ describe('resolveUserNickname / checkFollowing', () => {
     const logger = { ...silentLogger, debug: vi.fn() };
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(error));
 
-    expect(await checkFollowing('123', 'user_session=x', logger)).toBe('unknown');
+    expect(await checkFollowing('123', 'user_session=x', logger)).toMatchObject({
+      result: 'unknown',
+    });
     expect(logger.debug).toHaveBeenCalledExactlyOnceWith(
       '[follow] user 123: request failed',
       expect.stringContaining(error.message),
@@ -160,7 +167,9 @@ describe('resolveUserNickname / checkFollowing', () => {
       vi.fn(async () => response),
     );
 
-    expect(await checkFollowing('123', 'user_session=x', logger)).toBe('unknown');
+    expect(await checkFollowing('123', 'user_session=x', logger)).toMatchObject({
+      result: 'unknown',
+    });
     expect(logger.debug).toHaveBeenCalledExactlyOnceWith(
       '[follow] user 123: request failed',
       expect.stringContaining('The operation was aborted'),
@@ -175,9 +184,53 @@ describe('resolveUserNickname / checkFollowing', () => {
       vi.fn(async () => new Response(JSON.stringify({ data: { following } }))),
     );
 
-    expect(await checkFollowing('123', 'user_session=x', logger)).toBe(
-      following ? 'following' : 'not-following',
-    );
+    expect(await checkFollowing('123', 'user_session=x', logger)).toMatchObject({
+      result: following ? 'following' : 'not-following',
+    });
     expect(logger.debug).not.toHaveBeenCalled();
+  });
+});
+
+describe('フォロー確認の再試行情報', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  test.each([429, 500, 503, 504])('HTTP %i は再試行可能として待機時刻を返す', async (status) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status, headers: { 'retry-after': '60' } })),
+    );
+    const before = Date.now();
+    const result = await checkFollowing('1', 'cookie');
+    expect(result).toMatchObject({ result: 'unknown', retryable: true });
+    expect(result.retryAt).toBeGreaterThanOrEqual(before + 60_000);
+  });
+
+  test.each([401, 403, 404])('HTTP %i は自動再試行しない', async (status) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status })),
+    );
+    expect(await checkFollowing('1', 'cookie')).toMatchObject({
+      result: 'unknown',
+      retryable: false,
+    });
+  });
+
+  test('Retry-After の秒数・日時を読み、不正値と過去の日時は使わない', () => {
+    const now = Date.parse('2026-09-06T00:00:00Z');
+    expect(parseFollowRetryAfter('60', now)).toBe(now + 60_000);
+    expect(parseFollowRetryAfter('Sun, 06 Sep 2026 00:02:00 GMT', now)).toBe(now + 120_000);
+    for (const value of [
+      null,
+      '',
+      '-1',
+      '1.5',
+      'garbage',
+      '0',
+      '99999999999999999999999999999',
+      'Sun, 06 Sep 2026 00:00:00 GMT',
+    ]) {
+      expect(parseFollowRetryAfter(value, now)).toBeUndefined();
+    }
   });
 });

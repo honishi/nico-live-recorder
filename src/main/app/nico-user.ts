@@ -40,6 +40,27 @@ export async function resolveUserNickname(userId: string): Promise<string> {
   return nickname;
 }
 
+/** 通信結果の詳細はメイン側だけで扱い、休止と再試行の判断に使う */
+export interface FollowingResponse {
+  result: FollowCheckResult;
+  retryable?: boolean;
+  retryAt?: number;
+}
+
+/** Retry-After の秒数・HTTP 日付を絶対時刻に変換する。不正な値は使わない */
+export function parseFollowRetryAfter(value: string | null, now = Date.now()): number | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const text = value.trim();
+  const seconds = /^\d+$/.test(text);
+  if (!seconds && !/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(text)) {
+    return undefined;
+  }
+  const at = seconds ? now + Number(text) * 1000 : Date.parse(text);
+  return Number.isSafeInteger(at) && at <= 8_640_000_000_000_000 && at > now ? at : undefined;
+}
+
 /**
  * ログイン中のアカウントがそのユーザーをフォローしているか。
  * 非公開 API なので失敗したら unknown を返す
@@ -48,7 +69,7 @@ export async function checkFollowing(
   userId: string,
   cookieHeader: string,
   logger: Logger = silentLogger,
-): Promise<FollowCheckResult> {
+): Promise<FollowingResponse> {
   try {
     const response = await fetch(`${FOLLOW_STATUS_API}/${encodeURIComponent(userId)}.json`, {
       headers: {
@@ -67,8 +88,13 @@ export async function checkFollowing(
       logger.debug(
         `[follow] user ${userId}: HTTP ${response.status}, retry-after=${response.headers.get('retry-after') ?? 'none'}`,
       );
-      await response.text().catch(() => '');
-      return 'unknown';
+      const retryAt = parseFollowRetryAfter(response.headers.get('retry-after'));
+      await response.body?.cancel().catch(() => undefined);
+      return {
+        result: 'unknown',
+        retryable: response.status === 429 || response.status >= 500,
+        retryAt,
+      };
     }
 
     // JSON の構文エラーには本文の断片が含まれるため、例外そのものはログに出さない
@@ -80,16 +106,16 @@ export async function checkFollowing(
         throw error;
       }
       logger.debug(`[follow] user ${userId}: invalid JSON response`);
-      return 'unknown';
+      return { result: 'unknown' };
     }
     if (typeof json?.data?.following === 'boolean') {
-      return json.data.following ? 'following' : 'not-following';
+      return { result: json.data.following ? 'following' : 'not-following' };
     }
     logger.debug(`[follow] user ${userId}: invalid response (data.following is not boolean)`);
-    return 'unknown';
+    return { result: 'unknown' };
   } catch (error) {
     // fetch failed の内側の cause (接続エラーなど) も残し、画面では従来どおり不明として扱う
     logger.debug(`[follow] user ${userId}: request failed`, inspect(error, { depth: 3 }));
-    return 'unknown';
+    return { result: 'unknown', retryable: true };
   }
 }

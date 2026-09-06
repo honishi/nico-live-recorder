@@ -6,7 +6,7 @@ import {
   IPC,
   type AppSettings,
   type AppStatus,
-  type FollowCheckResult,
+  type FollowStatus,
   type HistoryQuery,
   type TargetAddResult,
   type TargetUser,
@@ -38,7 +38,7 @@ export async function buildStatus(ctx: IpcContext): Promise<AppStatus> {
   return {
     version: ctx.version,
     update: ctx.updates.getStatus(),
-    auth: { loggedIn },
+    auth: { loggedIn, revision: ctx.auth.revision },
     push: ctx.manager.getPushStatus(),
     detectorRunning: ctx.manager.detectorRunning,
     recordings: await ctx.manager.getRecordings(),
@@ -91,8 +91,19 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   // フォロー状態は数分キャッシュし、ログイン状態が変わったら捨てる
   const followStatus = new FollowStatusCache({
     check: (userId, cookie) => checkFollowing(userId, cookie, ctx.logger),
+    logger: ctx.logger,
   });
   ctx.auth.on('change', () => followStatus.clear());
+
+  // Cookie を待っている間の再ログインも検出し、旧アカウントの問い合わせを始めない
+  async function getFollow(userId: string, manual = false): Promise<FollowStatus> {
+    const revision = ctx.auth.revision;
+    const cookie = await ctx.auth.getCookieHeader();
+    if (revision !== ctx.auth.revision) {
+      return { state: 'waiting', stale: false, retryAt: Date.now() + 1000 };
+    }
+    return cookie ? followStatus.get(userId, cookie, manual) : unavailableFollow();
+  }
 
   ipcMain.handle(IPC.getStatus, () => buildStatus(ctx));
   ipcMain.handle(IPC.checkForUpdates, () => ctx.updates.check());
@@ -146,12 +157,11 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     if (!userId) {
       throw codedError(ERROR_CODES.invalidInput);
     }
-    const cookie = await ctx.auth.getCookieHeader();
     const existing = ctx.settings.get().targets.find((t) => t.userId === userId);
     if (existing) {
       return {
         target: existing,
-        follow: cookie ? await followStatus.get(userId, cookie) : 'unknown',
+        follow: await getFollow(userId),
         alreadyExists: true,
       };
     }
@@ -163,8 +173,8 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       addedAt: new Date().toISOString(),
     };
     ctx.settings.upsertTarget(target);
-    const follow: FollowCheckResult = cookie ? await followStatus.get(userId, cookie) : 'unknown';
-    ctx.logger.info(`target added: ${name} (${userId}) follow=${follow}`);
+    const follow = await getFollow(userId);
+    ctx.logger.info(`target added: ${name} (${userId}) follow=${follow.result ?? 'unchecked'}`);
     return { target, follow, alreadyExists: false };
   });
   ipcMain.handle(IPC.restoreTarget, (_event, target: TargetUser) => {
@@ -184,10 +194,12 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   ipcMain.handle(IPC.setTargetEnabled, (_event, userId: string, enabled: boolean) =>
     ctx.settings.setTargetEnabled(String(userId), Boolean(enabled)),
   );
-  ipcMain.handle(IPC.checkFollow, async (_event, userId: string): Promise<FollowCheckResult> => {
-    const cookie = await ctx.auth.getCookieHeader();
-    return cookie ? followStatus.get(String(userId), cookie) : 'unknown';
-  });
+  ipcMain.handle(
+    IPC.checkFollow,
+    async (_event, userId: string, manual?: boolean): Promise<FollowStatus> => {
+      return getFollow(String(userId), manual === true);
+    },
+  );
 
   ipcMain.handle(IPC.login, () => ctx.auth.login(ctx.getMainWindow()));
   // 確認中・解除中の重複要求をまとめ、キャンセルなら購読や Cookie に触れない
@@ -271,4 +283,9 @@ export function registerIpcHandlers(ctx: IpcContext): void {
 
 function clampInt(value: number, range: NumberRange): number {
   return Math.min(range.max, Math.max(range.min, Math.round(value)));
+}
+
+/** 未ログインでは通信も自動再試行も行わない */
+function unavailableFollow(): FollowStatus {
+  return { result: 'unknown', stale: false, state: 'stopped', retryAt: 0 };
 }

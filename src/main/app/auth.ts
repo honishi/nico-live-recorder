@@ -12,9 +12,14 @@ const SESSION_COOKIE = 'user_session';
  */
 export class NicoAuth extends EventEmitter<{ change: [loggedIn: boolean] }> {
   private loginWindow?: BrowserWindow;
+  /** 再ログイン時はログイン中のままでも画面のアカウント依存キャッシュを破棄する */
+  revision = 0;
 
   constructor(private readonly logger: Logger) {
     super();
+    this.on('change', () => {
+      this.revision += 1;
+    });
   }
 
   private get cookies(): Electron.Cookies {
