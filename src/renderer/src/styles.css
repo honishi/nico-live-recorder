@@ -717,7 +717,28 @@ select {
   transition: background 0.6s ease-out;
 }
 
+.table-row.selected {
+  background: var(--accent-weak);
+}
+
+.selection-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: var(--fs-body);
+}
+
+.selection-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .table-row:hover .hover-only {
+  visibility: visible;
+}
+
+.table-row:focus-within .hover-only {
   visibility: visible;
 }
 
@@ -730,7 +751,46 @@ select {
 }
 
 .cols-targets {
-  grid-template-columns: 44px minmax(0, 1.6fr) 104px 96px 52px;
+  grid-template-columns: 20px 32px minmax(0, 1.6fr) 104px 44px 96px 52px;
+}
+
+/* 選択チェックとは別のつまみからドラッグし、挿入位置を線で示す */
+.drag-handle {
+  display: flex;
+  align-items: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: grab;
+}
+
+.drag-handle:hover,
+.drag-handle:focus-visible {
+  color: var(--text);
+  background: var(--accent-weak);
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.table-row.dragging {
+  opacity: 0.5;
+}
+
+.table-row.drop-before {
+  box-shadow: inset 0 2px var(--accent);
+}
+
+.table-row.drop-after {
+  box-shadow: inset 0 -2px var(--accent);
 }
 
 .cols-history {

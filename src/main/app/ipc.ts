@@ -9,6 +9,7 @@ import {
   type FollowStatus,
   type HistoryQuery,
   type TargetAddResult,
+  type TargetRemovalResult,
   type TargetUser,
   type UiState,
 } from '../../shared/types';
@@ -181,15 +182,85 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     if (!target || typeof target.userId !== 'string' || typeof target.name !== 'string') {
       throw codedError(ERROR_CODES.invalidInput);
     }
-    return ctx.settings.upsertTarget({
-      userId: target.userId,
-      name: target.name,
-      enabled: target.enabled !== false,
-      addedAt: typeof target.addedAt === 'string' ? target.addedAt : new Date().toISOString(),
-    });
+    return ctx.settings.restoreTargets([
+      {
+        userId: target.userId,
+        name: target.name,
+        enabled: target.enabled !== false,
+        addedAt: typeof target.addedAt === 'string' ? target.addedAt : new Date().toISOString(),
+      },
+    ]);
   });
   ipcMain.handle(IPC.removeTarget, (_event, userId: string) =>
     ctx.settings.removeTarget(String(userId)),
+  );
+
+  // 取り消しの入力は全件検証してから保存し、不正な項目だけを部分的に復元しない
+  ipcMain.handle(IPC.restoreTargets, (_event, targets: unknown, previousOrder: unknown = []) => {
+    if (
+      !Array.isArray(targets) ||
+      !targets.every(isRestorableTarget) ||
+      !Array.isArray(previousOrder) ||
+      !previousOrder.every(isUserId)
+    ) {
+      throw codedError(ERROR_CODES.invalidInput);
+    }
+    return ctx.settings.restoreTargets(targets, previousOrder);
+  });
+  ipcMain.handle(IPC.moveTarget, (_event, userId: unknown, beforeUserId: unknown) => {
+    if (!isUserId(userId) || (beforeUserId !== null && !isUserId(beforeUserId))) {
+      throw codedError(ERROR_CODES.invalidInput);
+    }
+    return ctx.settings.moveTarget(userId, beforeUserId);
+  });
+
+  // 確認中は重複要求を拒否する。単体削除も同じ保存処理を確認なしで利用する
+  let removingTargets = false;
+  ipcMain.handle(
+    IPC.removeTargets,
+    async (
+      _event,
+      userIds: unknown,
+      confirm: unknown = true,
+    ): Promise<TargetRemovalResult | undefined> => {
+      if (!Array.isArray(userIds) || !userIds.every(isUserId) || typeof confirm !== 'boolean') {
+        throw codedError(ERROR_CODES.invalidInput);
+      }
+      if (removingTargets) {
+        throw new Error('録画対象の削除処理中です');
+      }
+      removingTargets = true;
+      try {
+        const ids = new Set(userIds);
+        const targets = ctx.settings.get().targets.filter((target) => ids.has(target.userId));
+        if (confirm && targets.length > 0) {
+          const options: Electron.MessageBoxOptions = {
+            type: 'question',
+            title: '録画対象から削除',
+            message: `${targets.length} 件の配信者を録画対象から削除しますか？`,
+            detail:
+              '今後の自動録画対象から外します。進行中の録画は継続し、録画ファイルと履歴は残ります。',
+            buttons: ['キャンセル', '削除'],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          };
+          const window = ctx.getMainWindow();
+          const result = await (window
+            ? dialog.showMessageBox(window, options)
+            : dialog.showMessageBox(options));
+          if (result.response !== 1) {
+            return undefined;
+          }
+        }
+        // 確認後に最新の設定から削除し、確認対象以外の追加・変更を保つ
+        const previousOrder = ctx.settings.get().targets.map((target) => target.userId);
+        const removed = ctx.settings.removeTargets(targets.map((target) => target.userId));
+        return { settings: ctx.settings.get(), removed, previousOrder };
+      } finally {
+        removingTargets = false;
+      }
+    },
   );
   ipcMain.handle(IPC.setTargetEnabled, (_event, userId: string, enabled: boolean) =>
     ctx.settings.setTargetEnabled(String(userId), Boolean(enabled)),
@@ -283,6 +354,25 @@ export function registerIpcHandlers(ctx: IpcContext): void {
 
 function clampInt(value: number, range: NumberRange): number {
   return Math.min(range.max, Math.max(range.min, Math.round(value)));
+}
+
+/** IPC で受け付ける配信者 ID は数字の文字列だけにする */
+function isUserId(value: unknown): value is string {
+  return typeof value === 'string' && /^\d+$/.test(value);
+}
+
+function isRestorableTarget(value: unknown): value is TargetUser {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const target = value as Partial<TargetUser>;
+  return (
+    isUserId(target.userId) &&
+    typeof target.name === 'string' &&
+    typeof target.enabled === 'boolean' &&
+    typeof target.addedAt === 'string' &&
+    Number.isFinite(Date.parse(target.addedAt))
+  );
 }
 
 /** 未ログインでは通信も自動再試行も行わない */

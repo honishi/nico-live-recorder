@@ -8,6 +8,7 @@ import {
   type HistoryQuery,
   type RecordingInfo,
   type TargetAddResult,
+  type TargetRemovalResult,
   type TargetUser,
   type UiState,
   type UpdateStatus,
@@ -33,6 +34,12 @@ const api = {
     ipcRenderer.invoke(IPC.restoreTarget, target),
   removeTarget: (userId: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.removeTarget, userId),
+  restoreTargets: (targets: TargetUser[], previousOrder: string[] = []): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.restoreTargets, targets, previousOrder),
+  moveTarget: (userId: string, beforeUserId: string | null): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.moveTarget, userId, beforeUserId),
+  removeTargets: (userIds: string[], confirm = true): Promise<TargetRemovalResult | undefined> =>
+    ipcRenderer.invoke(IPC.removeTargets, userIds, confirm),
   setTargetEnabled: (userId: string, enabled: boolean): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.setTargetEnabled, userId, enabled),
   checkFollow: (userId: string, manual = false): Promise<FollowStatus> =>

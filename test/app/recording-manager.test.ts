@@ -726,6 +726,49 @@ describe('RecordingManager', () => {
     expect(pushManagers.at(-1)?.started).toBe(false);
   });
 
+  test('一括削除は検知を一度だけ更新し、全対象を消しても進行中の録画は止めない', async () => {
+    settings.restoreTargets(
+      ['100', '200', '300'].map((userId) => ({
+        userId,
+        name: userId,
+        enabled: true,
+        addedAt: '2026-01-01T00:00:00Z',
+      })),
+    );
+    await manager.start();
+    await manager.startRecording('lv1', 'manual');
+    const recording = await nextRecordCall(0);
+    const detectorCount = detectors.length;
+
+    settings.removeTargets(['100', '200']);
+    await waitFor(() => detectors.length > detectorCount);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectors).toHaveLength(detectorCount + 1);
+    expect(recording.signal?.aborted).toBe(false);
+
+    settings.removeTargets(['300']);
+    await waitFor(() => !manager.detectorRunning);
+    expect(manager.hasActiveRecordings()).toBe(true);
+    expect(recording.signal?.aborted).toBe(false);
+  });
+
+  test('対象の並び替えは検知器を再起動しない', async () => {
+    settings.restoreTargets(
+      ['100', '200'].map((userId) => ({
+        userId,
+        name: userId,
+        enabled: true,
+        addedAt: '2026-01-01T00:00:00Z',
+      })),
+    );
+    await manager.start();
+    const detectorCount = detectors.length;
+    settings.moveTarget('200', '100');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectors).toHaveLength(detectorCount);
+    expect(detectors.at(-1)?.running).toBe(true);
+  });
+
   test('無関係な設定で検知器を作り直さず、再接続後も手動停止を保持する', async () => {
     settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
     await manager.start();

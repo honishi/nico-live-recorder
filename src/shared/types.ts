@@ -8,6 +8,13 @@ export interface TargetUser {
   addedAt: string;
 }
 
+/** 実際に削除できた対象だけを取り消しに使う */
+export interface TargetRemovalResult {
+  settings: AppSettings;
+  removed: TargetUser[];
+  previousOrder: string[];
+}
+
 export type TabId = 'recordings' | 'targets' | 'history' | 'log' | 'settings';
 
 /** ウィンドウを閉じても保持する UI の状態 */
@@ -205,6 +212,9 @@ export const IPC = {
   addTarget: 'targets:add',
   restoreTarget: 'targets:restore',
   removeTarget: 'targets:remove',
+  restoreTargets: 'targets:restoreMany',
+  removeTargets: 'targets:removeMany',
+  moveTarget: 'targets:move',
   setTargetEnabled: 'targets:setEnabled',
   checkFollow: 'targets:checkFollow',
   login: 'auth:login',

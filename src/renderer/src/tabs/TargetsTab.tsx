@@ -1,14 +1,24 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
-import type { FollowCheckResult, FollowStatus, TargetUser } from '@shared/types';
+import type {
+  AppSettings,
+  FollowCheckResult,
+  FollowStatus,
+  TargetRemovalResult,
+  TargetUser,
+} from '@shared/types';
 import { FollowRequests, type FollowView } from '@shared/follow-requests';
 import { EmptyState } from '../components/Shell';
 import { describeError } from '../lib/errors';
+import { SelectionToolbar } from '../components/SelectionToolbar';
+import { useTargetSelection } from '../hooks/useTargetSelection';
+import { useTargetDrag } from '../hooks/useTargetDrag';
 
 interface Props {
   targets: TargetUser[];
   loggedIn: boolean;
   now: number;
-  onRemoved: (target: TargetUser) => void;
+  onRemoved: (result: TargetRemovalResult) => void;
+  onReordered: (settings: AppSettings) => void;
 }
 
 const FOLLOW_LABELS: Record<FollowCheckResult, string> = {
@@ -17,14 +27,55 @@ const FOLLOW_LABELS: Record<FollowCheckResult, string> = {
   unknown: '不明',
 };
 
-export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactElement {
+export function TargetsTab({
+  targets,
+  loggedIn,
+  now,
+  onRemoved,
+  onReordered,
+}: Props): ReactElement {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<string>();
   const [error, setError] = useState<string>();
   const [flash, setFlash] = useState<string>();
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string>();
+  const removingRef = useRef(false);
+  const [reordering, setReordering] = useState(false);
+  const [reorderError, setReorderError] = useState<string>();
+  const reorderingRef = useRef(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selection = useTargetSelection(targets.map((target) => target.userId));
+  const busy = pending !== undefined || removing || reordering;
   const [view, setView] = useState<FollowView>({ entries: {} });
   const requests = useRef<FollowRequests | undefined>(undefined);
   const scrollRoot = useRef<HTMLDivElement>(null);
+
+  // 保存中は別の順序変更を開始せず、失敗したら元の一覧と選択をそのまま残す
+  const move = async (userId: string, beforeUserId: string | null): Promise<void> => {
+    if (pending || removingRef.current || reorderingRef.current) {
+      return;
+    }
+    reorderingRef.current = true;
+    setReordering(true);
+    setReorderError(undefined);
+    try {
+      onReordered(await window.api.moveTarget(userId, beforeUserId));
+    } catch (e) {
+      setReorderError(describeError(e, '並び順を保存できませんでした。もう一度お試しください。'));
+    } finally {
+      reorderingRef.current = false;
+      setReordering(false);
+    }
+  };
+  const drag = useTargetDrag(scrollRoot, move);
+  // 全選択の中間状態は DOM のプロパティで設定する
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate =
+        selection.selectedIds.size > 0 && selection.selectedIds.size < targets.length;
+    }
+  }, [selection.selectedIds.size, targets.length]);
   // 録画・ログの更新で settings が再取得されても、同じ対象の表示監視は張り直さない
   const followTargetsKey = targets
     .filter((target) => target.enabled)
@@ -81,7 +132,7 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
   const add = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     const value = input.trim();
-    if (!value || pending) {
+    if (!value || pending || removingRef.current || reorderingRef.current) {
       return;
     }
     setPending(value);
@@ -103,10 +154,27 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
     }
   };
 
-  const remove = async (target: TargetUser): Promise<void> => {
-    await window.api.removeTarget(target.userId);
-    requests.current?.setVisible(target.userId, false);
-    onRemoved(target);
+  const remove = async (userIds: string[], confirm = true): Promise<void> => {
+    if (userIds.length === 0 || pending || removingRef.current || reorderingRef.current) {
+      return;
+    }
+    removingRef.current = true;
+    setRemoving(true);
+    setRemoveError(undefined);
+    try {
+      const result = await window.api.removeTargets(userIds, confirm);
+      if (result) {
+        for (const target of result.removed) {
+          requests.current?.setVisible(target.userId, false);
+        }
+        onRemoved(result);
+      }
+    } catch (e) {
+      setRemoveError(describeError(e, '削除できませんでした。もう一度お試しください。'));
+    } finally {
+      removingRef.current = false;
+      setRemoving(false);
+    }
   };
 
   const notFollowing = targets.some(
@@ -132,14 +200,40 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
               setInput(e.target.value);
               setError(undefined);
             }}
-            disabled={pending !== undefined}
+            disabled={busy}
           />
-          <button className="btn btn-primary" disabled={pending !== undefined || !input.trim()}>
+          <button className="btn btn-primary" disabled={busy || !input.trim()}>
             {pending ? '追加中…' : '追加'}
           </button>
         </div>
         {error && <span className="field-error">{error}</span>}
       </form>
+
+      {targets.length > 0 && (
+        <SelectionToolbar
+          count={selection.selectedIds.size}
+          disabled={busy}
+          onClear={selection.clear}
+        >
+          <button
+            className="btn"
+            disabled={busy || selection.selectedIds.size === 0}
+            onClick={() => void remove([...selection.selectedIds])}
+          >
+            {removing ? '削除中…' : '削除'}
+          </button>
+        </SelectionToolbar>
+      )}
+      {removeError && (
+        <p className="field-error" role="alert">
+          {removeError}
+        </p>
+      )}
+      {reorderError && (
+        <p className="field-error" role="alert">
+          {reorderError}
+        </p>
+      )}
 
       {targets.length === 0 && !pending ? (
         <EmptyState
@@ -149,40 +243,97 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
       ) : (
         <div className="table grow">
           <div className="table-row head cols-targets">
-            <span>有効</span>
+            <span aria-hidden="true" />
+            <span>
+              <input
+                ref={selectAllRef}
+                type="checkbox"
+                className="checkbox"
+                aria-label="すべての配信者を選択"
+                checked={targets.length > 0 && selection.selectedIds.size === targets.length}
+                disabled={busy || targets.length === 0}
+                onChange={selection.toggleAll}
+              />
+            </span>
             <span>名前</span>
             <span>ユーザー ID</span>
+            <span>有効</span>
             <span>フォロー状態</span>
             <span />
           </div>
-          <div className="table-scroll" ref={scrollRoot}>
+          <div
+            className="table-scroll"
+            ref={scrollRoot}
+            onDragOver={drag.over}
+            onDragLeave={drag.leave}
+            onDrop={drag.drop}
+          >
             {pending && (
               <div className="table-row cols-targets dim">
-                <span>
-                  <input type="checkbox" className="checkbox" checked disabled />
-                </span>
+                <span />
+                <span />
                 <span>解決中…</span>
                 <span className="mono" style={{ fontSize: 'var(--fs-sub)' }}>
                   {pending}
+                </span>
+                <span>
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    aria-label="追加する配信者の自動録画"
+                    checked
+                    disabled
+                  />
                 </span>
                 <span>—</span>
                 <span />
               </div>
             )}
-            {targets.map((target) => (
+            {targets.map((target, index) => (
               <div
                 key={target.userId}
+                data-target-id={target.userId}
                 data-follow-user-id={target.enabled ? target.userId : undefined}
-                className={`table-row cols-targets ${target.enabled ? '' : 'dim'} ${flash === target.userId ? 'flash' : ''}`}
+                className={`table-row cols-targets ${target.enabled ? '' : 'dim'} ${selection.selectedIds.has(target.userId) ? 'selected' : ''} ${flash === target.userId ? 'flash' : ''} ${drag.draggedId === target.userId ? 'dragging' : ''} ${drag.beforeId === target.userId ? 'drop-before' : ''} ${drag.beforeId === null && index === targets.length - 1 ? 'drop-after' : ''}`}
               >
+                <span>
+                  <button
+                    type="button"
+                    className="drag-handle"
+                    draggable={!busy}
+                    disabled={busy || targets.length < 2}
+                    aria-label={`${target.name} (${target.userId}) を並び替え`}
+                    title="ドラッグして並び替え（Alt + ↑ / ↓ でも移動できます）"
+                    onDragStart={(event) => drag.start(event, target.userId)}
+                    onDragEnd={drag.end}
+                    onKeyDown={(event) => {
+                      if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown'))
+                        return;
+                      event.preventDefault();
+                      if (event.key === 'ArrowUp' && index > 0)
+                        void move(target.userId, targets[index - 1].userId);
+                      if (event.key === 'ArrowDown' && index < targets.length - 1)
+                        void move(target.userId, targets[index + 2]?.userId ?? null);
+                    }}
+                  >
+                    <svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true">
+                      <path
+                        d="M3 3h0m6 0h0M3 8h0m6 0h0M3 13h0m6 0h0"
+                        stroke="currentColor"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
+                </span>
                 <span>
                   <input
                     type="checkbox"
                     className="checkbox"
-                    checked={target.enabled}
-                    onChange={() =>
-                      void window.api.setTargetEnabled(target.userId, !target.enabled)
-                    }
+                    aria-label={`${target.name} (${target.userId}) を選択`}
+                    checked={selection.selectedIds.has(target.userId)}
+                    disabled={busy}
+                    onChange={() => selection.toggle(target.userId)}
                   />
                 </span>
                 <span className="ellipsis">{target.name}</span>
@@ -191,6 +342,18 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
                   style={{ fontSize: 'var(--fs-sub)', color: 'var(--text-2)' }}
                 >
                   {target.userId}
+                </span>
+                <span>
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    aria-label={`${target.name} (${target.userId}) の自動録画を有効にする`}
+                    checked={target.enabled}
+                    disabled={busy}
+                    onChange={() =>
+                      void window.api.setTargetEnabled(target.userId, !target.enabled)
+                    }
+                  />
                 </span>
                 <span>
                   <FollowBadge
@@ -210,7 +373,11 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
                   />
                 </span>
                 <span>
-                  <button className="link quiet hover-only" onClick={() => void remove(target)}>
+                  <button
+                    className="link quiet hover-only"
+                    disabled={busy}
+                    onClick={() => void remove([target.userId], false)}
+                  >
                     削除
                   </button>
                 </span>

@@ -5,7 +5,7 @@ import type {
   AppStatus,
   RecordingInfo,
   TabId,
-  TargetUser,
+  TargetRemovalResult,
   UiState,
 } from '@shared/types';
 import { AlertBanner, InfoBar, StatusBand, TabBar, type TabBadges } from './components/Shell';
@@ -128,10 +128,32 @@ export function App(): ReactElement {
   );
 
   const onTargetRemoved = useCallback(
-    (target: TargetUser) => {
-      showToast(`${target.name} を削除しました`, '取り消す', () => {
-        void window.api.restoreTarget(target);
-      });
+    ({ settings: nextSettings, removed, previousOrder }: TargetRemovalResult) => {
+      setSettings(nextSettings);
+      if (removed.length === 0) {
+        return;
+      }
+      // 取り消しは一括で行い、失敗時も同じ削除内容で再試行できるようにする
+      let restoring = false;
+      const restore = (): void => {
+        if (restoring) {
+          return;
+        }
+        restoring = true;
+        showToast('録画対象を元に戻しています…');
+        void window.api.restoreTargets(removed, previousOrder).then(
+          (restoredSettings) => {
+            setSettings(restoredSettings);
+            showToast('録画対象を元に戻しました');
+          },
+          () => {
+            restoring = false;
+            showToast('録画対象を元に戻せませんでした', '再試行', restore);
+          },
+        );
+      };
+      const label = removed.length === 1 ? removed[0].name : `${removed.length} 件の配信者`;
+      showToast(`${label} を録画対象から削除しました`, '取り消す', restore);
     },
     [showToast],
   );
@@ -209,6 +231,7 @@ export function App(): ReactElement {
             targets={settings.targets}
             loggedIn={status.auth.loggedIn}
             onRemoved={onTargetRemoved}
+            onReordered={setSettings}
           />
         )}
         {tab === 'history' && (
