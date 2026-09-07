@@ -1,6 +1,6 @@
 # NicoLiveRecorder
 
-![NicoLiveRecorder の録画画面](docs/images/recording-screen.png)
+![NicoLiveRecorder の録画画面](docs/images/recording-screen.jpg)
 
 登録した配信者のニコニコ生放送を自動で検知し、映像とコメントを保存する Windows / macOS 向けアプリです。
 放送中の番組 ID や URL を指定した手動録画にも対応しています。
