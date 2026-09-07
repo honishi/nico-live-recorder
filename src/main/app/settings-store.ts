@@ -44,8 +44,10 @@ export class SettingsStore extends EventEmitter<{
   }
 
   update(patch: Partial<AppSettings>): AppSettings {
-    this.settings = { ...this.settings, ...patch };
-    this.persist();
+    // 保存に失敗した場合は、メモリ内の設定と変更通知も更新しない
+    const next = { ...this.settings, ...patch };
+    this.persist(next);
+    this.settings = next;
     this.emit('change', this.get());
     return this.get();
   }
@@ -64,19 +66,108 @@ export class SettingsStore extends EventEmitter<{
   }
 
   upsertTarget(target: TargetUser): AppSettings {
-    const targets = this.settings.targets.filter((t) => t.userId !== target.userId);
-    targets.push(target);
-    targets.sort((a, b) => a.addedAt.localeCompare(b.addedAt));
+    // 配列の順序を表示順とし、更新は元の位置、新規追加は末尾に置く
+    const targets = [...this.settings.targets];
+    const index = targets.findIndex((t) => t.userId === target.userId);
+    if (index < 0) {
+      targets.push(target);
+    } else {
+      targets[index] = target;
+    }
+    return this.update({ targets });
+  }
+
+  /** 最新の一覧で指定行の直前へ移動する。null は末尾で、消えた行への移動は無視する */
+  moveTarget(userId: string, beforeUserId: string | null): AppSettings {
+    const current = this.settings.targets;
+    const target = current.find((item) => item.userId === userId);
+    if (!target || userId === beforeUserId) {
+      return this.get();
+    }
+    const targets = current.filter((item) => item.userId !== userId);
+    const index =
+      beforeUserId === null
+        ? targets.length
+        : targets.findIndex((item) => item.userId === beforeUserId);
+    if (index < 0) {
+      return this.get();
+    }
+    targets.splice(index, 0, target);
+    if (targets.every((item, position) => item.userId === current[position].userId)) {
+      return this.get();
+    }
     return this.update({ targets });
   }
 
   removeTarget(userId: string): AppSettings {
-    return this.update({ targets: this.settings.targets.filter((t) => t.userId !== userId) });
+    this.removeTargets([userId]);
+    return this.get();
+  }
+
+  /** 削除直前の情報を返し、複数件でも保存と変更通知を一度にまとめる */
+  removeTargets(userIds: readonly string[]): TargetUser[] {
+    const ids = new Set(userIds);
+    const removed = this.settings.targets.filter((target) => ids.has(target.userId));
+    if (removed.length > 0) {
+      this.update({ targets: this.settings.targets.filter((target) => !ids.has(target.userId)) });
+    }
+    return structuredClone(removed);
+  }
+
+  /** 現在の行順と再登録済みの内容を保ち、削除時に後続だった行の前へ復元する */
+  restoreTargets(
+    targets: readonly TargetUser[],
+    previousOrder: readonly string[] = [],
+  ): AppSettings {
+    const restored = [...this.settings.targets];
+    const existing = new Set(restored.map((target) => target.userId));
+    const missing = new Map<string, TargetUser>();
+    for (const target of targets) {
+      if (!existing.has(target.userId) && !missing.has(target.userId)) {
+        missing.set(target.userId, structuredClone(target));
+      }
+    }
+    if (missing.size === 0) {
+      return this.get();
+    }
+    // 後ろから戻せば、連続して削除した行も元の順序で挿入できる
+    let nextId: string | undefined;
+    for (const userId of [...previousOrder].reverse()) {
+      const target = missing.get(userId);
+      if (target) {
+        const index =
+          nextId === undefined
+            ? restored.length
+            : restored.findIndex((item) => item.userId === nextId);
+        restored.splice(index, 0, target);
+        existing.add(userId);
+        missing.delete(userId);
+      }
+      if (existing.has(userId)) {
+        nextId = userId;
+      }
+    }
+    restored.push(...missing.values());
+    return this.update({ targets: restored });
   }
 
   setTargetEnabled(userId: string, enabled: boolean): AppSettings {
+    return this.setTargetsEnabled([userId], enabled);
+  }
+
+  /** 対象の有効状態だけを一括更新し、変更がなければ保存も通知もしない */
+  setTargetsEnabled(userIds: readonly string[], enabled: boolean): AppSettings {
+    const ids = new Set(userIds);
+    const changed = this.settings.targets.some(
+      (target) => ids.has(target.userId) && target.enabled !== enabled,
+    );
+    if (!changed) {
+      return this.get();
+    }
     return this.update({
-      targets: this.settings.targets.map((t) => (t.userId === userId ? { ...t, enabled } : t)),
+      targets: this.settings.targets.map((target) =>
+        ids.has(target.userId) ? { ...target, enabled } : target,
+      ),
     });
   }
 
@@ -113,10 +204,10 @@ export class SettingsStore extends EventEmitter<{
     }
   }
 
-  private persist(): void {
+  private persist(settings = this.settings): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.settings, null, 2), 'utf8');
+    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8');
     fs.renameSync(tmp, this.filePath);
   }
 }

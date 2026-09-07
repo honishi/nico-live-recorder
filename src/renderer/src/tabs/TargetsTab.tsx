@@ -1,14 +1,24 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
-import type { FollowCheckResult, FollowStatus, TargetUser } from '@shared/types';
+import type {
+  AppSettings,
+  FollowCheckResult,
+  FollowStatus,
+  TargetRemovalResult,
+  TargetUser,
+} from '@shared/types';
 import { FollowRequests, type FollowView } from '@shared/follow-requests';
 import { EmptyState } from '../components/Shell';
 import { describeError } from '../lib/errors';
+import { SelectionToolbar } from '../components/SelectionToolbar';
+import { useTargetSelection } from '../hooks/useTargetSelection';
+import { useTargetDrag } from '../hooks/useTargetDrag';
 
 interface Props {
   targets: TargetUser[];
   loggedIn: boolean;
   now: number;
-  onRemoved: (target: TargetUser) => void;
+  onRemoved: (result: TargetRemovalResult) => void;
+  onSettingsChanged: (settings: AppSettings) => void;
 }
 
 const FOLLOW_LABELS: Record<FollowCheckResult, string> = {
@@ -17,14 +27,65 @@ const FOLLOW_LABELS: Record<FollowCheckResult, string> = {
   unknown: '不明',
 };
 
-export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactElement {
+export function TargetsTab({
+  targets,
+  loggedIn,
+  now,
+  onRemoved,
+  onSettingsChanged,
+}: Props): ReactElement {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<string>();
   const [error, setError] = useState<string>();
   const [flash, setFlash] = useState<string>();
+  const [activeAction, setActiveAction] = useState<'remove' | 'move' | 'enable' | 'disable'>();
+  const [actionError, setActionError] = useState<string>();
+  const actionPendingRef = useRef(false);
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selection = useTargetSelection(targets.map((target) => target.userId));
+  const busy = pending !== undefined || activeAction !== undefined;
   const [view, setView] = useState<FollowView>({ entries: {} });
   const requests = useRef<FollowRequests | undefined>(undefined);
   const scrollRoot = useRef<HTMLDivElement>(null);
+
+  // 削除・並び替え・有効状態の変更で、重複操作の防止と失敗時の表示を揃える
+  const runAction = async (
+    action: NonNullable<typeof activeAction>,
+    perform: () => Promise<void>,
+    failureMessage: string,
+  ): Promise<void> => {
+    if (pending || actionPendingRef.current) {
+      return;
+    }
+    actionPendingRef.current = true;
+    setActiveAction(action);
+    setActionError(undefined);
+    try {
+      await perform();
+    } catch (e) {
+      setActionError(describeError(e, failureMessage));
+    } finally {
+      actionPendingRef.current = false;
+      setActiveAction(undefined);
+    }
+  };
+
+  const move = (userId: string, beforeUserId: string | null): Promise<void> =>
+    runAction(
+      'move',
+      async () => {
+        onSettingsChanged(await window.api.moveTarget(userId, beforeUserId));
+      },
+      '並び順を保存できませんでした。もう一度お試しください。',
+    );
+  const drag = useTargetDrag(scrollRoot, move);
+  // 全選択の中間状態は DOM のプロパティで設定する
+  useEffect(() => {
+    if (selectAllRef.current) {
+      selectAllRef.current.indeterminate =
+        selection.selectedIds.size > 0 && selection.selectedIds.size < targets.length;
+    }
+  }, [selection.selectedIds.size, targets.length]);
   // 録画・ログの更新で settings が再取得されても、同じ対象の表示監視は張り直さない
   const followTargetsKey = targets
     .filter((target) => target.enabled)
@@ -81,7 +142,7 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
   const add = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     const value = input.trim();
-    if (!value || pending) {
+    if (!value || pending || actionPendingRef.current) {
       return;
     }
     setPending(value);
@@ -103,11 +164,41 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
     }
   };
 
-  const remove = async (target: TargetUser): Promise<void> => {
-    await window.api.removeTarget(target.userId);
-    requests.current?.setVisible(target.userId, false);
-    onRemoved(target);
+  const remove = async (userIds: string[], confirm = true): Promise<void> => {
+    if (userIds.length === 0) {
+      return;
+    }
+    await runAction(
+      'remove',
+      async () => {
+        const result = await window.api.removeTargets(userIds, confirm);
+        if (result) {
+          for (const target of result.removed) {
+            requests.current?.setVisible(target.userId, false);
+          }
+          onRemoved(result);
+        }
+      },
+      '削除できませんでした。もう一度お試しください。',
+    );
   };
+
+  // 選択を維持し、反対の操作も続けて行えるようにする。単体のチェックも同じ処理を使う
+  const setEnabled = (userIds: string[], enabled: boolean): Promise<void> =>
+    runAction(
+      enabled ? 'enable' : 'disable',
+      async () => {
+        onSettingsChanged(await window.api.setTargetsEnabled(userIds, enabled));
+      },
+      '有効状態を変更できませんでした。もう一度お試しください。',
+    );
+
+  const canEnable = targets.some(
+    (target) => selection.selectedIds.has(target.userId) && !target.enabled,
+  );
+  const canDisable = targets.some(
+    (target) => selection.selectedIds.has(target.userId) && target.enabled,
+  );
 
   const notFollowing = targets.some(
     (t) =>
@@ -132,14 +223,51 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
               setInput(e.target.value);
               setError(undefined);
             }}
-            disabled={pending !== undefined}
+            disabled={busy}
           />
-          <button className="btn btn-primary" disabled={pending !== undefined || !input.trim()}>
+          <button className="btn btn-primary" disabled={busy || !input.trim()}>
             {pending ? '追加中…' : '追加'}
           </button>
         </div>
         {error && <span className="field-error">{error}</span>}
       </form>
+
+      {targets.length > 0 && (
+        <SelectionToolbar
+          count={selection.selectedIds.size}
+          disabled={busy}
+          onClear={selection.clear}
+        >
+          <button
+            className="btn"
+            disabled={busy || !canEnable}
+            title="選択した配信者の自動録画を有効にする"
+            onClick={() => void setEnabled([...selection.selectedIds], true)}
+          >
+            {activeAction === 'enable' ? '有効化中…' : '有効化'}
+          </button>
+          <button
+            className="btn"
+            disabled={busy || !canDisable}
+            title="選択した配信者の自動録画を無効にする（進行中の録画は継続します）"
+            onClick={() => void setEnabled([...selection.selectedIds], false)}
+          >
+            {activeAction === 'disable' ? '無効化中…' : '無効化'}
+          </button>
+          <button
+            className="btn"
+            disabled={busy || selection.selectedIds.size === 0}
+            onClick={() => void remove([...selection.selectedIds])}
+          >
+            {activeAction === 'remove' ? '削除中…' : '削除'}
+          </button>
+        </SelectionToolbar>
+      )}
+      {actionError && (
+        <p className="field-error" role="alert">
+          {actionError}
+        </p>
+      )}
 
       {targets.length === 0 && !pending ? (
         <EmptyState
@@ -149,40 +277,97 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
       ) : (
         <div className="table grow">
           <div className="table-row head cols-targets">
-            <span>有効</span>
+            <span aria-hidden="true" />
+            <span>
+              <input
+                ref={selectAllRef}
+                type="checkbox"
+                className="checkbox"
+                aria-label="すべての配信者を選択"
+                checked={targets.length > 0 && selection.selectedIds.size === targets.length}
+                disabled={busy || targets.length === 0}
+                onChange={selection.toggleAll}
+              />
+            </span>
             <span>名前</span>
             <span>ユーザー ID</span>
+            <span>有効</span>
             <span>フォロー状態</span>
             <span />
           </div>
-          <div className="table-scroll" ref={scrollRoot}>
+          <div
+            className="table-scroll"
+            ref={scrollRoot}
+            onDragOver={drag.over}
+            onDragLeave={drag.leave}
+            onDrop={drag.drop}
+          >
             {pending && (
               <div className="table-row cols-targets dim">
-                <span>
-                  <input type="checkbox" className="checkbox" checked disabled />
-                </span>
+                <span />
+                <span />
                 <span>解決中…</span>
                 <span className="mono" style={{ fontSize: 'var(--fs-sub)' }}>
                   {pending}
+                </span>
+                <span>
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    aria-label="追加する配信者の自動録画"
+                    checked
+                    disabled
+                  />
                 </span>
                 <span>—</span>
                 <span />
               </div>
             )}
-            {targets.map((target) => (
+            {targets.map((target, index) => (
               <div
                 key={target.userId}
+                data-target-id={target.userId}
                 data-follow-user-id={target.enabled ? target.userId : undefined}
-                className={`table-row cols-targets ${target.enabled ? '' : 'dim'} ${flash === target.userId ? 'flash' : ''}`}
+                className={`table-row cols-targets ${target.enabled ? '' : 'dim'} ${selection.selectedIds.has(target.userId) ? 'selected' : ''} ${flash === target.userId ? 'flash' : ''} ${drag.draggedId === target.userId ? 'dragging' : ''} ${drag.beforeId === target.userId ? 'drop-before' : ''} ${drag.beforeId === null && index === targets.length - 1 ? 'drop-after' : ''}`}
               >
+                <span>
+                  <button
+                    type="button"
+                    className="drag-handle"
+                    draggable={!busy}
+                    disabled={busy || targets.length < 2}
+                    aria-label={`${target.name} (${target.userId}) を並び替え`}
+                    title="ドラッグして並び替え（Alt + ↑ / ↓ でも移動できます）"
+                    onDragStart={(event) => drag.start(event, target.userId)}
+                    onDragEnd={drag.end}
+                    onKeyDown={(event) => {
+                      if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown'))
+                        return;
+                      event.preventDefault();
+                      if (event.key === 'ArrowUp' && index > 0)
+                        void move(target.userId, targets[index - 1].userId);
+                      if (event.key === 'ArrowDown' && index < targets.length - 1)
+                        void move(target.userId, targets[index + 2]?.userId ?? null);
+                    }}
+                  >
+                    <svg width="12" height="16" viewBox="0 0 12 16" aria-hidden="true">
+                      <path
+                        d="M3 3h0m6 0h0M3 8h0m6 0h0M3 13h0m6 0h0"
+                        stroke="currentColor"
+                        strokeWidth="3"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
+                </span>
                 <span>
                   <input
                     type="checkbox"
                     className="checkbox"
-                    checked={target.enabled}
-                    onChange={() =>
-                      void window.api.setTargetEnabled(target.userId, !target.enabled)
-                    }
+                    aria-label={`${target.name} (${target.userId}) を選択`}
+                    checked={selection.selectedIds.has(target.userId)}
+                    disabled={busy}
+                    onChange={() => selection.toggle(target.userId)}
                   />
                 </span>
                 <span className="ellipsis">{target.name}</span>
@@ -191,6 +376,16 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
                   style={{ fontSize: 'var(--fs-sub)', color: 'var(--text-2)' }}
                 >
                   {target.userId}
+                </span>
+                <span>
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    aria-label={`${target.name} (${target.userId}) の自動録画を有効にする`}
+                    checked={target.enabled}
+                    disabled={busy}
+                    onChange={() => void setEnabled([target.userId], !target.enabled)}
+                  />
                 </span>
                 <span>
                   <FollowBadge
@@ -210,7 +405,11 @@ export function TargetsTab({ targets, loggedIn, now, onRemoved }: Props): ReactE
                   />
                 </span>
                 <span>
-                  <button className="link quiet hover-only" onClick={() => void remove(target)}>
+                  <button
+                    className="link quiet hover-only"
+                    disabled={busy}
+                    onClick={() => void remove([target.userId], false)}
+                  >
                     削除
                   </button>
                 </span>
