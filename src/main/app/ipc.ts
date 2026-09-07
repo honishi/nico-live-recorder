@@ -178,37 +178,23 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     ctx.logger.info(`target added: ${name} (${userId}) follow=${follow.result ?? 'unchecked'}`);
     return { target, follow, alreadyExists: false };
   });
-  ipcMain.handle(IPC.restoreTarget, (_event, target: TargetUser) => {
-    if (!target || typeof target.userId !== 'string' || typeof target.name !== 'string') {
-      throw codedError(ERROR_CODES.invalidInput);
-    }
-    return ctx.settings.restoreTargets([
-      {
-        userId: target.userId,
-        name: target.name,
-        enabled: target.enabled !== false,
-        addedAt: typeof target.addedAt === 'string' ? target.addedAt : new Date().toISOString(),
-      },
-    ]);
-  });
-  ipcMain.handle(IPC.removeTarget, (_event, userId: string) =>
-    ctx.settings.removeTarget(String(userId)),
-  );
-
   // 取り消しの入力は全件検証してから保存し、不正な項目だけを部分的に復元しない
   ipcMain.handle(IPC.restoreTargets, (_event, targets: unknown, previousOrder: unknown = []) => {
     if (
       !Array.isArray(targets) ||
-      !targets.every(isRestorableTarget) ||
       !Array.isArray(previousOrder) ||
-      !previousOrder.every(isUserId)
+      !previousOrder.every(isStoredTargetId)
     ) {
       throw codedError(ERROR_CODES.invalidInput);
     }
-    return ctx.settings.restoreTargets(targets, previousOrder);
+    const restored = targets.map(normalizeRestoredTarget);
+    if (!restored.every((target) => target !== undefined)) {
+      throw codedError(ERROR_CODES.invalidInput);
+    }
+    return ctx.settings.restoreTargets(restored, previousOrder);
   });
   ipcMain.handle(IPC.moveTarget, (_event, userId: unknown, beforeUserId: unknown) => {
-    if (!isUserId(userId) || (beforeUserId !== null && !isUserId(beforeUserId))) {
+    if (!isStoredTargetId(userId) || (beforeUserId !== null && !isStoredTargetId(beforeUserId))) {
       throw codedError(ERROR_CODES.invalidInput);
     }
     return ctx.settings.moveTarget(userId, beforeUserId);
@@ -223,7 +209,11 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       userIds: unknown,
       confirm: unknown = true,
     ): Promise<TargetRemovalResult | undefined> => {
-      if (!Array.isArray(userIds) || !userIds.every(isUserId) || typeof confirm !== 'boolean') {
+      if (
+        !Array.isArray(userIds) ||
+        !userIds.every(isStoredTargetId) ||
+        typeof confirm !== 'boolean'
+      ) {
         throw codedError(ERROR_CODES.invalidInput);
       }
       if (removingTargets) {
@@ -262,12 +252,14 @@ export function registerIpcHandlers(ctx: IpcContext): void {
       }
     },
   );
-  ipcMain.handle(IPC.setTargetEnabled, (_event, userId: string, enabled: boolean) =>
-    ctx.settings.setTargetEnabled(String(userId), Boolean(enabled)),
-  );
   // 全件を検証してから一度だけ保存し、検知の再起動を対象の数だけ繰り返さない
   ipcMain.handle(IPC.setTargetsEnabled, (_event, userIds: unknown, enabled: unknown) => {
-    if (!Array.isArray(userIds) || !userIds.every(isUserId) || typeof enabled !== 'boolean') {
+    if (
+      !Array.isArray(userIds) ||
+      !userIds.every(isStoredTargetId) ||
+      typeof enabled !== 'boolean' ||
+      (enabled && !userIds.every(isUserId))
+    ) {
       throw codedError(ERROR_CODES.invalidInput);
     }
     return ctx.settings.setTargetsEnabled(userIds, enabled);
@@ -368,18 +360,33 @@ function isUserId(value: unknown): value is string {
   return typeof value === 'string' && /^\d+$/.test(value);
 }
 
-function isRestorableTarget(value: unknown): value is TargetUser {
+/** ローカルの既存項目は ID が不正でも削除・無効化・移動できるようにする */
+function isStoredTargetId(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/** 復元する属性を限定し、不正な日時は補正、不正な ID は無効状態で戻す */
+function normalizeRestoredTarget(value: unknown): TargetUser | undefined {
   if (typeof value !== 'object' || value === null) {
-    return false;
+    return undefined;
   }
   const target = value as Partial<TargetUser>;
-  return (
-    isUserId(target.userId) &&
-    typeof target.name === 'string' &&
-    typeof target.enabled === 'boolean' &&
-    typeof target.addedAt === 'string' &&
-    Number.isFinite(Date.parse(target.addedAt))
-  );
+  if (
+    !isStoredTargetId(target.userId) ||
+    typeof target.name !== 'string' ||
+    typeof target.enabled !== 'boolean'
+  ) {
+    return undefined;
+  }
+  return {
+    userId: target.userId,
+    name: target.name,
+    enabled: isUserId(target.userId) && target.enabled,
+    addedAt:
+      typeof target.addedAt === 'string' && Number.isFinite(Date.parse(target.addedAt))
+        ? target.addedAt
+        : new Date().toISOString(),
+  };
 }
 
 /** 未ログインでは通信も自動再試行も行わない */

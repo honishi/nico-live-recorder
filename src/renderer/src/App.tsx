@@ -25,21 +25,46 @@ export function App(): ReactElement {
   const [loginPending, setLoginPending] = useState(false);
   const [logoutPending, setLogoutPending] = useState(false);
   const toastId = useRef(0);
+  const uiEdits = useRef({ revision: 0, pending: 0 });
+  const targetsRevision = useRef(0);
+
+  // 対象操作の応答は対象だけに反映し、タブや表示設定の楽観更新を巻き戻さない
+  const applyTargets = useCallback((next: AppSettings) => {
+    targetsRevision.current += 1;
+    setSettings((current) => (current ? { ...current, targets: next.targets } : next));
+  }, []);
 
   // 初期状態の取得と、main からの更新通知の購読
   useEffect(() => {
     let cancelled = false;
-    void Promise.all([window.api.getStatus(), window.api.getSettings()]).then(
-      ([nextStatus, nextSettings]) => {
-        if (!cancelled) {
-          setStatus(nextStatus);
-          setSettings(nextSettings);
-        }
-      },
-    );
+    let latestRequest = 0;
+    const refreshSettings = async (): Promise<void> => {
+      const request = ++latestRequest;
+      const uiRevision = uiEdits.current.revision;
+      const uiPending = uiEdits.current.pending > 0;
+      const targetRevision = targetsRevision.current;
+      const next = await window.api.getSettings();
+      if (cancelled || request !== latestRequest) return;
+      setSettings((current) => {
+        if (!current) return next;
+        // 取得開始後の操作と未保存の UI 更新を優先し、古い応答を混ぜない
+        const keepUi =
+          uiPending || uiEdits.current.pending > 0 || uiRevision !== uiEdits.current.revision;
+        return {
+          ...next,
+          ui: keepUi ? current.ui : next.ui,
+          targets: targetRevision === targetsRevision.current ? next.targets : current.targets,
+        };
+      });
+    };
+    void Promise.all([window.api.getStatus(), refreshSettings()]).then(([nextStatus]) => {
+      if (!cancelled) {
+        setStatus(nextStatus);
+      }
+    });
     const unsubscribe = window.api.onStatusChanged((next) => {
       setStatus(next);
-      void window.api.getSettings().then(setSettings);
+      void refreshSettings();
     });
     return () => {
       cancelled = true;
@@ -61,10 +86,23 @@ export function App(): ReactElement {
     setToast((current) => (current?.id === id ? undefined : current));
   }, []);
 
-  const updateUi = useCallback((patch: Partial<UiState>) => {
-    setSettings((prev) => (prev ? { ...prev, ui: { ...prev.ui, ...patch } } : prev));
-    void window.api.updateUi(patch);
-  }, []);
+  const updateUi = useCallback(
+    (patch: Partial<UiState>) => {
+      uiEdits.current.revision += 1;
+      uiEdits.current.pending += 1;
+      setSettings((prev) => (prev ? { ...prev, ui: { ...prev.ui, ...patch } } : prev));
+      void window.api.updateUi(patch).then(
+        () => {
+          uiEdits.current.pending -= 1;
+        },
+        () => {
+          uiEdits.current.pending -= 1;
+          showToast('画面の状態を保存できませんでした');
+        },
+      );
+    },
+    [showToast],
+  );
 
   const selectTab = useCallback(
     (tab: TabId) => {
@@ -129,7 +167,7 @@ export function App(): ReactElement {
 
   const onTargetRemoved = useCallback(
     ({ settings: nextSettings, removed, previousOrder }: TargetRemovalResult) => {
-      setSettings(nextSettings);
+      applyTargets(nextSettings);
       if (removed.length === 0) {
         return;
       }
@@ -143,7 +181,7 @@ export function App(): ReactElement {
         showToast('録画対象を元に戻しています…');
         void window.api.restoreTargets(removed, previousOrder).then(
           (restoredSettings) => {
-            setSettings(restoredSettings);
+            applyTargets(restoredSettings);
             showToast('録画対象を元に戻しました');
           },
           () => {
@@ -155,7 +193,7 @@ export function App(): ReactElement {
       const label = removed.length === 1 ? removed[0].name : `${removed.length} 件の配信者`;
       showToast(`${label} を録画対象から削除しました`, '取り消す', restore);
     },
-    [showToast],
+    [showToast, applyTargets],
   );
 
   const showLog = useCallback(
@@ -231,7 +269,7 @@ export function App(): ReactElement {
             targets={settings.targets}
             loggedIn={status.auth.loggedIn}
             onRemoved={onTargetRemoved}
-            onSettingsChanged={setSettings}
+            onSettingsChanged={applyTargets}
           />
         )}
         {tab === 'history' && (

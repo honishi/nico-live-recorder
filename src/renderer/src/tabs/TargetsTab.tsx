@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactElement } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactElement,
+} from 'react';
 import type {
   AppSettings,
   FollowCheckResult,
@@ -47,6 +54,21 @@ export function TargetsTab({
   const [view, setView] = useState<FollowView>({ entries: {} });
   const requests = useRef<FollowRequests | undefined>(undefined);
   const scrollRoot = useRef<HTMLDivElement>(null);
+  const focusAfterAction = useRef<{ element: HTMLElement; fallback: HTMLElement[] } | undefined>(
+    undefined,
+  );
+
+  // disabled で外れたフォーカスを描画後に戻す。利用者が別の要素へ移った場合は奪わない
+  useLayoutEffect(() => {
+    if (busy) return;
+    const saved = focusAfterAction.current;
+    focusAfterAction.current = undefined;
+    if (!saved || document.activeElement !== document.body) return;
+    const target = [saved.element, ...saved.fallback].find(
+      (element) => element.isConnected && !element.matches(':disabled'),
+    );
+    target?.focus();
+  }, [busy]);
 
   // 削除・並び替え・有効状態の変更で、重複操作の防止と失敗時の表示を揃える
   const runAction = async (
@@ -58,12 +80,31 @@ export function TargetsTab({
       return;
     }
     actionPendingRef.current = true;
+    const focused = document.activeElement;
+    if (focused instanceof HTMLElement && focused !== document.body) {
+      const row = focused.closest('[data-target-id]');
+      // 削除した行なら隣の選択欄、無効になった一括ボタンなら次の操作へ戻す
+      const fallback = row
+        ? [
+            row.nextElementSibling?.querySelector<HTMLElement>('input'),
+            row.previousElementSibling?.querySelector<HTMLElement>('input'),
+            document.querySelector<HTMLElement>('.field .input'),
+          ].filter((element): element is HTMLElement => element != null)
+        : [...(focused.parentElement?.querySelectorAll<HTMLElement>('button') ?? [])];
+      focusAfterAction.current = { element: focused, fallback };
+    }
     setActiveAction(action);
     setActionError(undefined);
     try {
       await perform();
     } catch (e) {
-      setActionError(describeError(e, failureMessage));
+      setActionError(
+        describeError(
+          e,
+          failureMessage,
+          '保存された配信者情報が正しくありません。削除して正しいユーザー ID で追加し直してください。',
+        ),
+      );
     } finally {
       actionPendingRef.current = false;
       setActiveAction(undefined);
@@ -87,10 +128,12 @@ export function TargetsTab({
     }
   }, [selection.selectedIds.size, targets.length]);
   // 録画・ログの更新で settings が再取得されても、同じ対象の表示監視は張り直さない
-  const followTargetsKey = targets
-    .filter((target) => target.enabled)
-    .map((target) => target.userId)
-    .join(',');
+  const followTargetsKey = JSON.stringify(
+    targets
+      .filter((target) => target.enabled)
+      .map((target) => target.userId)
+      .sort(),
+  );
 
   // 問い合わせの管理はタブの寿命に合わせ、離れたら未送信の処理をすべて止める
   useEffect(() => {

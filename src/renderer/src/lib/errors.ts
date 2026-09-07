@@ -1,11 +1,15 @@
 import { ERROR_CODES, parseErrorCode } from '@shared/types';
 
 /** main が投げた失敗を、入力欄の直下に出す文言にする */
-export function describeError(error: unknown, fallback: string): string {
+export function describeError(
+  error: unknown,
+  fallback: string,
+  invalidInputMessage = 'ユーザー ID か https://www.nicovideo.jp/user/… の形式で入力してください',
+): string {
   const message = error instanceof Error ? error.message : String(error);
   switch (parseErrorCode(message)) {
     case ERROR_CODES.invalidInput:
-      return 'ユーザー ID か https://www.nicovideo.jp/user/… の形式で入力してください';
+      return invalidInputMessage;
     case ERROR_CODES.userNotFound:
       return 'このユーザー ID は見つかりませんでした';
     case ERROR_CODES.invalidProgram:

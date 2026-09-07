@@ -253,7 +253,7 @@ describe('録画対象の一括操作と並び替え', () => {
   });
 
   test('不正な ID・復元データは全体を拒否する', async () => {
-    for (const ids of [null, '1', [1], ['1', 'bad']]) {
+    for (const ids of [null, '1', [1], ['1', '']]) {
       await expect(remove({}, ids)).rejects.toThrow('E_INVALID_INPUT');
     }
     await expect(remove({}, ['1'], 'yes')).rejects.toThrow('E_INVALID_INPUT');
@@ -261,12 +261,68 @@ describe('録画対象の一括操作と並び替え', () => {
       null,
       {},
       [original[0], { ...original[1], enabled: 'yes' }],
-      [{ ...original[0], addedAt: 'bad' }],
+      [{ ...original[0], userId: '' }],
     ]) {
       expect(() => restore({}, targets)).toThrow('E_INVALID_INPUT');
     }
     expect(settings.get().targets).toEqual(original);
     expect(showMessageBox).not.toHaveBeenCalled();
+  });
+
+  test('手編集で不正な ID が残っても削除・無効化でき、再有効化は拒否する', async () => {
+    const invalid = { ...original[0], userId: 'broken-id' };
+    settings.update({ targets: [invalid, original[1], original[2]] });
+    expect(() => setEnabled({}, ['broken-id', '2'], true)).toThrow('E_INVALID_INPUT');
+    expect(settings.get().targets).toEqual([invalid, original[1], original[2]]);
+    expect(setEnabled({}, ['broken-id'], false).targets[0].enabled).toBe(false);
+    expect(move({}, 'broken-id', null).targets.map((t) => t.userId)).toEqual([
+      '2',
+      '3',
+      'broken-id',
+    ]);
+    const result = await remove({}, ['broken-id', '2'], false);
+    expect(result?.settings.targets).toEqual([original[2]]);
+    const restored = restore({}, result!.removed, result!.previousOrder);
+    expect(restored.targets).toEqual([original[1], original[2], { ...invalid, enabled: false }]);
+  });
+
+  test('復元は必要な属性だけを保存し、不正・欠落した日時を補正する', () => {
+    settings.removeTargets(['1', '2']);
+    const { addedAt: _addedAt, ...withoutDate } = original[1];
+    const restored = restore(
+      {},
+      [
+        { ...original[0], addedAt: 'bad', extra: { unused: true } },
+        { ...withoutDate, extra: 'unused' },
+      ],
+      ['1', '2', '3'],
+    );
+    for (const item of restored.targets.slice(0, 2)) {
+      expect(Object.keys(item).sort()).toEqual(['addedAt', 'enabled', 'name', 'userId']);
+      expect(Number.isFinite(Date.parse(item.addedAt))).toBe(true);
+    }
+    expect(restored.targets[0]).toMatchObject({
+      userId: '1',
+      name: original[0].name,
+      enabled: true,
+    });
+    expect(restored.targets[1]).toMatchObject({
+      userId: '2',
+      name: original[1].name,
+      enabled: false,
+    });
+    expect(new SettingsStore(path.join(dir, 'settings.json'), '/other').get()).toEqual(restored);
+  });
+
+  test('不正な ID を削除して取り消しても、無効状態で復元する', async () => {
+    const invalid = { ...original[0], userId: 'broken-id', addedAt: '' };
+    settings.update({ targets: [invalid, original[1]] });
+    const result = await remove({}, ['broken-id'], false);
+    expect(restore({}, result!.removed, result!.previousOrder).targets[0]).toMatchObject({
+      userId: invalid.userId,
+      name: invalid.name,
+      enabled: false,
+    });
   });
 
   test('一括の有効状態変更は入力全体を検証し、指定した配信者だけを変更する', () => {
@@ -292,12 +348,12 @@ describe('録画対象の一括操作と並び替え', () => {
     for (const [userId, beforeUserId] of [
       [1, null],
       ['1', false],
-      ['1', 'bad'],
+      ['1', ''],
       ['1', undefined],
     ]) {
       expect(() => move({}, userId, beforeUserId)).toThrow('E_INVALID_INPUT');
     }
-    expect(() => restore({}, [], ['bad'])).toThrow('E_INVALID_INPUT');
+    expect(() => restore({}, [], [''])).toThrow('E_INVALID_INPUT');
     expect(settings.get().targets).toEqual(original);
     expect(move({}, '3', '1').targets.map((t) => t.userId)).toEqual(['3', '1', '2']);
     expect(move({}, '3', null).targets).toEqual(original);

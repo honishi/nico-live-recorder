@@ -7,7 +7,7 @@ export function useTargetSelection(userIds: string[]): {
   toggleAll: () => void;
   clear: () => void;
 } {
-  const idsKey = userIds.join(',');
+  const idsKey = JSON.stringify(userIds);
   const [previousIdsKey, setPreviousIdsKey] = useState(idsKey);
   const [selectedIds, setSelectedIds] = useState(new Set<string>());
 
