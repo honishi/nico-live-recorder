@@ -42,6 +42,8 @@ const api = {
     ipcRenderer.invoke(IPC.removeTargets, userIds, confirm),
   setTargetEnabled: (userId: string, enabled: boolean): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.setTargetEnabled, userId, enabled),
+  setTargetsEnabled: (userIds: string[], enabled: boolean): Promise<AppSettings> =>
+    ipcRenderer.invoke(IPC.setTargetsEnabled, userIds, enabled),
   checkFollow: (userId: string, manual = false): Promise<FollowStatus> =>
     ipcRenderer.invoke(IPC.checkFollow, userId, manual),
   login: (): Promise<boolean> => ipcRenderer.invoke(IPC.login),

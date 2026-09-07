@@ -152,8 +152,22 @@ export class SettingsStore extends EventEmitter<{
   }
 
   setTargetEnabled(userId: string, enabled: boolean): AppSettings {
+    return this.setTargetsEnabled([userId], enabled);
+  }
+
+  /** 対象の有効状態だけを一括更新し、変更がなければ保存も通知もしない */
+  setTargetsEnabled(userIds: readonly string[], enabled: boolean): AppSettings {
+    const ids = new Set(userIds);
+    const changed = this.settings.targets.some(
+      (target) => ids.has(target.userId) && target.enabled !== enabled,
+    );
+    if (!changed) {
+      return this.get();
+    }
     return this.update({
-      targets: this.settings.targets.map((t) => (t.userId === userId ? { ...t, enabled } : t)),
+      targets: this.settings.targets.map((target) =>
+        ids.has(target.userId) ? { ...target, enabled } : target,
+      ),
     });
   }
 

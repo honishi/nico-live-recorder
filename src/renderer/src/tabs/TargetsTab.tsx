@@ -18,7 +18,7 @@ interface Props {
   loggedIn: boolean;
   now: number;
   onRemoved: (result: TargetRemovalResult) => void;
-  onReordered: (settings: AppSettings) => void;
+  onSettingsChanged: (settings: AppSettings) => void;
 }
 
 const FOLLOW_LABELS: Record<FollowCheckResult, string> = {
@@ -32,42 +32,52 @@ export function TargetsTab({
   loggedIn,
   now,
   onRemoved,
-  onReordered,
+  onSettingsChanged,
 }: Props): ReactElement {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState<string>();
   const [error, setError] = useState<string>();
   const [flash, setFlash] = useState<string>();
-  const [removing, setRemoving] = useState(false);
-  const [removeError, setRemoveError] = useState<string>();
-  const removingRef = useRef(false);
-  const [reordering, setReordering] = useState(false);
-  const [reorderError, setReorderError] = useState<string>();
-  const reorderingRef = useRef(false);
+  const [activeAction, setActiveAction] = useState<'remove' | 'move' | 'enable' | 'disable'>();
+  const [actionError, setActionError] = useState<string>();
+  const actionPendingRef = useRef(false);
   const selectAllRef = useRef<HTMLInputElement>(null);
   const selection = useTargetSelection(targets.map((target) => target.userId));
-  const busy = pending !== undefined || removing || reordering;
+  const busy = pending !== undefined || activeAction !== undefined;
   const [view, setView] = useState<FollowView>({ entries: {} });
   const requests = useRef<FollowRequests | undefined>(undefined);
   const scrollRoot = useRef<HTMLDivElement>(null);
 
-  // 保存中は別の順序変更を開始せず、失敗したら元の一覧と選択をそのまま残す
-  const move = async (userId: string, beforeUserId: string | null): Promise<void> => {
-    if (pending || removingRef.current || reorderingRef.current) {
+  // 削除・並び替え・有効状態の変更で、重複操作の防止と失敗時の表示を揃える
+  const runAction = async (
+    action: NonNullable<typeof activeAction>,
+    perform: () => Promise<void>,
+    failureMessage: string,
+  ): Promise<void> => {
+    if (pending || actionPendingRef.current) {
       return;
     }
-    reorderingRef.current = true;
-    setReordering(true);
-    setReorderError(undefined);
+    actionPendingRef.current = true;
+    setActiveAction(action);
+    setActionError(undefined);
     try {
-      onReordered(await window.api.moveTarget(userId, beforeUserId));
+      await perform();
     } catch (e) {
-      setReorderError(describeError(e, '並び順を保存できませんでした。もう一度お試しください。'));
+      setActionError(describeError(e, failureMessage));
     } finally {
-      reorderingRef.current = false;
-      setReordering(false);
+      actionPendingRef.current = false;
+      setActiveAction(undefined);
     }
   };
+
+  const move = (userId: string, beforeUserId: string | null): Promise<void> =>
+    runAction(
+      'move',
+      async () => {
+        onSettingsChanged(await window.api.moveTarget(userId, beforeUserId));
+      },
+      '並び順を保存できませんでした。もう一度お試しください。',
+    );
   const drag = useTargetDrag(scrollRoot, move);
   // 全選択の中間状態は DOM のプロパティで設定する
   useEffect(() => {
@@ -132,7 +142,7 @@ export function TargetsTab({
   const add = async (event: FormEvent): Promise<void> => {
     event.preventDefault();
     const value = input.trim();
-    if (!value || pending || removingRef.current || reorderingRef.current) {
+    if (!value || pending || actionPendingRef.current) {
       return;
     }
     setPending(value);
@@ -155,27 +165,40 @@ export function TargetsTab({
   };
 
   const remove = async (userIds: string[], confirm = true): Promise<void> => {
-    if (userIds.length === 0 || pending || removingRef.current || reorderingRef.current) {
+    if (userIds.length === 0) {
       return;
     }
-    removingRef.current = true;
-    setRemoving(true);
-    setRemoveError(undefined);
-    try {
-      const result = await window.api.removeTargets(userIds, confirm);
-      if (result) {
-        for (const target of result.removed) {
-          requests.current?.setVisible(target.userId, false);
+    await runAction(
+      'remove',
+      async () => {
+        const result = await window.api.removeTargets(userIds, confirm);
+        if (result) {
+          for (const target of result.removed) {
+            requests.current?.setVisible(target.userId, false);
+          }
+          onRemoved(result);
         }
-        onRemoved(result);
-      }
-    } catch (e) {
-      setRemoveError(describeError(e, '削除できませんでした。もう一度お試しください。'));
-    } finally {
-      removingRef.current = false;
-      setRemoving(false);
-    }
+      },
+      '削除できませんでした。もう一度お試しください。',
+    );
   };
+
+  // 選択を維持し、反対の操作も続けて行えるようにする。単体のチェックも同じ処理を使う
+  const setEnabled = (userIds: string[], enabled: boolean): Promise<void> =>
+    runAction(
+      enabled ? 'enable' : 'disable',
+      async () => {
+        onSettingsChanged(await window.api.setTargetsEnabled(userIds, enabled));
+      },
+      '有効状態を変更できませんでした。もう一度お試しください。',
+    );
+
+  const canEnable = targets.some(
+    (target) => selection.selectedIds.has(target.userId) && !target.enabled,
+  );
+  const canDisable = targets.some(
+    (target) => selection.selectedIds.has(target.userId) && target.enabled,
+  );
 
   const notFollowing = targets.some(
     (t) =>
@@ -217,21 +240,32 @@ export function TargetsTab({
         >
           <button
             className="btn"
+            disabled={busy || !canEnable}
+            title="選択した配信者の自動録画を有効にする"
+            onClick={() => void setEnabled([...selection.selectedIds], true)}
+          >
+            {activeAction === 'enable' ? '有効化中…' : '有効化'}
+          </button>
+          <button
+            className="btn"
+            disabled={busy || !canDisable}
+            title="選択した配信者の自動録画を無効にする（進行中の録画は継続します）"
+            onClick={() => void setEnabled([...selection.selectedIds], false)}
+          >
+            {activeAction === 'disable' ? '無効化中…' : '無効化'}
+          </button>
+          <button
+            className="btn"
             disabled={busy || selection.selectedIds.size === 0}
             onClick={() => void remove([...selection.selectedIds])}
           >
-            {removing ? '削除中…' : '削除'}
+            {activeAction === 'remove' ? '削除中…' : '削除'}
           </button>
         </SelectionToolbar>
       )}
-      {removeError && (
+      {actionError && (
         <p className="field-error" role="alert">
-          {removeError}
-        </p>
-      )}
-      {reorderError && (
-        <p className="field-error" role="alert">
-          {reorderError}
+          {actionError}
         </p>
       )}
 
@@ -350,9 +384,7 @@ export function TargetsTab({
                     aria-label={`${target.name} (${target.userId}) の自動録画を有効にする`}
                     checked={target.enabled}
                     disabled={busy}
-                    onChange={() =>
-                      void window.api.setTargetEnabled(target.userId, !target.enabled)
-                    }
+                    onChange={() => void setEnabled([target.userId], !target.enabled)}
                   />
                 </span>
                 <span>

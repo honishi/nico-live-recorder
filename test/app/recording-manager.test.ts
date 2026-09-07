@@ -752,6 +752,37 @@ describe('RecordingManager', () => {
     expect(recording.signal?.aborted).toBe(false);
   });
 
+  test('一括の有効状態変更は検知を一度だけ更新し、全件無効でも録画は続ける', async () => {
+    const ids = ['100', '200', '300'];
+    settings.restoreTargets(
+      ids.map((userId) => ({
+        userId,
+        name: userId,
+        enabled: true,
+        addedAt: '2026-01-01T00:00:00Z',
+      })),
+    );
+    await manager.start();
+    await manager.startRecording('lv1', 'manual');
+    const recording = await nextRecordCall(0);
+    const detectorCount = detectors.length;
+
+    settings.setTargetsEnabled(['100', '200'], false);
+    await waitFor(() => detectors.length > detectorCount);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectors).toHaveLength(detectorCount + 1);
+    settings.setTargetsEnabled(ids, false);
+    await waitFor(() => !manager.detectorRunning);
+    expect(manager.hasActiveRecordings()).toBe(true);
+    expect(recording.signal?.aborted).toBe(false);
+
+    settings.setTargetsEnabled(ids, true);
+    await waitFor(() => manager.detectorRunning);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectors).toHaveLength(detectorCount + 2);
+    expect(recording.signal?.aborted).toBe(false);
+  });
+
   test('対象の並び替えは検知器を再起動しない', async () => {
     settings.restoreTargets(
       ['100', '200'].map((userId) => ({

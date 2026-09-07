@@ -231,7 +231,7 @@ export function App(): ReactElement {
             targets={settings.targets}
             loggedIn={status.auth.loggedIn}
             onRemoved={onTargetRemoved}
-            onReordered={setSettings}
+            onSettingsChanged={setSettings}
           />
         )}
         {tab === 'history' && (

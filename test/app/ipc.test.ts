@@ -157,7 +157,7 @@ describe('フォロー確認とログイン切替', () => {
 });
 
 // 保存は一時ディレクトリ、確認だけを偽ダイアログにし、実際の IPC ハンドラを通す
-describe('録画対象の一括削除と復元', () => {
+describe('録画対象の一括操作と並び替え', () => {
   let dir: string;
   let settings: SettingsStore;
   let remove: (
@@ -167,6 +167,7 @@ describe('録画対象の一括削除と復元', () => {
   ) => Promise<TargetRemovalResult | undefined>;
   let restore: (event: unknown, targets: unknown, previousOrder?: unknown) => AppSettings;
   let move: (event: unknown, userId: unknown, beforeUserId: unknown) => AppSettings;
+  let setEnabled: (event: unknown, userIds: unknown, enabled: unknown) => AppSettings;
   const original: TargetUser[] = ['1', '2', '3'].map((userId) => ({
     userId,
     name: `配信者${userId}`,
@@ -194,6 +195,9 @@ describe('録画対象の一括削除と復元', () => {
     move = handle.mock.calls.find(
       ([channel]) => channel === IPC.moveTarget,
     )![1] as unknown as typeof move;
+    setEnabled = handle.mock.calls.find(
+      ([channel]) => channel === IPC.setTargetsEnabled,
+    )![1] as unknown as typeof setEnabled;
   });
 
   afterEach(() => {
@@ -262,6 +266,25 @@ describe('録画対象の一括削除と復元', () => {
       expect(() => restore({}, targets)).toThrow('E_INVALID_INPUT');
     }
     expect(settings.get().targets).toEqual(original);
+    expect(showMessageBox).not.toHaveBeenCalled();
+  });
+
+  test('一括の有効状態変更は入力全体を検証し、指定した配信者だけを変更する', () => {
+    for (const [ids, enabled] of [
+      [null, true],
+      ['1', true],
+      [['1', 2], false],
+      [['1'], 'false'],
+      [['1'], null],
+    ]) {
+      expect(() => setEnabled({}, ids, enabled)).toThrow('E_INVALID_INPUT');
+    }
+    expect(settings.get().targets).toEqual(original);
+    const result = setEnabled({}, ['1', '2', '2', '999'], false);
+    expect(result.targets).toEqual([{ ...original[0], enabled: false }, original[1], original[2]]);
+    expect(setEnabled({}, ['1', '2'], true).targets).toEqual(
+      original.map((target) => ({ ...target, enabled: true })),
+    );
     expect(showMessageBox).not.toHaveBeenCalled();
   });
 

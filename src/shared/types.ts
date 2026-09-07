@@ -216,6 +216,7 @@ export const IPC = {
   removeTargets: 'targets:removeMany',
   moveTarget: 'targets:move',
   setTargetEnabled: 'targets:setEnabled',
+  setTargetsEnabled: 'targets:setManyEnabled',
   checkFollow: 'targets:checkFollow',
   login: 'auth:login',
   logout: 'auth:logout',

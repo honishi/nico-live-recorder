@@ -75,6 +75,51 @@ describe('SettingsStore', () => {
     expect(store.get().targets).toHaveLength(0);
   });
 
+  test('一括の有効・無効変更は対象外の行や並び順を保ち、保存と通知は一度だけ行う', () => {
+    const store = new SettingsStore(filePath, '/videos');
+    const original = ['3', '1', '2'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
+    original[1].enabled = false;
+    store.update({ targets: original });
+    const listener = vi.fn();
+    store.on('change', listener);
+    const write = vi.spyOn(fs, 'writeFileSync');
+
+    const disabled = store.setTargetsEnabled(['1', '2', '2', '999'], false);
+    expect(disabled.targets).toEqual([
+      original[0],
+      original[1],
+      { ...original[2], enabled: false },
+    ]);
+    expect(new SettingsStore(filePath, '/other').get()).toEqual(disabled);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    const enabled = store.setTargetsEnabled(['1', '2'], true);
+    expect(enabled.targets).toEqual(original.map((item) => ({ ...item, enabled: true })));
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(2);
+    store.setTargetsEnabled(['1', '2'], true);
+    store.setTargetsEnabled(['999'], false);
+    store.setTargetsEnabled([], false);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  test('一括の有効状態の保存に失敗すると、全件を元の状態に保つ', () => {
+    const store = new SettingsStore(filePath, '/videos');
+    const original = ['1', '2'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
+    store.update({ targets: original });
+    const listener = vi.fn();
+    store.on('change', listener);
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('disk failure');
+    });
+    expect(() => store.setTargetsEnabled(['1', '2'], false)).toThrow('disk failure');
+    expect(store.get().targets).toEqual(original);
+    expect(new SettingsStore(filePath, '/other').get().targets).toEqual(original);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   test('一括削除は重複・存在しない ID を無視し、保存と通知を一度にまとめる', () => {
     const original = ['1', '2', '3'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
     const store = new SettingsStore(filePath, '/videos');

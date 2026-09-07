@@ -265,6 +265,13 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   ipcMain.handle(IPC.setTargetEnabled, (_event, userId: string, enabled: boolean) =>
     ctx.settings.setTargetEnabled(String(userId), Boolean(enabled)),
   );
+  // 全件を検証してから一度だけ保存し、検知の再起動を対象の数だけ繰り返さない
+  ipcMain.handle(IPC.setTargetsEnabled, (_event, userIds: unknown, enabled: unknown) => {
+    if (!Array.isArray(userIds) || !userIds.every(isUserId) || typeof enabled !== 'boolean') {
+      throw codedError(ERROR_CODES.invalidInput);
+    }
+    return ctx.settings.setTargetsEnabled(userIds, enabled);
+  });
   ipcMain.handle(
     IPC.checkFollow,
     async (_event, userId: string, manual?: boolean): Promise<FollowStatus> => {
