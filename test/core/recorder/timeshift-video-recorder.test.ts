@@ -7,6 +7,9 @@ import type { TimeshiftVideoReport } from '../../../src/main/core/recorder/times
 import type { TimeshiftProgress } from '../../../src/shared/types';
 import { fragment, fragmentInit } from '../../helpers/fmp4';
 
+// バックオフの時間はHTTP層の仮想タイマーテストで検証し、ここでは結線を確認する。
+vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async () => {}) }));
+
 function writeFakeFfmpeg(dir: string): string {
   const script = path.join(dir, 'fake-ffmpeg.cjs');
   fs.writeFileSync(
@@ -270,3 +273,24 @@ test('手動停止でも渡したデータを排出しFFmpegを自然終了さ�
     fs.readFileSync(outputPath, 'utf8') + fs.readFileSync(outputPath + '.audio', 'utf8');
   expect(saved).toMatch(/(?:video|audio)-11/);
 });
+
+test.each(['/master', '/video', '/audio'])(
+  'プレイリスト%sの一時失敗を再試行して保存する',
+  async (target) => {
+    const mocked = media();
+    const respond = mocked.getMockImplementation()!;
+    let calls = 0;
+    mocked.mockImplementation((url, init) => {
+      if (new URL(url).pathname === target && calls++ === 0)
+        return Promise.resolve(new Response(null, { status: 503 }));
+      return respond(url, init);
+    });
+    const result = await recordTimeshiftVideo(
+      stream,
+      { outputPath: path.join(dir, 'retried.ts'), ffmpegPath: binary },
+      new AbortController().signal,
+    );
+    expect(result.reason).toBe('endlist');
+    expect(calls).toBe(2);
+  },
+);

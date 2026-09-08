@@ -8,6 +8,7 @@ import {
 } from '../nico/hls';
 import type { HlsStreamInfo } from '../nico/watch-session';
 import { checkedFetch, TimeshiftError } from '../nico/timeshift-common';
+import { retryTimeshiftRequest } from '../nico/timeshift-http';
 import { downloadMetrics, downloadTimeshiftTrack } from '../nico/timeshift-download';
 import {
   prepareTimeshiftPlaylist,
@@ -40,19 +41,20 @@ export async function recordTimeshiftVideo(
   const startedAt = new Date();
   const controller = new AbortController();
   const work = AbortSignal.any([signal, controller.signal]);
-  const get = async (url: string): Promise<string> => {
-    const response = await checkedFetch(url, work, cookieHeaderFor(stream.cookies, url));
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    for await (const raw of response.body!) {
-      const chunk: unknown = raw;
-      if (!(chunk instanceof Uint8Array)) throw new TimeshiftError('INVALID_RESPONSE_CHUNK');
-      bytes += chunk.length;
-      if (bytes > 8 * 1024 * 1024) throw new TimeshiftError('PLAYLIST_BYTE_LIMIT');
-      chunks.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks).toString();
-  };
+  const get = (url: string): Promise<string> =>
+    retryTimeshiftRequest(async () => {
+      const response = await checkedFetch(url, work, cookieHeaderFor(stream.cookies, url));
+      const chunks: Buffer[] = [];
+      let bytes = 0;
+      for await (const raw of response.body!) {
+        const chunk: unknown = raw;
+        if (!(chunk instanceof Uint8Array)) throw new TimeshiftError('INVALID_RESPONSE_CHUNK');
+        bytes += chunk.length;
+        if (bytes > 8 * 1024 * 1024) throw new TimeshiftError('PLAYLIST_BYTE_LIMIT');
+        chunks.push(Buffer.from(chunk));
+      }
+      return Buffer.concat(chunks).toString();
+    }, work);
   const best = selectBestVariant(parseMultivariantPlaylist(await get(stream.uri), stream.uri));
   const urls = [best.video.uri, ...(best.audioUri ? [best.audioUri] : [])];
   const report: TimeshiftVideoReport = {

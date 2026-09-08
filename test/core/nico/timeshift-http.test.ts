@@ -1,4 +1,24 @@
-import { fetchTimeshiftBytes } from '../../../src/main/core/nico/timeshift-http';
+import {
+  fetchTimeshiftBytes,
+  retryTimeshiftRequest,
+} from '../../../src/main/core/nico/timeshift-http';
+
+// node:timers/promisesの待機も仮想時計へ接続し、実時間を待たず期限・中断を検証する。
+vi.mock('node:timers/promises', () => ({
+  setTimeout: (ms: number, _value: unknown, { signal }: { signal: AbortSignal }) =>
+    new Promise<void>((resolve, reject) => {
+      const abort = (): void => {
+        clearTimeout(timer);
+        reject(new DOMException('aborted', 'AbortError'));
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', abort);
+        resolve();
+      }, ms);
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort();
+    }),
+}));
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -71,4 +91,33 @@ test.each(['header', 'body', 'stop'] as const)('%s待機の期限・利用者停
   else await vi.advanceTimersByTimeAsync(20_000);
   await rejected;
   expect(vi.getTimerCount()).toBe(0);
+});
+
+test.each([403, 404, 429, 503, undefined])(
+  'HTTP %sで再試行対象と回数上限を守る',
+  async (status) => {
+    const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
+    const attempt = vi.fn(async () => {
+      throw new TimeshiftError(status ? 'HTTP_ERROR' : 'LIMIT', status);
+    });
+    const pending = retryTimeshiftRequest(attempt, new AbortController().signal);
+    const rejected = expect(pending).rejects.toBeInstanceOf(TimeshiftError);
+    await vi.advanceTimersByTimeAsync(3500);
+    await rejected;
+    expect(attempt).toHaveBeenCalledTimes(status === 429 || status === 503 ? 4 : 1);
+  },
+);
+
+test('バックオフ中の停止で次のリクエストを開始しない', async () => {
+  const stop = new AbortController();
+  const attempt = vi.fn(async () => {
+    throw new TypeError('network');
+  });
+  const pending = retryTimeshiftRequest(attempt, stop.signal);
+  const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  await vi.advanceTimersByTimeAsync(1);
+  stop.abort();
+  await rejected;
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(attempt).toHaveBeenCalledOnce();
 });
