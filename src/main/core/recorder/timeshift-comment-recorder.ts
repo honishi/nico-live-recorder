@@ -146,8 +146,10 @@ export async function recordTimeshiftComments(
     try {
       value = convertTimeshiftComment(message);
     } catch (error) {
+      // 復元できない投稿時刻の1件だけを数え、後続の正常なコメントは回収する。
+      if (!(error instanceof TimeshiftError) || error.code !== 'INVALID_COMMENT_TIME') throw error;
       invalidCount += 1;
-      throw error;
+      return;
     }
     if (!value) return;
     const { comment, seconds, nanos } = value;
@@ -238,6 +240,7 @@ export async function recordTimeshiftComments(
     if (!hasBackward) throw new TimeshiftError('BACKWARD_NOT_PROVIDED');
     if (!marker) throw new TimeshiftError('VIEW_MARKER_MISSING');
     if (rows.length >= limits.count) throw new TimeshiftError('COMMENT_COUNT_LIMIT');
+    if (invalidCount) throw new TimeshiftError('INVALID_COMMENT_TIME');
     complete = true;
   } catch (error) {
     // fetchの本文待機中のタイムアウトはAbortErrorになる。利用者の停止はsignalで区別する。

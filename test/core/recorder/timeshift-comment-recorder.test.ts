@@ -250,3 +250,38 @@ test('本文待機のAbortErrorもViewタイムアウトとして記録し、利
     aborted: false,
   });
 });
+
+test('不正な投稿時刻を含んでも後続を保存し、不正件数と部分取得を報告する', async () => {
+  await routes([
+    message('before', 1000),
+    { meta: { id: 'bad1' }, message: { chat: { content: 'bad' } } },
+    message('after', 1002),
+    { meta: { id: 'bad2' }, message: { chat: { content: 'bad' } } },
+  ]);
+  const result = await recordTimeshiftComments(
+    'https://example.test/view',
+    output,
+    new AbortController().signal,
+  );
+  expect(result).toMatchObject({
+    status: 'partial',
+    reason: 'INVALID_COMMENT_TIME',
+    count: 3,
+    invalidCount: 2,
+    sorted: true,
+  });
+  const csv = await fs.readFile(output, 'utf8');
+  expect(csv).toContain('before');
+  expect(csv).toContain('after');
+  expect(csv).not.toContain('bad1');
+});
+
+test('overflowed_chatと名前付き色を既存CSVの表現に変換する', () => {
+  const source = message('overflow', 1000);
+  const converted = convertTimeshiftComment({
+    ...source,
+    message: { overflowed_chat: { ...source.message.chat, modifier: { named_color: 15 } } },
+  });
+  expect(converted?.comment).toMatchObject({ content: 'overflow', color: 'green2' });
+  expect(converted?.seconds).toBe(1000);
+});
