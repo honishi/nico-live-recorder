@@ -297,7 +297,10 @@ test('取得位置が前進すれば欠落回数・時刻・バックオフを�
 test('欠落と古いnextを交互に返しても回復扱いにせず停止する', async () => {
   allowPageRefresh();
   respond = async (index) => (index % 2 === 0 ? [{ next: { at: 100 } }] : []);
-  const checked = expect(consume()).rejects.toThrow(/10分以上/);
+  const checked = expect(consume()).rejects.toHaveProperty(
+    'code',
+    expect.stringMatching(/^COMMENT_VIEW_(STALLED|MARKER_MISSING)$/),
+  );
   await vi.advanceTimersByTimeAsync(30 * 60_000);
   await checked;
   expect(requests.length).toBeLessThan(60);

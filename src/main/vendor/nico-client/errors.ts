@@ -4,9 +4,7 @@ export class CommentViewStalledError extends Error {
   public readonly code = 'COMMENT_VIEW_STALLED' as const;
 
   constructor() {
-    super(
-      'コメントの取得位置が10分以上回復せず、10回以上停滞したため、コメント取得を停止しました。',
-    );
+    super('コメントの取得位置が回復しないため、コメント取得を停止しました。');
     this.name = 'CommentViewStalledError';
   }
 }
@@ -15,9 +13,7 @@ export class CommentViewMarkerMissingError extends Error {
   public readonly code = 'COMMENT_VIEW_MARKER_MISSING' as const;
 
   constructor() {
-    super(
-      'コメントの取得位置の欠落が10分以上回復せず、10回以上続いたため、コメント取得を停止しました。',
-    );
+    super('コメントの取得位置の欠落が解消しないため、コメント取得を停止しました。');
     this.name = 'CommentViewMarkerMissingError';
   }
 }
