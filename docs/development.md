@@ -64,7 +64,7 @@ NLR_USER_DATA="$nlr_check_dir/userdata" NLR_OUTPUT_DIR="$nlr_check_dir/recording
 
 失敗後の再開処理は `NLR_DEV_FAIL_VIDEO_AFTER_MS=8000` のように設定して起動すると、映像を強制的に失敗させて確認できます。
 
-終了済み放送の検証スクリプトについては [タイムシフト検証手順](timeshift-probe.md) を参照してください。
+終了済み放送の検証スクリプトについては [タイムシフト検証手順](timeshift-probe.md)、検証の結論と本体実装へ引き継ぐ範囲は [検証結果と初期対応範囲](timeshift-feasibility.md) を参照してください。
 
 ### コード構成
 
