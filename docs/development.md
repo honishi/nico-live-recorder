@@ -89,6 +89,10 @@ build/                        アプリアイコン (icns / ico と、その元�
 test/                         main・shared・vendor のテスト。偽サーバーは test/helpers/、多重化用メディアは test/fixtures/ffmpeg/
 ```
 
+### 流用コードの独自変更
+
+stream-journal 由来の `vendor/nico-client/` には、このアプリで追加した独自変更があります。`NicoClient.ts` の `streamComments` にあるView要求の最小間隔、取得位置の停滞・後退・next欠落に対するバックオフと打ち切り、回復待ち中の一度だけの警告、および `errors.ts` の `CommentViewStalledError` / `CommentViewMarkerMissingError` が該当します。流用元の更新を取り込む際は、これらの保護を保持するか同等の処理へ置き換え、`test/vendor/nico-client/NicoClient.test.ts` と `test/core/recorder/comment-recorder.test.ts` で正常な受信・回復・停止・要求回数の上限を確認してください。この記載は独自変更の所在を示すもので、流用元の最新コードへの反映状況は確認していません。
+
 ### 録画の共通部品
 
 ファイル名生成は `core/recorder/recording-paths.ts`、CSV変換は `comment-csv.ts`、ライブ・タイムシフト間の共有型は `recording-types.ts` に置きます。タイムシフトからライブのレコーダー実装を経由せず参照します。`src/`・`test/` では共通部品を定義元から直接importします。従来のimport先からの再exportは、既存の開発スクリプト等の呼び出し元との互換性を保つために残します。新規コードはこの互換用exportを経由せず、定義元を参照します。ライブの連番選択・CSV追記と、タイムシフトの3ファイル排他確保・時刻順ソートは各レコーダーに残します。
