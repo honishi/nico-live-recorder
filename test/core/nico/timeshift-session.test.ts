@@ -137,3 +137,27 @@ test('pingへ応答し、seat更新で保持間隔を切り替え、終了時に
   session.close();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+test('stream応答解析の共通化後も不完全なCookieやライブ用情報を取り込まない', async () => {
+  const { session, socket, send } = begin();
+  socket.emit('open');
+  send('stream', { protocol: 'other', uri: 'ignored' });
+  send('stream', {
+    protocol: 'hls',
+    uri: 'https://example.test/master',
+    quality: 720,
+    availableQualities: ['abr'],
+    syncUri: 'https://example.test/sync',
+    cookies: [
+      { name: 'complete', value: 'v', path: '/', domain: 'example.test', secure: true },
+      { name: 'missing-path', value: 'v', domain: 'example.test' },
+    ],
+  });
+  const result = await session.stream;
+  expect(result).toMatchObject({ quality: '', availableQualities: [] });
+  expect(result.cookies).toStrictEqual([
+    { name: 'complete', value: 'v', path: '/', domain: 'example.test' },
+  ]);
+  expect(result).not.toHaveProperty('syncUri');
+  session.close();
+});

@@ -3,26 +3,9 @@ import WebSocket, { type RawData } from 'ws';
 import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
 import { silentLogger, type Logger } from '../logger';
 import { asString } from '../util';
+import { parseStreamMessage, type HlsStreamInfo } from './watch-protocol';
 
-/** 視聴セッションが配る HLS 用 cookie。パス単位で同名の cookie が複数配られる */
-export interface StreamCookie {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  secure?: boolean;
-  expires?: string;
-}
-
-/** WebSocket の `stream` メッセージで得られる HLS 配信情報 */
-export interface HlsStreamInfo {
-  uri: string;
-  syncUri?: string;
-  quality: string;
-  availableQualities: string[];
-  cookies: StreamCookie[];
-  receivedAt: Date;
-}
+export type { HlsStreamInfo, StreamCookie } from './watch-protocol';
 
 export interface WatchSessionOptions {
   userAgent?: string;
@@ -340,39 +323,12 @@ export class WatchSession extends EventEmitter<WatchSessionEvents> {
   }
 
   private handleStream(data: Record<string, unknown>): void {
-    if (data['protocol'] !== 'hls' || typeof data['uri'] !== 'string') {
-      return;
-    }
-    const rawCookies: unknown[] = Array.isArray(data['cookies'])
-      ? (data['cookies'] as unknown[])
-      : [];
-    const cookies: StreamCookie[] = rawCookies
-      .filter(
-        (c): c is Record<string, unknown> =>
-          typeof c === 'object' &&
-          c !== null &&
-          typeof (c as Record<string, unknown>)['name'] === 'string',
-      )
-      .map((c) => ({
-        name: asString(c['name']),
-        value: asString(c['value']),
-        domain: asString(c['domain'], 'nicovideo.jp'),
-        path: asString(c['path'], '/'),
-        secure: c['secure'] === true,
-        expires: typeof c['expires'] === 'string' ? c['expires'] : undefined,
-      }));
-    const info: HlsStreamInfo = {
-      uri: data['uri'],
-      syncUri: typeof data['syncUri'] === 'string' ? data['syncUri'] : undefined,
-      quality: asString(data['quality']),
-      availableQualities: Array.isArray(data['availableQualities'])
-        ? data['availableQualities'].map(String)
-        : [],
-      cookies,
-      receivedAt: new Date(),
-    };
+    const info = parseStreamMessage(data, 'live');
+    if (!info) return;
     this.latestStream = info;
-    this.logger.debug(`watch ws stream received quality=${info.quality} cookies=${cookies.length}`);
+    this.logger.debug(
+      `watch ws stream received quality=${info.quality} cookies=${info.cookies.length}`,
+    );
     this.emit('stream', info);
   }
 

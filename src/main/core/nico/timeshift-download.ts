@@ -2,7 +2,7 @@ import { decryptHlsSegment } from './hls-crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
 import { cookieHeaderFor, type HlsSegment, type TrackResult } from './hls';
-import type { StreamCookie } from './watch-session';
+import type { StreamCookie } from './watch-protocol';
 import { TimeshiftError } from './timeshift-common';
 import { fetchTimeshiftBytes, retryTimeshiftRequest } from './timeshift-http';
 import {

@@ -94,6 +94,37 @@ describe('WatchSession', () => {
     expect(first['data']).toMatchObject({ stream: { protocol: 'hls', quality: 'abr' } });
   });
 
+  test('stream応答解析の共通化後もライブのCookie補完と画質変換を維持する', async () => {
+    session = new WatchSession(server.url);
+    await session.connect();
+    await session.waitForStream();
+    server.send(0, {
+      type: 'stream',
+      data: {
+        protocol: 'hls',
+        uri: 'https://example.test/next',
+        quality: 720,
+        cookies: [{ name: 'fallback', value: 42 }],
+        availableQualities: [720, 'abr'],
+      },
+    });
+    await waitFor(() => session?.latestStreamInfo?.uri === 'https://example.test/next');
+    expect(session.latestStreamInfo).toMatchObject({
+      quality: '720',
+      availableQualities: ['720', 'abr'],
+    });
+    expect(session.latestStreamInfo?.cookies).toStrictEqual([
+      {
+        name: 'fallback',
+        value: '42',
+        domain: 'nicovideo.jp',
+        path: '/',
+        secure: false,
+        expires: undefined,
+      },
+    ]);
+  });
+
   test('ping には pong と keepSeat を返し、seat の間隔で keepSeat を送り続ける', async () => {
     session = new WatchSession(server.url);
     await session.connect();

@@ -6,7 +6,7 @@ import {
   parseMultivariantPlaylist,
   selectBestVariant,
 } from '../nico/hls';
-import type { HlsStreamInfo } from '../nico/watch-session';
+import type { HlsStreamInfo } from '../nico/watch-protocol';
 import { checkedFetch, TimeshiftError } from '../nico/timeshift-common';
 import { retryTimeshiftRequest } from '../nico/timeshift-http';
 import { downloadMetrics, downloadTimeshiftTrack } from '../nico/timeshift-download';
