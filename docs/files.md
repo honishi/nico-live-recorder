@@ -47,11 +47,11 @@
 
 ### タイムシフトの再取得・部分保存
 
-終了済み放送の手動録画では、空き連番のTS・CSV・JSONを一組確保して先頭から取得します。CSV・JSONだけが残る場合やソート用一時ファイルが残る場合も次の連番へ進み、以前のファイルへ追記・上書きしません。
+終了済み放送の手動録画では、空き連番のTS・CSV・JSONを一組確保して先頭から取得します。CSV・JSONだけが残る場合やソート用一時ファイルが残る場合も次の連番へ進み、以前のファイルへ追記・上書きしません。開始に失敗して空のままの今回のTS・CSVは終了時に整理し、診断JSONと内容のある部分ファイルは残します。
 
 コメントは取得中にCSVへ部分保存し、終了時に投稿時刻（秒・ナノ秒）→コメント番号→取得順で安定ソートします。`<名前>.comments.csv.sorting` を新規作成して書き終えた後、その実行のCSVだけを置き換えます。停止や保存先障害では取得順の部分CSVが残ることがあります。本文に含まれる改行は維持し、vposは補正しません。
 
-履歴は番組ID単位の1件です。`videoPaths` と容量は過去の実在動画を含む累計、`commentsPaths` は過去と今回のCSV、`commentsPath` と `commentCount` は最新CSVを指します。履歴の右クリックから以前のCSVも開けます。手動停止は `completion: cancelled` として「停止」と表示し、タイムシフトの一部取得を全編完了とは表示しません。旧履歴のフィールドは移行不要で、旧JSONLもそのまま残します。
+履歴は番組ID単位の1件です。`videoPaths` と容量は過去の実在動画を含む累計、`commentsPaths` は過去と今回のCSV、`commentsPath` と `commentCount` は最新CSVを指します。履歴の右クリックから実在する以前のCSVも開けます。手動停止は `completion: cancelled` として「停止」と表示し、タイムシフトの一部取得を全編完了とは表示しません。旧履歴のフィールドは移行不要で、旧JSONLもそのまま残します。
 
 ### メタデータ JSON
 
@@ -95,3 +95,5 @@ at,no,content,vpos,rawUserId,hashedUserId,accountStatus,position,size,color,font
 | `scripts/record-comments.ts` | 既定 `./recordings/<lv番号>.comments.csv`                                                                                   |
 | `scripts/push-listen.ts`     | 既定 `./recordings/push-state.json`                                                                                         |
 | `scripts/e2e-screenshots.ts` | 引数の出力先 (既定 `./recordings/screenshots/`) にスクリーンショット、`electron.log`、隔離用の `userdata/` と `recordings/` |
+
+タイムシフトの中断理由は `USER_CANCELLED`（停止）、`COMMENT_TOTAL_TIMEOUT`（コメント全体の30分上限）、`VIDEO_FAILED`（映像起因の中断）、接続エラーの固定コード、`OUTPUT_MISSING`（録画中の動画消失）を区別します。映像起因のコメント中断はJSONへ残し、画面の重複エラーは抑えます。不正な投稿時刻のコメントは除外・集計し、後続を保存して `INVALID_COMMENT_TIME` の一部失敗とします。部分動画でも `timeshift.video.ffmpegExitCode` にFFmpegの終了コードを残します。
