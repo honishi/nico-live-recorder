@@ -182,14 +182,17 @@ function RecordingCard({
               )
             </span>
           )}
-          {timeshift && !stopping && phase === 'downloading' && (
-            <span title="最近の取得速度から推定しています。コメント取得・保存処理の時間は含みません。">
-              映像・音声の残り{' '}
-              {r.timeshift?.estimatedRemainingSeconds === undefined
-                ? '計算中…'
-                : `約${formatRemainingTime(r.timeshift.estimatedRemainingSeconds)}`}
-            </span>
-          )}
+          {timeshift &&
+            !stopping &&
+            phase === 'downloading' &&
+            r.timeshift?.estimatedRemainingSeconds !== 0 && (
+              <span title="最近の取得速度から推定しています。コメント取得・保存処理の時間は含みません。">
+                映像・音声の残り{' '}
+                {r.timeshift?.estimatedRemainingSeconds === undefined
+                  ? '計算中…'
+                  : `約${formatRemainingTime(r.timeshift.estimatedRemainingSeconds)}`}
+              </span>
+            )}
         </div>
       </div>
       <div className="actions">
