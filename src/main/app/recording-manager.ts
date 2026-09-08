@@ -5,6 +5,7 @@ import { Notification } from 'electron';
 import { ProgramDetector, type DetectedProgram } from '../core/detector/program-detector';
 import { prefixLogger, type Logger } from '../core/logger';
 import { recordProgram } from '../core/recorder/program-recorder';
+import { TimeshiftError } from '../core/nico/timeshift-common';
 import { NicoClient } from '../vendor/nico-client/NicoClient';
 import { NicoLiveProgramStatus, type NicoLiveProgramInfo } from '../vendor/nico-client/types';
 import { setPushLogger } from '../vendor/web-push/push-diagnostics';
@@ -1049,7 +1050,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     );
     part.lost = true;
     // 先に書き込みを止め、残ったファイルの数え直しは録画ループが待ち合わせる
-    part.controller.abort();
+    part.controller.abort(
+      info.mode === 'timeshift' ? new TimeshiftError('OUTPUT_MISSING') : undefined,
+    );
     part.cleanup = this.discardLostPart(recording, videoPath);
     await part.cleanup;
   }

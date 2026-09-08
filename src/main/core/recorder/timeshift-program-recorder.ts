@@ -142,7 +142,7 @@ export async function recordTimeshiftProgram(
       } catch (error) {
         if (!signal.aborted)
           result.errors.push({ target: 'video', message: timeshiftErrorText(error) });
-        failedVideo.abort(error);
+        failedVideo.abort(new TimeshiftError('VIDEO_FAILED'));
         connection.close();
       }
     })();

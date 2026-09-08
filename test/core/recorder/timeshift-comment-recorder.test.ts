@@ -285,3 +285,34 @@ test('overflowed_chatと名前付き色を既存CSVの表現に変換する', ()
   expect(converted?.comment).toMatchObject({ content: 'overflow', color: 'green2' });
   expect(converted?.seconds).toBe(1000);
 });
+
+test.each([
+  'USER_CANCELLED',
+  'COMMENT_TOTAL_TIMEOUT',
+  'VIDEO_FAILED',
+  'SESSION_DISCONNECTED',
+  'OUTPUT_MISSING',
+])('中断理由%sを部分保存の診断へ残す', async (code) => {
+  const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
+  await routes([message('saved', 1000)]);
+  const stop = new AbortController();
+  const reason =
+    code === 'USER_CANCELLED'
+      ? new DOMException('stop', 'AbortError')
+      : code === 'COMMENT_TOTAL_TIMEOUT'
+        ? new DOMException('timeout', 'TimeoutError')
+        : new TimeshiftError(code);
+  const result = await recordTimeshiftComments(
+    'https://example.test/view',
+    output,
+    stop.signal,
+    () => stop.abort(reason),
+  );
+  expect(result).toMatchObject({
+    reason: code,
+    status: 'partial',
+    count: 1,
+    sorted: false,
+    aborted: true,
+  });
+});

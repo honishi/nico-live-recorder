@@ -43,6 +43,15 @@ export interface TimeshiftCommentResult extends CommentRecordResult {
   viewRequests?: { durationMs: number; entries: number }[];
 }
 
+// 外側の停止理由だけを固定コードへ変換し、例外本文やURLは診断へ出さない。
+function interruptionReason(signal: AbortSignal): string {
+  if (signal.reason instanceof TimeshiftError) return signal.reason.code;
+  const name = object(signal.reason).name;
+  if (name === 'TimeoutError') return 'COMMENT_TOTAL_TIMEOUT';
+  if (name === 'AbortError') return 'USER_CANCELLED';
+  return 'interrupted';
+}
+
 function integer(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isSafeInteger(n) ? n : fallback;
@@ -246,7 +255,7 @@ export async function recordTimeshiftComments(
     // fetchの本文待機中のタイムアウトはAbortErrorになる。利用者の停止はsignalで区別する。
     const requestTimedOut = ['TimeoutError', 'AbortError'].includes(String(object(error).name));
     reason = signal.aborted
-      ? 'interrupted'
+      ? interruptionReason(signal)
       : error instanceof TimeshiftError
         ? error.code
         : requestTimedOut
@@ -288,7 +297,7 @@ export async function recordTimeshiftComments(
   } catch (error) {
     complete = false;
     reason = signal.aborted
-      ? 'interrupted'
+      ? interruptionReason(signal)
       : error instanceof TimeshiftError
         ? error.code
         : 'COMMENT_SORT_FAILED';
