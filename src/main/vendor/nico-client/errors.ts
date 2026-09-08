@@ -11,6 +11,17 @@ export class CommentViewStalledError extends Error {
   }
 }
 
+export class CommentViewMarkerMissingError extends Error {
+  public readonly code = 'COMMENT_VIEW_MARKER_MISSING' as const;
+
+  constructor() {
+    super(
+      'コメントの取得位置の欠落が10分以上回復せず、10回以上続いたため、コメント取得を停止しました。',
+    );
+    this.name = 'CommentViewMarkerMissingError';
+  }
+}
+
 export class ViewUriNotReceivedError extends Error {
   public readonly code = 'VIEW_URI_NOT_RECEIVED' as const;
 

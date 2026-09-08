@@ -1,6 +1,9 @@
 import { NicoClient } from '../../../src/main/vendor/nico-client/NicoClient';
 import type { MockInstance } from 'vitest';
-import { CommentViewStalledError } from '../../../src/main/vendor/nico-client/errors';
+import {
+  CommentViewMarkerMissingError,
+  CommentViewStalledError,
+} from '../../../src/main/vendor/nico-client/errors';
 import { HttpClient } from '../../../src/main/vendor/nico-client/internal/httpClient';
 import { getProtoRegistry } from '../../../src/main/vendor/nico-client/internal/protoLoader';
 import { isRetryableNicoError } from '../../../src/main/vendor/nico-client/retryPolicy';
@@ -195,4 +198,99 @@ test('コメントと終了通知を受け取る通常経路を維持する', as
   expect(comments).toHaveLength(1);
   expect(comments[0].content).toBe('test');
   expect(httpText).not.toHaveBeenCalled();
+});
+
+// 欠落の回復では番組ページも取り直す。その入口だけを差し替えて再取得回数を数える。
+function allowPageRefresh() {
+  return vi.spyOn(NicoClient.prototype as any, 'fetchProgramInfo').mockResolvedValue(info);
+}
+
+test.each([
+  { label: 'next欠落', entries: [] },
+  { label: '安全な整数範囲を超えるnext', entries: [{ next: { at: '9223372036854775807' } }] },
+])('$label は再取得を待機し、10分以上回復しなければ停止する', async ({ entries }) => {
+  const page = allowPageRefresh();
+  const socket = vi.spyOn(NicoClient.prototype as any, 'openViewSocket');
+  respond = async () => entries;
+  const checked = expect(consume()).rejects.toBeInstanceOf(CommentViewMarkerMissingError);
+  await vi.advanceTimersByTimeAsync(20 * 60_000);
+  await checked;
+  expect(requests).toHaveLength(25);
+  expect(requests.slice(0, 8).map((r) => r.time)).toEqual([
+    0, 1000, 3000, 7000, 15000, 31000, 61000, 91000,
+  ]);
+  expect(requests.at(-1)!.time).toBeGreaterThanOrEqual(600_000);
+  expect(page).toHaveBeenCalledTimes(24);
+  expect(socket).toHaveBeenCalledTimes(25);
+  expect(isRetryableNicoError(new CommentViewMarkerMissingError())).toBe(false);
+});
+
+test('next欠落も10回を超えただけでは諦めず、10分待つ', async () => {
+  allowPageRefresh();
+  const task = consume();
+  await vi.advanceTimersByTimeAsync(5 * 60_000);
+  expect(requests.length).toBeGreaterThan(10);
+  controller.abort();
+  await expect(task).resolves.toEqual([]);
+});
+
+test('next欠落も10分を超えただけでは諦めず、10回まで待つ', async () => {
+  allowPageRefresh();
+  responseDelayMs = 120_000;
+  const task = consume();
+  await vi.advanceTimersByTimeAsync(15 * 60_000);
+  controller.abort();
+  await vi.advanceTimersByTimeAsync(120_000);
+  await expect(task).resolves.toEqual([]);
+  expect(requests.length).toBeLessThan(10);
+});
+
+test('取得位置が前進すれば欠落回数・時刻・バックオフを戻す', async () => {
+  allowPageRefresh();
+  respond = async (index) => {
+    if (index === 59) controller.abort();
+    if (index % 20 === 19) return [{ next: { at: 100 + index } }];
+    return [];
+  };
+  const task = consume();
+  await vi.advanceTimersByTimeAsync(30 * 60_000);
+  await expect(task).resolves.toEqual([]);
+  expect(requests).toHaveLength(60);
+  expect(requests[21].time - requests[20].time).toBe(1000);
+  expect(requests.at(-1)!.time).toBeGreaterThan(10 * 60_000);
+});
+
+test('欠落と古いnextを交互に返しても回復扱いにせず停止する', async () => {
+  allowPageRefresh();
+  respond = async (index) => (index % 2 === 0 ? [{ next: { at: 100 } }] : []);
+  const checked = expect(consume()).rejects.toThrow(/10分以上/);
+  await vi.advanceTimersByTimeAsync(30 * 60_000);
+  await checked;
+  expect(requests.length).toBeLessThan(60);
+});
+
+test.each([500, 100_000])(
+  '欠落回復の待機中（%sms）に停止したらページ・接続を取り直さない',
+  async (at) => {
+    const page = allowPageRefresh();
+    const socket = vi.spyOn(NicoClient.prototype as any, 'openViewSocket');
+    const task = consume();
+    await vi.advanceTimersByTimeAsync(at);
+    const counts = [requests.length, page.mock.calls.length, socket.mock.calls.length];
+    controller.abort();
+    await task;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect([requests.length, page.mock.calls.length, socket.mock.calls.length]).toEqual(counts);
+  },
+);
+
+test('欠落回復で番組終了が判明したら再接続せず正常終了する', async () => {
+  const page = allowPageRefresh();
+  page.mockResolvedValue({ ...info, status: NicoLiveProgramStatus.ended });
+  const socket = vi.spyOn(NicoClient.prototype as any, 'openViewSocket');
+  const task = consume();
+  await vi.advanceTimersByTimeAsync(10_000);
+  await expect(task).resolves.toEqual([]);
+  expect(page).toHaveBeenCalledTimes(1);
+  expect(socket).toHaveBeenCalledTimes(1);
 });
