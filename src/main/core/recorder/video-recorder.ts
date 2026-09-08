@@ -1,3 +1,4 @@
+import type { Writable } from 'node:stream';
 import type { VideoStopReason, VideoRecordResult } from './recording-types';
 import { NicoClient } from '../../vendor/nico-client/NicoClient';
 import { abortableDelay } from '../../vendor/nico-client/abortableDelay';
@@ -13,6 +14,8 @@ import {
   type TrackResult,
 } from '../nico/hls';
 import { WatchSession, type HlsStreamInfo } from '../nico/watch-session';
+
+export type { VideoStopReason, VideoRecordResult } from './recording-types';
 
 export interface VideoRecorderOptions {
   programId: string;
@@ -312,6 +315,3 @@ export async function recordVideo(
     session.close();
   }
 }
-import type { Writable } from 'node:stream';
-
-export type { VideoStopReason, VideoRecordResult } from './recording-types';
