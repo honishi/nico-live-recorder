@@ -1,11 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  buildBaseName,
-  resolveAvailableAttempt,
-  sanitizeFileName,
-} from '../../../src/main/core/recorder/program-recorder';
+import { resolveAvailableAttempt } from '../../../src/main/core/recorder/program-recorder';
+import { buildBaseName, sanitizeFileName } from '../../../src/main/core/recorder/recording-paths';
 import {
   NicoLiveProgramStatus,
   type NicoLiveProgramInfo,

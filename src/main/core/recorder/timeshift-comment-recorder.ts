@@ -4,7 +4,10 @@ import { getProtoRegistry } from '../../vendor/nico-client/internal/protoLoader'
 import { ProtobufStreamReader } from '../../vendor/nico-client/internal/protobufStreamReader';
 import type { NicoComment, CommentColorName } from '../../vendor/nico-client/types';
 import { checkedFetch, object, TimeshiftError } from '../nico/timeshift-common';
-import { CSV_HEADER, toCommentCsv, type CommentRecordResult } from './comment-recorder';
+import { CSV_HEADER, toCommentCsv } from './comment-csv';
+import type { TimeshiftCommentResult } from './recording-types';
+
+export type { TimeshiftCommentResult } from './recording-types';
 
 const COLORS: CommentColorName[] = [
   'white',
@@ -34,15 +37,6 @@ export const TIMESHIFT_COMMENT_LIMITS = {
   packedPages: 2000,
   viewPages: 3,
 };
-export interface TimeshiftCommentResult extends CommentRecordResult {
-  status: 'complete' | 'partial';
-  reason: string;
-  sorted: boolean;
-  duplicates: number;
-  invalidCount: number;
-  viewRequests?: { durationMs: number; entries: number }[];
-}
-
 // 外側の停止理由だけを固定コードへ変換し、例外本文やURLは診断へ出さない。
 function interruptionReason(signal: AbortSignal): string {
   if (signal.reason instanceof TimeshiftError) return signal.reason.code;

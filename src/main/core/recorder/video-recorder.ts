@@ -1,3 +1,4 @@
+import type { VideoStopReason, VideoRecordResult } from './recording-types';
 import { NicoClient } from '../../vendor/nico-client/NicoClient';
 import { abortableDelay } from '../../vendor/nico-client/abortableDelay';
 import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
@@ -25,18 +26,6 @@ export interface VideoRecorderOptions {
   programInfo?: NicoLiveProgramInfo;
   /** 視聴 WebSocket の再接続待ちの基準 (テストで短くする) */
   reconnectBaseDelayMs?: number;
-}
-
-export type VideoStopReason = 'program-ended' | 'endlist' | 'aborted' | 'idle' | 'disconnected';
-
-export interface VideoRecordResult {
-  outputPath: string;
-  startedAt: Date;
-  endedAt: Date;
-  reason: VideoStopReason;
-  video: TrackResult;
-  audio?: TrackResult;
-  ffmpegExitCode: number | null;
 }
 
 const WS_RECONNECT_ATTEMPTS = 5;
@@ -324,3 +313,5 @@ export async function recordVideo(
   }
 }
 import type { Writable } from 'node:stream';
+
+export type { VideoStopReason, VideoRecordResult } from './recording-types';

@@ -7,7 +7,7 @@ import {
   recordTimeshiftComments,
   TIMESHIFT_COMMENT_LIMITS,
 } from '../../../src/main/core/recorder/timeshift-comment-recorder';
-import { CSV_HEADER } from '../../../src/main/core/recorder/comment-recorder';
+import { CSV_HEADER } from '../../../src/main/core/recorder/comment-csv';
 
 let dir: string;
 let output: string;

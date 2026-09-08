@@ -6,11 +6,8 @@ import { openTimeshiftSession } from '../nico/timeshift-session';
 import { TimeshiftError, timeshiftErrorText } from '../nico/timeshift-common';
 import { recordTimeshiftVideo } from './timeshift-video-recorder';
 import { recordTimeshiftComments } from './timeshift-comment-recorder';
-import {
-  buildBaseName,
-  type ProgramRecorderOptions,
-  type ProgramRecordResult,
-} from './program-recorder';
+import { buildBaseName } from './recording-paths';
+import type { ProgramRecorderOptions, ProgramRecordResult } from './recording-types';
 import type { TimeshiftProgress } from '../../../shared/types';
 
 /** 3種類すべてを排他的に確保し、CSV だけ残った録画も上書きしない。 */

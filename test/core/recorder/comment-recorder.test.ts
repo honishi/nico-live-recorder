@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
-import { recordComments, toCommentCsv } from '../../../src/main/core/recorder/comment-recorder';
+import { recordComments } from '../../../src/main/core/recorder/comment-recorder';
+import { toCommentCsv } from '../../../src/main/core/recorder/comment-csv';
 import type { NicoComment, StreamOptions } from '../../../src/main/vendor/nico-client/types';
 
 // NDGR への接続は差し替え、渡されたオプションと abort の扱いを確認する
