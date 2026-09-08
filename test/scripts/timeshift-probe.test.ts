@@ -1,0 +1,570 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { Writable } from 'node:stream';
+import {
+  parseOptions,
+  parsePage,
+  errorSummary,
+  ProbeError,
+} from '../../scripts/timeshift-probe/common';
+import { clipPlaylist, sampleVideo } from '../../scripts/timeshift-probe/video';
+import { buildProbeViewUrl, sampleComments } from '../../scripts/timeshift-probe/comments';
+import { getProtoRegistry } from '../../src/main/vendor/nico-client/internal/protoLoader';
+import { HlsForbiddenError } from '../../src/main/core/nico/hls';
+import { observeSession } from '../../scripts/timeshift-probe/session';
+import { startFakeWatchServer } from '../helpers/fake-watch-server';
+import { once } from 'node:events';
+import crypto from 'node:crypto';
+
+const muxed = vi.hoisted(() => ({ chunks: [] as Buffer[] }));
+
+// ネットワークと ffmpeg は置換し、playlist・復号以降の取得判定と NDGR の巡回を実物で通す。
+vi.mock('../../src/main/core/nico/ffmpeg', () => ({
+  FfmpegMuxer: class {
+    start() {
+      return {
+        video: new Writable({
+          write(chunk: Buffer, _encoding, done) {
+            muxed.chunks.push(Buffer.from(chunk));
+            done();
+          },
+        }),
+      };
+    }
+    wait() {
+      return Promise.resolve({ exitCode: 0 });
+    }
+    finish() {
+      return this.wait();
+    }
+    kill() {}
+  },
+}));
+
+let dir: string;
+beforeEach(async () => {
+  muxed.chunks.length = 0;
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'nlr-probe-'));
+});
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await fs.rm(dir, { recursive: true, force: true });
+});
+
+function mockFetch(routes: Record<string, string | Uint8Array | number>): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: string) => {
+      const value = routes[input];
+      if (value === undefined) throw new Error('unexpected request');
+      return Promise.resolve(
+        typeof value === 'number'
+          ? new Response(null, { status: value })
+          : new Response(typeof value === 'string' ? value : Buffer.from(value)),
+      );
+    }),
+  );
+}
+
+test('匿名指定は残っているセッションを無視し、無指定や不正な上限は拒否する', () => {
+  expect(
+    parseOptions(['lv1', '--anonymous'], { NICO_USER_SESSION: 'secret' })?.session,
+  ).toBeUndefined();
+  expect(() => parseOptions(['lv1'], {})).toThrow('NICO_USER_SESSION');
+  expect(() => parseOptions(['lv1', '--anonymous', '--media-seconds', 'NaN'], {})).toThrow();
+  expect(() => parseOptions(['lv1', '--anonymous', '--timeout', '0'], {})).toThrow();
+  expect(
+    parseOptions(['https://live.nicovideo.jp/watch/lv1?ref=test'], { NICO_USER_SESSION: 'secret' })
+      ?.programId,
+  ).toBe('lv1');
+});
+
+test('公開状態と認証状態を分け、ページのトークンや例外本文をレポートへ出さない', () => {
+  const data = {
+    program: { status: 'ENDED', title: 'secret-title' },
+    programTimeshift: { publication: { status: 'Open' } },
+    site: { frontendId: 9, relive: { webSocketUrl: 'wss://example.test/timeshift?token=secret' } },
+  };
+  const page = parsePage(
+    `<script id="embedded-data" data-props='${JSON.stringify(data)}'></script>`,
+  );
+  expect(page.webSocketUrl).toContain('frontend_id=9');
+  expect(page.summary).toMatchObject({
+    status: 'ENDED',
+    publication: 'Open',
+    loginObserved: 'unknown',
+  });
+  expect(JSON.stringify(page.summary)).not.toContain('secret');
+  expect(errorSummary(new Error('secret url'))).toEqual({ code: 'UNEXPECTED_ERROR' });
+  expect(errorSummary(new HlsForbiddenError('https://example.test/secret'))).toEqual({
+    code: 'HLS_HTTP_ERROR',
+    httpStatus: 403,
+  });
+});
+
+test('視聴情報を受信し、再接続指示では新しい接続を作らずに終了する', async () => {
+  const server = await startFakeWatchServer({
+    streamData: () => ({
+      protocol: 'hls',
+      uri: 'https://example.test/master?secret=token',
+      cookies: [{ name: 'session', value: 'secret-cookie', domain: 'example.test', path: '/' }],
+    }),
+  });
+  try {
+    const session = await observeSession(
+      server.url,
+      'user_session=secret',
+      new AbortController().signal,
+    );
+    expect(session.summary).toMatchObject({ opened: true, hasHls: true, hasComments: true });
+    expect(session.stream?.cookies[0].value).toBe('secret-cookie');
+    expect(JSON.stringify(session.summary)).not.toContain('secret');
+    const closed = once(server.connections[0].socket, 'close');
+    server.send(0, { type: 'reconnect', data: { waitTimeSec: 600, audienceToken: 'secret' } });
+    await closed;
+    expect(session.summary.serverCodes).toContain('RECONNECT_REQUESTED');
+    expect(server.connections).toHaveLength(1);
+    session.close();
+  } finally {
+    await server.close();
+  }
+});
+
+const playlist =
+  '#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:3,\n1.ts\n#EXTINF:3,\n2.ts\n#EXTINF:3,\n3.ts\n';
+
+test('短区間は境界に切り上げ、合成した ENDLIST と元の全編末尾を区別する', () => {
+  const clipped = clipPlaylist(playlist, 'https://example.test/media.m3u8', 4);
+  expect(clipped.summary).toMatchObject({
+    selectedDuration: 6,
+    expectedSavedSegments: 2,
+    originalEndList: false,
+  });
+  expect(clipped.text).toContain('#EXT-X-ENDLIST');
+  expect(clipped.text).not.toContain('3.ts');
+  const later = clipPlaylist(
+    playlist + '#EXT-X-DISCONTINUITY\n',
+    'https://example.test/media.m3u8',
+    4,
+  );
+  expect(later.summary.tags.counts['EXT-X-DISCONTINUITY']).toBe(1);
+  expect(later.summary.unsupportedTags).toEqual([]);
+});
+
+test('DISCONTINUITY-SEQUENCE を不連続境界と誤認しない', () => {
+  const result = clipPlaylist(
+    playlist.replace('#EXTM3U', '#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:3'),
+    'https://example.test/media.m3u8',
+    4,
+  );
+  expect(result.summary.selectedTagCounts['EXT-X-DISCONTINUITY-SEQUENCE']).toBe(1);
+  expect(result.summary.unsupportedTags).toEqual([]);
+});
+
+const blankPrefix =
+  '#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-MAP:URI="/blank-init"\n#EXTINF:1,\n/blank/0.mp4\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI="/main-init"\n#EXT-X-KEY:METHOD=AES-128,URI="/key"\n#EXTINF:6,\n/main.m4s\n';
+
+test.each([undefined, 1, 5])(
+  '冒頭 blank の境界だけを許可し、本編の初期化情報と元の sequence による IV を使う（並列数=%s）',
+  async (threads) => {
+    const key = Buffer.alloc(16, 1);
+    const iv = Buffer.alloc(16);
+    iv.writeBigUInt64BE(11n, 8);
+    const encryptor = crypto.createCipheriv('aes-128-cbc', key, iv);
+    mockFetch({
+      'https://example.test/master': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\n/media\n',
+      'https://example.test/media': blankPrefix + '#EXT-X-ENDLIST\n',
+      'https://example.test/main-init': 'init-main',
+      'https://example.test/key': key,
+      'https://example.test/main.m4s': Buffer.concat([
+        encryptor.update('main-content'),
+        encryptor.final(),
+      ]),
+    });
+    const result = await sampleVideo(
+      {
+        uri: 'https://example.test/master',
+        quality: 'abr',
+        availableQualities: [],
+        cookies: [],
+        receivedAt: new Date(),
+      },
+      dir,
+      7,
+      new AbortController().signal,
+      undefined,
+      threads,
+    );
+    expect(result.status).toBe('sample-saved');
+    expect(result.tracks[0]).toMatchObject({
+      leadingBlankSegments: 1,
+      leadingBlankBoundaryCount: 1,
+      savedDuration: 6,
+      saved: { segments: 1, firstSeq: 11 },
+    });
+    expect(Buffer.concat(muxed.chunks).toString()).toBe('init-mainmain-content');
+  },
+);
+
+test('冒頭 blank 後でも、本編内の追加の不連続は拒否する', () => {
+  const laterBoundary = blankPrefix + '#EXT-X-DISCONTINUITY\n#EXTINF:6,\n/main2.m4s\n';
+  expect(() => clipPlaylist(laterBoundary, 'https://example.test/media', 13)).toThrow(ProbeError);
+  const nonBlankPrefix = blankPrefix.replace('/blank/0.mp4', '/real/0.mp4');
+  expect(() => clipPlaylist(nonBlankPrefix, 'https://example.test/media', 7)).toThrow(ProbeError);
+});
+
+test('next だけの初回応答から、サーバーが返した位置を辿ってコメントを取得する', async () => {
+  const registry = await getProtoRegistry();
+  const frame = (value: Record<string, unknown>) =>
+    registry.ChunkedEntry.encodeDelimited(registry.ChunkedEntry.fromObject(value)).finish();
+  mockFetch({
+    'https://example.test/view?at=now': frame({ next: { at: '1000' } }),
+    'https://example.test/view?at=1000': Buffer.concat([
+      frame({ backward: { segment: { uri: 'https://example.test/back' } } }),
+      frame({ next: { at: '2000' } }),
+    ]),
+    'https://example.test/back': registry.PackedSegment.encode(
+      registry.PackedSegment.fromObject({
+        messages: [
+          {
+            meta: { id: 'a', at: { seconds: 1000 } },
+            message: { chat: { content: 'test', no: 1 } },
+          },
+        ],
+      }),
+    ).finish(),
+  });
+  const result = await sampleComments(
+    'https://example.test/view',
+    dir,
+    1000,
+    'now',
+    new AbortController().signal,
+    undefined,
+    3,
+  );
+  expect(result).toMatchObject({
+    count: 1,
+    reason: 'view-exhausted',
+    backwardProvided: true,
+    viewRequests: [
+      { requestedAt: 'now', nextAt: '1000', entries: 1 },
+      { requestedAt: '1000', nextAt: '2000', entries: 2 },
+    ],
+  });
+});
+
+test.each([false, true])(
+  'コメント入口の探索を上限または循環で停止する（循環=%s）',
+  async (cycle) => {
+    const registry = await getProtoRegistry();
+    const next = (at: number) =>
+      registry.ChunkedEntry.encodeDelimited(
+        registry.ChunkedEntry.create({ next: { at } }),
+      ).finish();
+    mockFetch({
+      'https://example.test/view?at=now': next(1000),
+      'https://example.test/view?at=1000': next(cycle ? 1000 : 2000),
+    });
+    const result = await sampleComments(
+      'https://example.test/view',
+      dir,
+      1000,
+      'now',
+      new AbortController().signal,
+      undefined,
+      2,
+    );
+    expect(result.reason).toBe(cycle ? 'view-cursor-cycle' : 'view-page-limit');
+    expect(result.count).toBe(0);
+    expect(result.viewRequests).toHaveLength(2);
+  },
+);
+
+test('対象区間内の不連続は拒否し、両トラックの診断を URL 抜きで残す', async () => {
+  const unsafe = playlist.replace('2.ts', '#EXT-X-DISCONTINUITY\n2.ts');
+  mockFetch({
+    'https://example.test/master.m3u8':
+      '#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Main",URI="audio.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO="a"\nmedia.m3u8\n',
+    'https://example.test/media.m3u8': unsafe,
+    'https://example.test/audio.m3u8': playlist,
+  });
+  const progress = vi.fn<(summary: Record<string, unknown>) => void>();
+  await expect(
+    sampleVideo(
+      {
+        uri: 'https://example.test/master.m3u8',
+        quality: 'abr',
+        availableQualities: [],
+        cookies: [],
+        receivedAt: new Date(),
+      },
+      dir,
+      4,
+      new AbortController().signal,
+      progress,
+    ),
+  ).rejects.toThrow(ProbeError);
+  expect(progress.mock.calls[0]?.[0]).toMatchObject({
+    tracks: [
+      {
+        label: 'video',
+        unsupportedTags: ['EXT-X-DISCONTINUITY'],
+        tags: {
+          firstUnsupportedPositions: [
+            { tag: 'EXT-X-DISCONTINUITY', segmentIndex: 1, atSeconds: 3 },
+          ],
+        },
+      },
+      { label: 'audio', unsupportedTags: [] },
+    ],
+  });
+  expect(JSON.stringify(progress.mock.calls)).not.toContain('https://');
+});
+
+test('コメント開始位置を省略・now・数値で正確に切り替える', () => {
+  expect(buildProbeViewUrl('https://example.test/view?at=now&token=secret', 'beginning')).toBe(
+    'https://example.test/view?token=secret',
+  );
+  expect(buildProbeViewUrl('https://example.test/view?at=1', 'now')).toBe(
+    'https://example.test/view?at=now',
+  );
+  expect(buildProbeViewUrl('https://example.test/view', '1788692366')).toBe(
+    'https://example.test/view?at=1788692366',
+  );
+  expect(parseOptions(['lv1', '--anonymous', '--view-at', '1788692366'], {})?.viewAt).toBe(
+    '1788692366',
+  );
+  expect(() => parseOptions(['lv1', '--anonymous', '--view-at', '123&token=secret'], {})).toThrow();
+});
+
+test('next だけの応答を空の履歴と断定せず、int64 カーソルを丸めずに保存する', async () => {
+  const registry = await getProtoRegistry();
+  mockFetch({
+    'https://example.test/view': registry.ChunkedEntry.encodeDelimited(
+      registry.ChunkedEntry.fromObject({ next: { at: '9223372036854775807' } }),
+    ).finish(),
+  });
+  const result = await sampleComments(
+    'https://example.test/view?at=now',
+    dir,
+    1000,
+    'beginning',
+    new AbortController().signal,
+  );
+  expect(result).toMatchObject({
+    count: 0,
+    requestedAt: 'omitted',
+    nextAt: '9223372036854775807',
+    historyExhausted: false,
+    fullCoverage: 'not-verified',
+    viewEntries: { total: 1, next: 1, backward: 0, previous: 0, segment: 0 },
+  });
+});
+
+test.each([false, true])('セグメント欠落=%s を短区間の保存成功と区別する', async (missing) => {
+  mockFetch({
+    'https://example.test/master.m3u8': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nmedia.m3u8\n',
+    'https://example.test/media.m3u8': playlist,
+    'https://example.test/1.ts': 'first',
+    'https://example.test/2.ts': missing ? 404 : 'second',
+  });
+  const result = await sampleVideo(
+    {
+      uri: 'https://example.test/master.m3u8',
+      quality: 'abr',
+      availableQualities: [],
+      cookies: [],
+      receivedAt: new Date(),
+    },
+    dir,
+    4,
+    new AbortController().signal,
+  );
+  expect(result.status).toBe(missing ? 'incomplete' : 'sample-saved');
+  expect(result.missingSegments).toBe(missing ? 1 : 0);
+  expect(result.fullCoverage).toBe('not-verified');
+});
+
+test.each([1, 10])('NDGR の履歴と直近分を辿り、重複と件数上限=%s を扱う', async (limit) => {
+  const registry = await getProtoRegistry();
+  const message = (id: string, no: number) => ({
+    meta: { id, at: { seconds: 1000 + no } },
+    message: { chat: { content: `comment-${no}`, no, vpos: no * 100 } },
+  });
+  const view = Buffer.concat([
+    registry.ChunkedEntry.encodeDelimited(
+      registry.ChunkedEntry.create({ backward: { segment: { uri: 'https://example.test/back' } } }),
+    ).finish(),
+    registry.ChunkedEntry.encodeDelimited(
+      registry.ChunkedEntry.create({ segment: { uri: 'https://example.test/forward' } }),
+    ).finish(),
+    registry.ChunkedEntry.encodeDelimited(
+      registry.ChunkedEntry.create({ next: { at: 1234 } }),
+    ).finish(),
+  ]);
+  const pack = (messages: unknown[], next?: string) =>
+    registry.PackedSegment.encode(
+      registry.PackedSegment.create({ messages, ...(next ? { next: { uri: next } } : {}) }),
+    ).finish();
+  mockFetch({
+    'https://example.test/view?at=now': view,
+    'https://example.test/back': pack([message('a', 1)], 'https://example.test/back2'),
+    'https://example.test/back2': pack([message('b', 2)]),
+    'https://example.test/forward': Buffer.concat(
+      [message('b', 2), message('c', 3)].map((m) =>
+        registry.ChunkedMessage.encodeDelimited(registry.ChunkedMessage.create(m)).finish(),
+      ),
+    ),
+  });
+  const result = await sampleComments(
+    'https://example.test/view',
+    dir,
+    limit,
+    'now',
+    new AbortController().signal,
+  );
+  expect(result.count).toBe(limit === 1 ? 1 : 3);
+  expect(result.duplicates).toBe(limit === 1 ? 0 : 1);
+  expect(result.reason).toBe(limit === 1 ? 'comment-limit' : 'view-exhausted');
+  expect(result.historyExhausted).toBe(limit !== 1);
+  const lines = (await fs.readFile(path.join(dir, 'comments.jsonl'), 'utf8')).trim().split('\n');
+  expect(lines).toHaveLength(result.count);
+  expect(JSON.stringify(result)).not.toContain('comment-1');
+});
+
+// 全編の終了判定と途中失敗を、外部通信なしで確認する。
+test('全編オプションは短区間指定と区別し、既定の上限を引き上げる', () => {
+  expect(parseOptions(['lv1', '--anonymous', '--mode', 'comments', '--full'], {})).toMatchObject({
+    full: true,
+    timeout: 1800,
+    commentLimit: 200000,
+  });
+  expect(() => parseOptions(['lv1', '--anonymous', '--full'], {})).toThrow();
+  expect(() =>
+    parseOptions(['lv1', '--anonymous', '--mode', 'video', '--full', '--media-seconds=30'], {}),
+  ).toThrow();
+});
+
+test.each([
+  { missing: false },
+  { missing: true },
+  { missing: false, threads: 5 },
+  { missing: true, threads: 5 },
+])('全プレイリストの取得で欠落を完了と区別する: %j', async ({ missing, threads }) => {
+  expect(() => clipPlaylist(playlist, 'https://example.test/media', null)).toThrow(
+    'ORIGINAL_ENDLIST_MISSING',
+  );
+  mockFetch({
+    'https://example.test/master': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\n/media\n',
+    'https://example.test/media': playlist + '#EXT-X-ENDLIST\n',
+    'https://example.test/1.ts': 'first',
+    'https://example.test/2.ts': 'second',
+    'https://example.test/3.ts': missing ? 404 : 'third',
+  });
+  const result = await sampleVideo(
+    {
+      uri: 'https://example.test/master',
+      quality: 'abr',
+      availableQualities: [],
+      cookies: [],
+      receivedAt: new Date(),
+    },
+    dir,
+    null,
+    new AbortController().signal,
+    undefined,
+    threads,
+  );
+  expect(result.status).toBe(missing ? 'incomplete' : 'playlist-saved');
+  expect(result.playlistCoverage).toBe(missing ? 'not-verified' : 'complete');
+  expect(result.tracks[0]).toMatchObject({ selectedSegments: 3, originalEndList: true });
+  expect(result.timingsMs.videoDownload).toBeGreaterThanOrEqual(0);
+});
+
+test.each(['complete', 'limit', 'cycle', 'http-error', 'truncated', 'missing-next'])(
+  '全コメントの履歴終端・ソート・途中結果を検証する: %s',
+  async (scenario) => {
+    const registry = await getProtoRegistry();
+    const entry = (value: Record<string, unknown>) =>
+      registry.ChunkedEntry.encodeDelimited(registry.ChunkedEntry.fromObject(value)).finish();
+    const message = (id: string, seconds: number, no: number, nanos = 0) => ({
+      meta: { id, at: { seconds, nanos } },
+      message: { chat: { content: 'local-only', no } },
+    });
+    const a = message('a', 1000, 2);
+    const b = message('b', 1000, 1);
+    const c = message('c', 999, 3);
+    const d = message('d', 1000, 0, 1);
+    const pack = (messages: unknown[], next?: string) =>
+      registry.PackedSegment.encode(
+        registry.PackedSegment.fromObject({ messages, ...(next ? { next: { uri: next } } : {}) }),
+      ).finish();
+    const forward = registry.ChunkedMessage.encodeDelimited(
+      registry.ChunkedMessage.fromObject(c),
+    ).finish();
+    mockFetch({
+      'https://example.test/view?at=now': entry({ next: { at: '1000' } }),
+      'https://example.test/view?at=1000': Buffer.concat([
+        entry({ backward: { segment: { uri: 'https://example.test/back' } } }),
+        entry({ segment: { uri: 'https://example.test/forward' } }),
+        ...(scenario === 'missing-next' ? [] : [entry({ next: { at: '2000' } })]),
+      ]),
+      'https://example.test/back': pack([d, a, b], 'https://example.test/back2'),
+      'https://example.test/back2':
+        scenario === 'http-error'
+          ? 500
+          : pack([c], scenario === 'cycle' ? 'https://example.test/back' : undefined),
+      'https://example.test/forward': scenario === 'truncated' ? forward.slice(0, -1) : forward,
+    });
+    const progress = vi.fn<(summary: Record<string, unknown>) => void>();
+    const task = sampleComments(
+      'https://example.test/view',
+      dir,
+      scenario === 'limit' ? 2 : 100,
+      'now',
+      new AbortController().signal,
+      progress,
+      3,
+      true,
+    );
+    if (scenario === 'http-error' || scenario === 'truncated') {
+      await expect(task).rejects.toThrow(ProbeError);
+      expect(progress.mock.lastCall?.[0]).toMatchObject({
+        status: 'partial',
+        sortOrder: 'at-then-no',
+        snapshotCoverage: 'not-verified',
+      });
+    } else {
+      const result = await task;
+      expect(result.status).toBe(scenario === 'complete' ? 'history-saved' : 'incomplete');
+      expect(result.snapshotCoverage).toBe(scenario === 'complete' ? 'complete' : 'not-verified');
+      expect(result.fullCoverage).toBe('not-verified');
+      expect(result.timingsMs.view).toBeGreaterThanOrEqual(0);
+      expect(result.timingsMs.sortAndSave).toBeGreaterThanOrEqual(0);
+      if (scenario === 'complete')
+        expect(result).toMatchObject({
+          count: 4,
+          duplicates: 1,
+          completedForwardSegments: 1,
+          historyExhausted: true,
+        });
+      if (scenario === 'limit') expect(result.reason).toBe('comment-limit');
+      if (scenario === 'cycle') expect(result.reason).toBe('history-cycle');
+    }
+    const rows = (await fs.readFile(path.join(dir, 'comments.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { id: string });
+    const expected =
+      scenario === 'limit'
+        ? ['a', 'd']
+        : scenario === 'http-error'
+          ? ['b', 'a', 'd']
+          : ['c', 'b', 'a', 'd'];
+    expect(rows.map((row) => row.id)).toEqual(expected);
+    expect(JSON.stringify(progress.mock.calls)).not.toContain('local-only');
+    expect(JSON.stringify(progress.mock.calls)).not.toContain('https://');
+  },
+);
