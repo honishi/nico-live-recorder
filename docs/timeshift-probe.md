@@ -62,7 +62,9 @@ npx tsx scripts/timeshift-probe.ts lv123456789 --mode video --label premium-unre
 
 既存の HLS ダウンローダー・復号・FFmpeg 多重化を再利用します。検証側で短区間の playlist を固定し、終了マーカーを追加します。`originalEndList` は元の playlist にあった終了マーカー、`selectedDuration` は選択区間の長さです。合成した終了マーカーを全編取得の証拠にしません。
 
-404 で読み飛ばされたセグメント、保存予定数と実績の不一致、0セグメントの保存は `incomplete` になります。`/blank/` の除外件数も残します。取得する短区間に BYTERANGE・DISCONTINUITY・GAP が含まれる場合は `UNSUPPORTED_PLAYLIST_TAG` として止めます。取得対象より後のタグや、不連続境界そのものではない DISCONTINUITY-SEQUENCE だけでは止めません。403 を含む途中エラーでの認証更新・自動再開は行いません。
+404 で読み飛ばされたセグメント、保存予定数と実績の不一致、0セグメントの保存は `incomplete` になります。`/blank/` の除外件数も残します。取得する短区間に BYTERANGE・GAP、または保存する本編の途中に DISCONTINUITY が含まれる場合は `UNSUPPORTED_PLAYLIST_TAG` として止めます。取得対象より後のタグや、不連続境界そのものではない DISCONTINUITY-SEQUENCE だけでは止めません。403 を含む途中エラーでの認証更新・自動再開は行いません。
+
+`schemaVersion: 3` 以降は、先頭がすべて `/blank/` で、その直後の最初の本編へ移る DISCONTINUITY だけを許可します。blank の映像・初期化情報は既存ダウンローダーで除外し、本編の初期化情報を取得します。セグメントの番号と暗号鍵情報は変更せず、暗黙 IV の復号位置を保ちます。本編を一度保存した後の不連続は引き続き拒否します。`leadingBlankSegments` は先頭 blank 数、`leadingBlankBoundaryCount` は許可した境界数、`savedDuration` は blank を除く保存予定のメディア長です。
 
 `schemaVersion: 2` 以降は、拒否した場合にも両トラックの `video.tracks` に診断を残します。`tags.counts` は元の playlist 全体のタグ数、`selectedTagCounts` は取得区間のタグ数、`unsupportedTags` は実際に拒否したタグ名です。`tags.firstUnsupportedPositions` は最初の20箇所について、0始まりのセグメント位置と playlist の先頭からの秒数を示します。タグの URI・属性値は保存しません。初版では DISCONTINUITY-SEQUENCE を DISCONTINUITY と誤認し、取得範囲外のタグでも停止していたため、旧レポートのエラーだけでは原因タグを特定できません。
 
@@ -74,16 +76,20 @@ npx tsx scripts/timeshift-probe.ts lv123456789 --mode video --label premium-unre
 npx tsx scripts/timeshift-probe.ts lv123456789 --mode comments --label premium-unreserved --comment-limit 1000
 ```
 
-初回の NDGR View 応答から backward・previous・segment・next を観測し、backward の履歴を辿った後、previous / segment のコメントを取得します。重複を除去して `comments.jsonl` に保存します。本文を含むため、このファイルはローカル確認用です。投稿者情報は保存しません。
+NDGR View 応答から backward・previous・segment・next を観測し、backward の履歴を辿った後、previous / segment のコメントを取得します。初回に next しかなければ、サーバーが返した `next.at` で入口を探します。重複を除去して `comments.jsonl` に保存します。本文を含むため、このファイルはローカル確認用です。投稿者情報は保存しません。
 
 上限は既定1000コメント、PackedSegment 20ページ、総受信量16MiBです。巡回 URI の循環と実行時間上限でも止めます。件数が少なくても、提供された履歴が尽きたか、通信や上限で中断したかを区別します。`historyExhausted` は backward の巡回終了を表し、番組全体のコメントが揃った保証ではありません。番組ページのコメント数との一致だけでも完全性は判断できません。
 
-最初の View リクエストは `at=now` です。next だけが返ってコメントが0件の場合、コメントが存在しないとは断定せず、まず `--view-at beginning` で `at` を省略した結果と比較します。受信 URI にもともと `at` があれば削除します。名前は比較用であり、先頭から取得できる保証ではありません。
+最初の View リクエストは `at=now` です。`schemaVersion: 3` 以降は、next しかない応答からはその `next.at` を辿ります。View 要求は既定3回、`--view-pages` で1〜10回を指定できます。データの入口が見つかる、カーソルが循環する、次のカーソルがない、または上限に達した時点で探索を終えます。1を指定すると以前の「初回応答だけ」の検証を再現できます。
 
-`comments.requestedAt` は実際の指定（省略は `omitted`）、`viewEntries` は受信した種類別の件数、`nextAt` は返された数値カーソルを文字列のまま保存したものです。次の位置を試す必要があるときは `--view-at 数値` で指定できますが、値の単位・意味は未確定です。時刻と決めつけず、観測結果から判断します。next の連続ポーリング・接続更新はまだ行いません。投稿時刻順に保存される保証もありません。
+これは [N Air の NDGR クライアント](https://github.com/n-air-app/n-air-app/blob/n-air_development/app/services/nicolive-program/NdgrClient.ts) が `now` から `entry.next.at` を辿る処理を参考にしています。検証では無限にポーリングせず、回数・バイト数・実行時間の上限を適用します。
+
+比較用の `--view-at beginning` は `at` を省略しますが、今回の実サービス検証では HTTP 400 でした。先頭から取得する方法としては扱いません。受信 URI にもともと `at` があれば削除する挙動は、比較の再現用に残しています。
+
+`comments.requestedAt` は初回の指定（省略は `omitted`）、`viewEntries` は全要求で受信した種類別の件数、`nextAt` は最後に返された数値カーソルを文字列のまま保存したものです。`viewRequests` には各要求の指定値・返された次の位置・エントリー数を残します。特定位置を試すには `--view-at 数値` を使います。カーソルは整数のまま引き継ぎ、日時への変換や丸めは行いません。視聴接続の更新はまだ行いません。投稿時刻順に保存される保証もありません。
 
 ```bash
-npx tsx scripts/timeshift-probe.ts lv123456789 --mode comments --label premium-unreserved --view-at beginning
+npx tsx scripts/timeshift-probe.ts lv123456789 --mode comments --label premium-unreserved --view-at now --view-pages 3
 ```
 
 ## 結果と制限
@@ -109,11 +115,13 @@ npx tsx scripts/timeshift-probe.ts lv123456789 --mode comments --label premium-u
 
 対象は `lv351334237`、タイムシフトの公開状態は `Open`、両セッションともページ上のログイン認識は成功しました。
 
-| 条件・モード                      | 観測結果                                                                      |
-| --------------------------------- | ----------------------------------------------------------------------------- |
-| 一般会員・事前予約なし / inspect  | 視聴 WebSocket URL なし。公式サイトでも視聴不可との確認あり                   |
-| プレミアム会員 / inspect          | タイムシフト用 WebSocket で HLS・コメント両方の接続情報を受信                 |
-| プレミアム会員 / video（初版）    | `UNSUPPORTED_PLAYLIST_TAG` で停止。実際の原因タグは未確認                     |
-| プレミアム会員 / comments、at=now | 9バイトの応答、next のみ、コメント0件。過去コメントの不存在を示すものではない |
+| 条件・モード                                   | 観測結果                                                                                                                   |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 一般会員・事前予約なし / inspect               | 視聴 WebSocket URL なし。公式サイトでも視聴不可との確認あり                                                                |
+| プレミアム会員 / inspect                       | タイムシフト用 WebSocket で HLS・コメント両方の接続情報を受信                                                              |
+| プレミアム会員 / video（初版）                 | `UNSUPPORTED_PLAYLIST_TAG` で停止。実際の原因タグは未確認                                                                  |
+| プレミアム会員 / comments、at=now              | 9バイトの応答、next のみ、コメント0件。過去コメントの不存在を示すものではない                                              |
+| プレミアム会員 / video（version 2）            | 映像・音声とも1377セグメント、約8252秒、元の ENDLIST あり。冒頭に blank 1個、その直後約1秒地点に DISCONTINUITY 1個あり停止 |
+| プレミアム会員 / comments、at省略（version 2） | View API が HTTP 400。protobuf を読む前に拒否                                                                              |
 
 一般会員の予約済みケース、映像・コメントの実データ保存、全編取得はまだ未確認です。会員種別の一般的な視聴条件を、この1番組の結果だけで確定しません。

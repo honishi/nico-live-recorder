@@ -21,6 +21,7 @@ const HELP = `使い方:
   --media-seconds 30             video のメディア長（秒、セグメント境界へ切り上げ）
   --comment-limit 1000           comments の保存件数上限
   --view-at now|beginning|数値   beginning は at を省略、数値は at にそのまま指定
+  --view-pages 3                コメントの入口を探す View リクエスト上限（最大10）
   --timeout 120                 全工程の実行時間上限（秒、最大600）
   --out .cache/timeshift-probe   実行ごとにサブディレクトリを作成
 `;
@@ -47,7 +48,7 @@ async function main(): Promise<void> {
   const dir = await fs.mkdtemp(path.join(baseDir, `${options.programId}-${options.label}-`));
   await fs.chmod(dir, 0o700);
   const report: Record<string, unknown> = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     startedAt,
     programId: options.programId,
     label: options.label,
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
       mediaSeconds: options.mediaSeconds,
       commentLimit: options.commentLimit,
       timeoutSeconds: options.timeout,
+      viewPages: options.viewPages,
     },
     viewAt: options.viewAt,
     status: 'running',
@@ -121,6 +123,7 @@ async function main(): Promise<void> {
         (summary) => {
           report.comments = summary;
         },
+        options.viewPages,
       );
       report.comments = result;
       report.status = result.status;

@@ -34,6 +34,7 @@ export async function sampleComments(
   viewAt: string,
   signal: AbortSignal,
   onProgress: (summary: Record<string, unknown>) => void = () => {},
+  maxViewPages = 1,
 ) {
   const registry = await getProtoRegistry();
   const file = await fs.open(path.join(dir, 'comments.jsonl'), 'wx', 0o600);
@@ -47,6 +48,7 @@ export async function sampleComments(
   let nextMarker = false;
   let nextAt: string | undefined;
   const viewEntries = { total: 0, backward: 0, previous: 0, segment: 0, next: 0 };
+  const viewRequests: { requestedAt: string; nextAt?: string; entries: number }[] = [];
   let firstAt: string | undefined;
   let lastAt: string | undefined;
   let historyExhausted = false;
@@ -67,6 +69,7 @@ export async function sampleComments(
     nextAt,
     requestedAt: viewAt === 'beginning' ? 'omitted' : viewAt,
     viewEntries,
+    viewRequests,
     historyExhausted,
     fullCoverage: 'not-verified',
   });
@@ -116,24 +119,53 @@ export async function sampleComments(
     }
   };
   try {
-    // 最初の View 応答だけを観測する。next の無限ポーリングや再接続はこの段階では行わない。
-    const view = buildProbeViewUrl(viewUri, viewAt);
-    for await (const entry of frames(view, registry.ChunkedEntry)) {
-      viewEntries.total += 1;
-      for (const type of ['backward', 'previous', 'segment', 'next'] as const) {
-        if (entry[type] !== undefined) viewEntries[type] += 1;
+    // now が next だけを返す場合は、そのカーソルで入口を探す。データを見つけた時点で止め、
+    // 要求回数・循環・既存の時間上限によりライブ向けの無限ポーリングにはしない。
+    const requested = new Set<string>();
+    let requestAt = viewAt;
+    for (let page = 0; page < maxViewPages; page += 1) {
+      requested.add(requestAt);
+      const request: (typeof viewRequests)[number] = {
+        requestedAt: requestAt === 'beginning' ? 'omitted' : requestAt,
+        entries: 0,
+      };
+      viewRequests.push(request);
+      for await (const entry of frames(
+        buildProbeViewUrl(viewUri, requestAt),
+        registry.ChunkedEntry,
+      )) {
+        viewEntries.total += 1;
+        request.entries += 1;
+        for (const type of ['backward', 'previous', 'segment', 'next'] as const) {
+          if (entry[type] !== undefined) viewEntries[type] += 1;
+        }
+        const back = object(object(entry.backward).segment).uri;
+        if (typeof back === 'string') backwardUri = back;
+        for (const candidate of [entry.previous, entry.segment]) {
+          const uri = object(candidate).uri;
+          if (typeof uri === 'string') forwards.add(uri);
+        }
+        if (entry.next !== undefined) {
+          nextMarker = true;
+          nextAt = cursor(object(entry.next).at);
+          request.nextAt = nextAt;
+          break;
+        }
       }
-      const back = object(object(entry.backward).segment).uri;
-      if (typeof back === 'string') backwardUri = back;
-      for (const candidate of [entry.previous, entry.segment]) {
-        const uri = object(candidate).uri;
-        if (typeof uri === 'string') forwards.add(uri);
-      }
-      if (entry.next !== undefined) {
-        nextMarker = true;
-        nextAt = cursor(object(entry.next).at);
+      if (backwardUri || forwards.size) {
+        reason = 'view-exhausted';
         break;
       }
+      if (request.nextAt === undefined) {
+        reason = 'no-next-cursor';
+        break;
+      }
+      if (requested.has(request.nextAt)) {
+        reason = 'view-cursor-cycle';
+        break;
+      }
+      reason = 'view-page-limit';
+      requestAt = request.nextAt;
     }
 
     // 過去履歴を少量だけ辿り、循環・件数・ページ数・バイト数・実行時間で上限を設ける。

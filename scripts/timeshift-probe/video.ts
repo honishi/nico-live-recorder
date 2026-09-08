@@ -79,7 +79,19 @@ export function clipPlaylist(
   const selectedText = lines.join('\n');
   const tags = inspectTags(text);
   const selectedTags = inspectTags(selectedText);
-  const unsupportedTags = UNSUPPORTED_TAGS.filter((tag) => selectedTags.counts[tag]);
+  // 保存前の blank 群から最初の本編へ移る境界だけを許可する。本編を一度でも保存した後の
+  // 不連続は引き続き拒否する。元の sequence は維持し、AES の暗黙 IV をずらさない。
+  const firstSavedIndex = selected.findIndex((s) => !s.uri.includes('/blank/'));
+  const leadingBlankBoundaryCount = selectedTags.firstUnsupportedPositions.filter(
+    (position) =>
+      position.tag === 'EXT-X-DISCONTINUITY' &&
+      firstSavedIndex > 0 &&
+      position.segmentIndex === firstSavedIndex,
+  ).length;
+  const unsupportedTags = UNSUPPORTED_TAGS.filter((tag) => {
+    const count = selectedTags.counts[tag] ?? 0;
+    return tag === 'EXT-X-DISCONTINUITY' ? count > leadingBlankBoundaryCount : count > 0;
+  });
   const summary = {
     playlistSegments: parsed.segments.length,
     playlistDuration: parsed.segments.reduce((sum, s) => sum + s.duration, 0),
@@ -88,6 +100,11 @@ export function clipPlaylist(
     selectedSegments: count,
     blankSegments: selected.filter((s) => s.uri.includes('/blank/')).length,
     expectedSavedSegments: selected.filter((s) => !s.uri.includes('/blank/')).length,
+    leadingBlankSegments: firstSavedIndex < 0 ? selected.length : firstSavedIndex,
+    leadingBlankBoundaryCount,
+    savedDuration: selected
+      .filter((s) => !s.uri.includes('/blank/'))
+      .reduce((sum, s) => sum + s.duration, 0),
     tags,
     selectedTagCounts: selectedTags.counts,
     unsupportedTags,

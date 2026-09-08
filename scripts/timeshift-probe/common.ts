@@ -20,6 +20,7 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
       timeout: { type: 'string', default: '120' },
       'comment-limit': { type: 'string', default: '1000' },
       'view-at': { type: 'string', default: 'now' },
+      'view-pages': { type: 'string', default: '3' },
     },
   });
   if (values.help) return undefined;
@@ -55,6 +56,7 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
     timeout: positive('timeout', values.timeout, 600),
     commentLimit: positive('comment-limit', values['comment-limit'], 10000),
     viewAt: values['view-at'],
+    viewPages: positive('view-pages', values['view-pages'], 10),
   };
 }
 
