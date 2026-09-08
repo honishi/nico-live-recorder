@@ -1,4 +1,8 @@
 import fs from 'node:fs/promises';
+import type { TimeshiftVideoReport } from './timeshift-video-recorder';
+import type { TimeshiftCommentResult } from './timeshift-comment-recorder';
+import { recordTimeshiftProgram } from './timeshift-program-recorder';
+import type { RecordingMode, RecordingCompletion, TimeshiftProgress } from '../../../shared/types';
 import path from 'node:path';
 import { NicoClient } from '../../vendor/nico-client/NicoClient';
 import type { NicoLiveProgramInfo, NicoComment } from '../../vendor/nico-client/types';
@@ -7,6 +11,8 @@ import { recordComments, type CommentRecordResult } from './comment-recorder';
 import { recordVideo, type VideoRecordResult } from './video-recorder';
 
 export interface ProgramRecorderOptions {
+  mode?: RecordingMode;
+  onTimeshiftProgress?: (progress: TimeshiftProgress) => void;
   programId: string;
   /** 録画ファイルを置くディレクトリ (存在しなければ作成する) */
   outputDir: string;
@@ -27,6 +33,23 @@ export interface ProgramRecorderOptions {
 }
 
 export interface ProgramRecordResult {
+  timeshift?: {
+    completion: RecordingCompletion;
+    progress: TimeshiftProgress;
+    commentReason?: string;
+    video?: TimeshiftVideoReport;
+    comments?: Pick<
+      TimeshiftCommentResult,
+      | 'status'
+      | 'reason'
+      | 'count'
+      | 'sorted'
+      | 'duplicates'
+      | 'invalidCount'
+      | 'startedAt'
+      | 'endedAt'
+    >;
+  };
   programId: string;
   programInfo: NicoLiveProgramInfo;
   /** 実際に使った連番 (既存ファイルを避けて進むことがある) */
@@ -105,6 +128,8 @@ export async function recordProgram(
     userAgent: options.userAgent,
   });
   const info = options.programInfo ?? (await client.getProgramInfo(signal));
+
+  if (options.mode === 'timeshift') return recordTimeshiftProgram(options, info, signal);
 
   await fs.mkdir(options.outputDir, { recursive: true });
   const attempt = await resolveAvailableAttempt(options.outputDir, info, options.attempt ?? 1);

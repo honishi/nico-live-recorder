@@ -86,7 +86,10 @@ export function RecordingsTab(props: Props): ReactElement {
                   </span>
                   <span className="ellipsis">{r.providerName ?? r.providerId ?? '—'}</span>
                   <span className="cell-title">
-                    <span className="ellipsis">{r.error ?? r.title}</span>
+                    <span className="ellipsis">
+                      {r.mode === 'timeshift' ? '[タイムシフト] ' : ''}
+                      {r.error ?? r.title}
+                    </span>
                     {(r.state === 'failed' || r.error) && (
                       <button className="link" onClick={() => props.onShowLog(r.programId)}>
                         詳細
@@ -111,10 +114,12 @@ export function RecordingsTab(props: Props): ReactElement {
 }
 
 export function StateBadge({ recording }: { recording: RecordingInfo }): ReactElement {
+  if (recording.completion === 'cancelled')
+    return <span className="badge badge-neutral">停止</span>;
   if (recording.state === 'failed') {
     return <span className="badge badge-warn">中断</span>;
   }
-  if (recording.error) {
+  if (recording.error || recording.completion === 'partial') {
     return <span className="badge badge-warn">一部失敗</span>;
   }
   if (recording.videoExists === false) {
@@ -130,25 +135,47 @@ function RecordingCard({
   onShowFile,
 }: Props & { recording: RecordingInfo }): ReactElement {
   const r = recording;
-  const stopping = r.state === 'finishing';
+  const timeshift = r.mode === 'timeshift';
+  const stopping = timeshift ? r.completion === 'cancelled' : r.state === 'finishing';
+  const phase = r.timeshift?.phase;
+  let statusLabel = '録画中';
+  if (stopping) statusLabel = '停止中';
+  else if (r.state === 'starting' || phase === 'connecting') statusLabel = '開始中';
+  else if (phase === 'saving') statusLabel = '保存中';
+  else if (phase === 'comments') statusLabel = 'コメント取得中';
   return (
-    <div className="rec-card">
+    <div className={`rec-card ${timeshift ? 'timeshift' : ''}`}>
       <div className="body">
         <div className="head">
-          <span className="badge badge-rec">
-            {r.state === 'starting' ? '開始中' : stopping ? '停止中' : '録画中'}
-          </span>
+          <span className="badge badge-rec">{statusLabel}</span>
           <span className="name ellipsis">{r.providerName ?? r.providerId ?? '—'}</span>
           <span className="id">{r.programId}</span>
-          {(r.attempt ?? 1) > 1 && (
+          {timeshift && <span className="badge badge-neutral">タイムシフト</span>}
+          {timeshift && (r.attempt ?? 1) > 1 && (
+            <span className="badge badge-neutral">取得 {r.attempt} 回目</span>
+          )}
+          {!timeshift && (r.attempt ?? 1) > 1 && (
             <span className="badge badge-neutral">再開 {r.attempt} 回目</span>
           )}
         </div>
         <div className="ellipsis">{r.title}</div>
         <div className="stats">
-          <span>{formatDuration(r.startedAt, undefined, now)}</span>
+          <span>
+            {timeshift ? '取得時間 ' : ''}
+            {formatDuration(r.startedAt, undefined, now)}
+          </span>
           <span>{formatBytes(r.videoBytes)}</span>
-          <span>コメント {formatCount(r.commentCount)}</span>
+          <span>
+            コメント {formatCount(r.commentCount)}
+            {r.timeshift?.comments === 'partial' ? ' (一部失敗)' : ''}
+          </span>
+          {timeshift && r.timeshift && r.timeshift.totalSegments > 0 && (
+            <span>
+              映像・音声 {Math.floor((100 * r.timeshift.savedSegments) / r.timeshift.totalSegments)}
+              % ({formatCount(r.timeshift.savedSegments)} / {formatCount(r.timeshift.totalSegments)}
+              )
+            </span>
+          )}
         </div>
       </div>
       <div className="actions">
@@ -200,6 +227,9 @@ function ManualRecordForm(): ReactElement {
           {pending ? '開始中…' : '録画開始'}
         </button>
       </div>
+      <span className="muted">
+        終了済みの放送は、ログイン中のアカウントで視聴できるタイムシフトを保存します。
+      </span>
       {error && <span className="field-error">{error}</span>}
     </form>
   );

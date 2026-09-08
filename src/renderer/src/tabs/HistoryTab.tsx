@@ -21,7 +21,7 @@ const PAGE_SIZE = 50;
 export function HistoryTab({ historyVersion, now, onShowFile, onShowLog }: Props): ReactElement {
   const [query, setQuery] = useState('');
   const [provider, setProvider] = useState('');
-  const [state, setState] = useState<'' | 'done' | 'failed'>('');
+  const [state, setState] = useState<'' | 'done' | 'failed' | 'cancelled'>('');
   const [page, setPage] = useState<HistoryPage>();
   const [items, setItems] = useState<RecordingInfo[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -91,10 +91,11 @@ export function HistoryTab({ historyVersion, now, onShowFile, onShowLog }: Props
         <select
           className="select"
           value={state}
-          onChange={(e) => setState(e.target.value as '' | 'done' | 'failed')}
+          onChange={(e) => setState(e.target.value as '' | 'done' | 'failed' | 'cancelled')}
         >
           <option value="">すべての状態</option>
           <option value="done">完了</option>
+          <option value="cancelled">停止</option>
           <option value="failed">中断</option>
         </select>
       </div>
@@ -142,6 +143,7 @@ export function HistoryTab({ historyVersion, now, onShowFile, onShowLog }: Props
                   <span className="ellipsis">{r.providerName ?? r.providerId ?? '—'}</span>
                   <span className="cell-title">
                     <span className="ellipsis" title={r.title}>
+                      {r.mode === 'timeshift' ? '[タイムシフト] ' : ''}
                       {r.error ?? r.title}
                     </span>
                     {(r.state === 'failed' || r.error) && (

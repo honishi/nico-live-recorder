@@ -51,7 +51,22 @@ export type RecordingState = 'starting' | 'recording' | 'finishing' | 'done' | '
 
 export type RecordingSource = 'push' | 'poll' | 'manual';
 
+export type RecordingMode = 'live' | 'timeshift';
+export type RecordingCompletion = 'complete' | 'partial' | 'cancelled';
+export interface TimeshiftProgress {
+  phase: 'connecting' | 'downloading' | 'saving' | 'comments';
+  savedSegments: number;
+  totalSegments: number;
+  comments: 'pending' | 'complete' | 'partial';
+}
+
 export interface RecordingInfo {
+  /** 未指定の旧履歴はライブ録画として扱う */
+  mode?: RecordingMode;
+  completion?: RecordingCompletion;
+  timeshift?: TimeshiftProgress;
+  /** タイムシフトの録り直しを含むコメントファイル */
+  commentsPaths?: string[];
   programId: string;
   title: string;
   providerId?: string;
@@ -112,7 +127,7 @@ export interface AppAlert {
 export interface HistoryQuery {
   query?: string;
   provider?: string;
-  state?: '' | 'done' | 'failed';
+  state?: '' | 'done' | 'failed' | 'cancelled';
   offset?: number;
   limit?: number;
 }
@@ -179,6 +194,7 @@ export const ERROR_CODES = {
   userNotFound: 'E_USER_NOT_FOUND',
   invalidProgram: 'E_INVALID_PROGRAM',
   programUnavailable: 'E_PROGRAM_UNAVAILABLE',
+  timeshiftUnavailable: 'E_TIMESHIFT_UNAVAILABLE',
   network: 'E_NETWORK',
 } as const;
 

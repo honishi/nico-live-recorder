@@ -47,6 +47,7 @@ export class HistoryStore {
     for (const entry of this.entries) {
       if (IN_PROGRESS.has(entry.state)) {
         entry.state = 'failed';
+        if (entry.mode === 'timeshift') entry.completion = 'partial';
         entry.error = 'アプリの終了により中断';
         entry.endedAt ??= entry.startedAt;
         changed = true;
@@ -117,7 +118,8 @@ export class HistoryStore {
       if (q.provider && providerOf(e) !== q.provider) {
         return false;
       }
-      if (q.state && e.state !== q.state) {
+      const state = e.completion === 'cancelled' ? 'cancelled' : e.state;
+      if (q.state && state !== q.state) {
         return false;
       }
       if (text) {

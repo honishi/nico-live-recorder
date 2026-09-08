@@ -15,7 +15,9 @@ export function describeError(
     case ERROR_CODES.invalidProgram:
       return 'lv から始まる ID か視聴ページの URL を入力してください';
     case ERROR_CODES.programUnavailable:
-      return 'この放送は取得できませんでした (終了済みか非公開の可能性があります)';
+      return 'この放送の視聴情報を取得できませんでした。公開状態とログイン状態を確認してください';
+    case ERROR_CODES.timeshiftUnavailable:
+      return 'このタイムシフトは視聴できません。公式サイトで同じアカウントの視聴可否・予約状況・公開期限を確認してください';
     case ERROR_CODES.network:
       return 'ニコニコに接続できませんでした。しばらくしてからやり直してください';
     default:

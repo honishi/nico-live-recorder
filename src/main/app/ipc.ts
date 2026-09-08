@@ -318,7 +318,10 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     ctx.manager.getHistoryPage({
       query: typeof query?.query === 'string' ? query.query : undefined,
       provider: typeof query?.provider === 'string' ? query.provider : undefined,
-      state: query?.state === 'done' || query?.state === 'failed' ? query.state : undefined,
+      state:
+        query?.state === 'done' || query?.state === 'failed' || query?.state === 'cancelled'
+          ? query.state
+          : undefined,
       offset: typeof query?.offset === 'number' ? query.offset : 0,
       limit: typeof query?.limit === 'number' ? Math.min(200, query.limit) : undefined,
     }),
@@ -342,6 +345,13 @@ export function registerIpcHandlers(ctx: IpcContext): void {
             enabled: typeof commentsPath === 'string' && commentsPath.length > 0,
             click: () => void shell.openPath(commentsPath ?? ''),
           },
+          ...ctx.manager
+            .getCommentPaths(programId)
+            .filter((file) => file !== commentsPath)
+            .map((file, index) => ({
+              label: `以前のコメントを開く (${index + 1})`,
+              click: () => void shell.openPath(file),
+            })),
           { type: 'separator' },
           { label: '履歴から削除', click: () => void ctx.manager.removeHistory(String(programId)) },
         ]);

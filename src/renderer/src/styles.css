@@ -654,6 +654,17 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+/* タイムシフトの進捗・取得回数は狭いウィンドウでも項目単位で折り返す。 */
+.rec-card.timeshift .head,
+.rec-card.timeshift .stats {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+}
+
+.rec-card.timeshift .stats > span {
+  white-space: nowrap;
+}
+
 .rec-card .actions {
   display: flex;
   gap: var(--sp-2);
@@ -831,6 +842,11 @@ select {
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
+}
+
+.cell-title .link {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* ------------------------------------------------------------------

@@ -1,0 +1,180 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { getProtoRegistry } from '../../../src/main/vendor/nico-client/internal/protoLoader';
+import {
+  convertTimeshiftComment,
+  recordTimeshiftComments,
+  TIMESHIFT_COMMENT_LIMITS,
+} from '../../../src/main/core/recorder/timeshift-comment-recorder';
+import { CSV_HEADER } from '../../../src/main/core/recorder/comment-recorder';
+
+let dir: string;
+let output: string;
+beforeEach(async () => {
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'nlr-ts-comments-'));
+  output = path.join(dir, 'comments.csv');
+});
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  await fs.rm(dir, { recursive: true, force: true });
+});
+const message = (id: string, seconds: number, nanos = 0, no = 1) => ({
+  meta: { id, at: { seconds, nanos }, origin: { chat: { live_id: '42' } } },
+  message: {
+    chat: {
+      content: id || `no-${no}`,
+      no,
+      vpos: 800,
+      raw_user_id: '123',
+      hashed_user_id: 'hash',
+      account_status: 1,
+    },
+  },
+});
+async function routes(messages: unknown[], options: { cycle?: boolean; truncated?: boolean } = {}) {
+  const registry = await getProtoRegistry();
+  const entry = (value: object) =>
+    registry.ChunkedEntry.encodeDelimited(registry.ChunkedEntry.fromObject(value)).finish();
+  const forward = registry.ChunkedMessage.encodeDelimited(
+    registry.ChunkedMessage.fromObject(message('forward', 999)),
+  ).finish();
+  const data: Record<string, Uint8Array> = {
+    'https://example.test/view?at=now': entry({ next: { at: 111 } }),
+    'https://example.test/view?at=111': Buffer.concat([
+      entry({ backward: { segment: { uri: 'https://example.test/back' } } }),
+      entry({ segment: { uri: 'https://example.test/forward' } }),
+      entry({ next: { at: 222 } }),
+    ]),
+    'https://example.test/back': registry.PackedSegment.encode(
+      registry.PackedSegment.fromObject({
+        messages,
+        ...(options.cycle ? { next: { uri: 'https://example.test/back' } } : {}),
+      }),
+    ).finish(),
+    'https://example.test/forward': options.truncated ? forward.slice(0, -1) : forward,
+  };
+  const mocked = vi.fn((url: string) => {
+    if (!data[url]) throw new Error('unexpected request');
+    return Promise.resolve(new Response(Buffer.from(data[url])));
+  });
+  vi.stubGlobal('fetch', mocked);
+  return mocked;
+}
+
+test('全属性・元vposを保持し、未指定の装飾には既存CSVの既定値を使う', () => {
+  const converted = convertTimeshiftComment(message('id', 1000, 123456789))!;
+  expect(converted.comment).toMatchObject({
+    id: 'id',
+    liveId: 42,
+    no: 1,
+    vpos: 800,
+    rawUserId: 123,
+    hashedUserId: 'hash',
+    accountStatus: 'Premium',
+    position: 'naka',
+    size: 'medium',
+    font: 'defont',
+    opacity: 'Normal',
+    color: 'white',
+  });
+  expect(converted.comment.at.toISOString()).toBe('1970-01-01T00:16:40.123Z');
+  const styled = message('styled', 1000);
+  Object.assign(styled.message.chat, {
+    modifier: { position: 2, size: 2, font: 1, opacity: 1, full_color: { r: 1, g: 2, b: 3 } },
+  });
+  expect(convertTimeshiftComment(styled)?.comment).toMatchObject({
+    position: 'ue',
+    size: 'big',
+    font: 'mincho',
+    opacity: 'Translucent',
+    color: { r: 1, g: 2, b: 3 },
+  });
+});
+
+test('履歴・直近分を重複排除し、ナノ秒・番号・取得順で安定ソートしたBOM付き14列CSVを保存する', async () => {
+  const mocked = await routes([
+    message('later', 1001),
+    message('same-first', 1000, 2, 9),
+    message('same-second', 1000, 2, 9),
+    message('nano-first', 1000, 1, 10),
+    message('forward', 999),
+    message('quoted,\n"text"', 1002),
+  ]);
+  const callback = vi.fn();
+  const result = await recordTimeshiftComments(
+    'https://example.test/view',
+    output,
+    new AbortController().signal,
+    callback,
+  );
+  expect(result).toMatchObject({ status: 'complete', count: 6, duplicates: 1, sorted: true });
+  const csv = await fs.readFile(output, 'utf8');
+  expect(csv.startsWith(CSV_HEADER)).toBe(true);
+  expect(CSV_HEADER.trim().split(',')).toHaveLength(14);
+  const ordered = ['forward', 'nano-first', 'same-first', 'same-second', 'later'];
+  expect(ordered.map((id) => csv.indexOf(`"${id}"`))).toEqual(
+    ordered.map((id) => csv.indexOf(`"${id}"`)).sort((a, b) => a - b),
+  );
+  expect(csv).toContain('"quoted,\n""text"""');
+  expect(callback).toHaveBeenCalledTimes(6);
+  expect(mocked).toHaveBeenCalledTimes(4);
+});
+
+test.each(['cycle', 'truncated', 'count', 'bytes', 'pages', 'invalid-time'] as const)(
+  '%s でも取得済み分を残し、完了としない',
+  async (kind) => {
+    const messages: unknown[] = [message('saved', 1000), message('other', 1001)];
+    if (kind === 'invalid-time')
+      messages.push({ meta: { id: 'invalid' }, message: { chat: { content: 'bad' } } });
+    await routes(messages, { cycle: kind === 'cycle', truncated: kind === 'truncated' });
+    const limits = {
+      ...TIMESHIFT_COMMENT_LIMITS,
+      ...(kind === 'count' ? { count: 1 } : {}),
+      ...(kind === 'bytes' ? { bytes: 1 } : {}),
+      ...(kind === 'pages' ? { packedPages: 0 } : {}),
+    };
+    const result = await recordTimeshiftComments(
+      'https://example.test/view',
+      output,
+      new AbortController().signal,
+      undefined,
+      limits,
+    );
+    expect(result.status).toBe('partial');
+    expect((await fs.readFile(output, 'utf8')).startsWith(CSV_HEADER)).toBe(true);
+    if (!['bytes', 'pages'].includes(kind)) expect(result.count).toBeGreaterThan(0);
+  },
+);
+
+test('停止はソートを開始せず取得済みCSVを残す', async () => {
+  await routes([message('first', 1001), message('second', 1000)]);
+  const stop = new AbortController();
+  const result = await recordTimeshiftComments(
+    'https://example.test/view',
+    output,
+    stop.signal,
+    () => stop.abort(),
+  );
+  expect(result).toMatchObject({ status: 'partial', count: 1, sorted: false, aborted: true });
+  expect(await fs.readFile(output, 'utf8')).toContain('"first"');
+});
+
+test('ソート結果の置換失敗でも取得済みCSVを失わない', async () => {
+  await routes([message('saved', 1000)]);
+  vi.spyOn(fs, 'rename').mockRejectedValue(new Error('disk unavailable'));
+  const result = await recordTimeshiftComments(
+    'https://example.test/view',
+    output,
+    new AbortController().signal,
+  );
+  expect(result).toMatchObject({
+    status: 'partial',
+    sorted: false,
+    reason: 'COMMENT_SORT_FAILED',
+    count: 2,
+  });
+  expect(await fs.readFile(output, 'utf8')).toContain('"saved"');
+  expect(await fs.readdir(dir)).toEqual(['comments.csv']);
+});
