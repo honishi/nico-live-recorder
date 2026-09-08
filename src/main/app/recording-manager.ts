@@ -724,12 +724,13 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.history.upsert(info);
     this.emitChange();
 
+    const recordingLabel = mode === 'timeshift' ? 'タイムシフト録画' : '録画';
     recording.done = (async () => {
       try {
         info.state = 'recording';
         this.emitChange();
         this.logger.info(`[rec] start ${programId} "${info.title}" by ${providerName ?? '?'}`);
-        this.notify('録画を開始しました', `${providerName ?? ''} ${info.title}`);
+        this.notify(`${recordingLabel}を開始しました`, `${providerName ?? ''} ${info.title}`);
 
         recording.sizeTimer = setInterval(() => void this.pollSize(recording), SIZE_POLL_MS);
 
@@ -925,8 +926,14 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         this.logger.info(
           `[rec] ${outcome === 'done' ? 'finished' : 'failed'} ${programId} "${info.title}" (${lastReason}, ${info.commentCount} comments, ${attempt} part${attempt > 1 ? 's' : ''})`,
         );
-        let notification = outcome === 'done' ? '録画が終了しました' : '録画に失敗しました';
-        if (info.completion === 'cancelled') notification = '録画を停止しました';
+        let notification =
+          outcome === 'done'
+            ? `${recordingLabel}が終了しました`
+            : `${recordingLabel}に失敗しました`;
+        // 動画が保存できても、コメントなどが欠けた場合は正常完了と区別する。
+        if (mode === 'timeshift' && info.completion === 'partial' && outcome === 'done')
+          notification = `${recordingLabel}が一部失敗しました`;
+        if (info.completion === 'cancelled') notification = `${recordingLabel}を停止しました`;
         this.notify(notification, `${providerName ?? ''} ${info.title}`);
       } catch (error) {
         info.state = 'failed';
@@ -943,10 +950,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         }
         if (info.completion === 'cancelled') {
           this.logger.info(`[rec] stopped ${programId}`);
-          this.notify('録画を停止しました', info.title);
+          this.notify(`${recordingLabel}を停止しました`, info.title);
         } else {
           this.logger.error(`[rec] failed ${programId}`, mode === 'timeshift' ? info.error : error);
-          this.notify('録画に失敗しました', `${info.title}: ${info.error}`);
+          this.notify(`${recordingLabel}に失敗しました`, `${info.title}: ${info.error}`);
         }
       } finally {
         if (recording.sizeTimer) {

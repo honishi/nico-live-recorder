@@ -15,12 +15,15 @@ import { waitFor } from '../helpers/fake-watch-server';
 // Electron と外部依存 (録画本体、番組情報、検知器、push) を差し替える
 // ---------------------------------------------------------------------------
 
+const notifications = vi.hoisted(() => [] as { title: string; body: string }[]);
+const notificationSupported = vi.hoisted(() => vi.fn(() => true));
 vi.mock('electron', () => ({
   Notification: class {
-    static isSupported(): boolean {
-      return false;
+    static isSupported = notificationSupported;
+    constructor(private options: { title: string; body: string }) {}
+    show(): void {
+      notifications.push(this.options);
     }
-    show(): void {}
   },
 }));
 
@@ -28,6 +31,7 @@ type RecordCall = {
   options: ProgramRecorderOptions;
   signal?: AbortSignal;
   resolve: (result: unknown) => void;
+  reject: (error: Error) => void;
   /** onPaths を呼び済みか (実際の録画本体は開始時に 1 回だけ呼ぶ) */
   pathsSent?: boolean;
 };
@@ -35,8 +39,8 @@ const recordCalls = vi.hoisted(() => [] as RecordCall[]);
 vi.mock('../../src/main/core/recorder/program-recorder', () => ({
   recordProgram: vi.fn(
     (options: ProgramRecorderOptions, signal?: AbortSignal) =>
-      new Promise((resolve) => {
-        recordCalls.push({ options, signal, resolve });
+      new Promise((resolve, reject) => {
+        recordCalls.push({ options, signal, resolve, reject });
       }),
   ),
 }));
@@ -220,6 +224,8 @@ describe('RecordingManager', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nlr-manager-'));
     recordCalls.length = 0;
+    notifications.length = 0;
+    notificationSupported.mockReset().mockReturnValue(true);
     detectors.length = 0;
     pushManagers.length = 0;
     resetPush.mockReset().mockResolvedValue(undefined);
@@ -267,6 +273,63 @@ describe('RecordingManager', () => {
     await waitFor(async () => (await manager.getRecordings())[0]?.state === 'starting');
     await vi.advanceTimersByTimeAsync(ms);
   }
+
+  test.each([
+    ['live', 'complete', '録画が終了しました'],
+    ['timeshift', 'complete', 'タイムシフト録画が終了しました'],
+    ['timeshift', 'partial', 'タイムシフト録画が一部失敗しました'],
+    ['timeshift', 'failed', 'タイムシフト録画に失敗しました'],
+    ['timeshift', 'cancelled', 'タイムシフト録画を停止しました'],
+    ['timeshift', 'exception', 'タイムシフト録画に失敗しました'],
+  ] as const)('%s の %s で開始と終了結果をそれぞれ1回通知する', async (mode, completion, title) => {
+    settings.update({ notificationsEnabled: true });
+    if (mode === 'timeshift')
+      getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+    await manager.startRecording('lv1', 'manual');
+    const call = await nextRecordCall(0);
+    expect(notifications).toEqual([
+      {
+        title: mode === 'timeshift' ? 'タイムシフト録画を開始しました' : '録画を開始しました',
+        body: 'alice タイトル',
+      },
+    ]);
+    // 実在する成果物を用意し、ファイル消失の分岐とは独立して通知結果を検証する。
+    fs.mkdirSync(call.options.outputDir, { recursive: true });
+    fs.writeFileSync(path.join(call.options.outputDir, 'rec.ts'), 'video');
+    fs.writeFileSync(path.join(call.options.outputDir, 'rec.comments.csv'), 'comments');
+    if (completion === 'cancelled') manager.stopRecording('lv1');
+    if (completion === 'exception') call.reject(new Error('failed'));
+    else
+      call.resolve(
+        finishedResult(call, {
+          ...(mode === 'timeshift'
+            ? {
+                timeshift: { completion: completion === 'failed' ? 'partial' : completion },
+              }
+            : {}),
+          ...(completion === 'failed' ? { video: undefined } : {}),
+          errors: completion === 'partial' ? [{ target: 'comments', message: 'failed' }] : [],
+        }),
+      );
+    await waitFor(() => !manager.hasActiveRecordings());
+    expect(notifications).toHaveLength(2);
+    expect(notifications[1].title).toBe(title);
+    expect(notifications[1].body).toContain('タイトル');
+  });
+
+  test.each(['disabled', 'unsupported'] as const)(
+    '通知が%sならタイムシフトも通知しない',
+    async (reason) => {
+      settings.update({ notificationsEnabled: reason !== 'disabled' });
+      notificationSupported.mockReturnValue(reason !== 'unsupported');
+      getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+      await manager.startRecording('lv1', 'manual');
+      const call = await nextRecordCall(0);
+      call.resolve(finishedResult(call, { timeshift: { completion: 'complete' } }));
+      await waitFor(() => !manager.hasActiveRecordings());
+      expect(notifications).toEqual([]);
+    },
+  );
 
   test('空の予約を見た後に開始失敗しても出力消失とせず、成果物一覧から除外する', async () => {
     getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
