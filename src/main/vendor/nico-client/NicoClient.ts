@@ -7,7 +7,7 @@ import { DEFAULT_USER_AGENT } from './internal/userAgent';
 import { ProtobufStreamReader } from './internal/protobufStreamReader';
 import { int64ToSafeInteger } from './internal/int64';
 import { getProtoRegistry } from './internal/protoLoader';
-import { ViewUriNotReceivedError, ViewUriTimeoutError } from './errors';
+import { CommentViewStalledError, ViewUriNotReceivedError, ViewUriTimeoutError } from './errors';
 import { isRetryableNicoError, isRetryableNicoHttpStatus } from './retryPolicy';
 import {
   CommentColor,
@@ -145,6 +145,10 @@ export class NicoClient {
   static readonly AccessDeniedErrorName = 'AccessDeniedError';
   private static readonly defaultRetryBackoffMs = [1000, 2000, 4000];
   private static readonly defaultViewUriTimeoutMs = 15000;
+  private static readonly minViewIntervalMs = 1000;
+  private static readonly maxStalledViews = 10;
+  private static readonly viewRecoveryTimeoutMs = 10 * 60_000;
+  private static readonly maxViewBackoffMs = 30_000;
 
   constructor(
     private readonly programId: string,
@@ -184,7 +188,21 @@ export class NicoClient {
       const state = this.createStreamState(options);
       state.nextAt = options.startPosition === 'lastKnown' ? undefined : 'now';
 
+      let lastViewStartedAt = -Infinity;
+      let latestCursor: number | undefined;
+      let stalledViews = 0;
+      let stalledSince: number | undefined;
+
       while (!options.signal?.aborted) {
+        // 即時応答は最低1秒、停滞中は最大30秒に間隔を延ばして回復を待つ。
+        const intervalMs = Math.min(
+          NicoClient.maxViewBackoffMs,
+          NicoClient.minViewIntervalMs * 2 ** Math.min(Math.max(stalledViews - 1, 0), 5),
+        );
+        const waitMs = intervalMs - (performance.now() - lastViewStartedAt);
+        if (waitMs > 0) await this.delay(waitMs, options.signal);
+        if (options.signal?.aborted) return;
+        lastViewStartedAt = performance.now();
         this.resetStreamState(state);
 
         for await (const comment of this.processChunkEntries(viewUri, state, options)) {
@@ -240,7 +258,23 @@ export class NicoClient {
           continue;
         }
 
-        state.nextAt = state.nextReadyAt;
+        // 投稿件数ではなく取得位置を見る。後退や循環で古い履歴を取り直し続けない。
+        const nextCursor = Number(state.nextReadyAt);
+        if (latestCursor !== undefined && nextCursor <= latestCursor) {
+          stalledViews += 1;
+          stalledSince ??= performance.now();
+          // 回数だけですぐ諦めず、10分以上回復しない場合に限って停止する。
+          if (
+            stalledViews >= NicoClient.maxStalledViews &&
+            performance.now() - stalledSince >= NicoClient.viewRecoveryTimeoutMs
+          )
+            throw new CommentViewStalledError();
+        } else {
+          latestCursor = nextCursor;
+          stalledViews = 0;
+          stalledSince = undefined;
+        }
+        state.nextAt = String(latestCursor);
       }
     } catch (error) {
       if (error instanceof Error && error.name === NicoClient.ProgramEndedErrorName) {

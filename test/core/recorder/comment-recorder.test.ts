@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 import { recordComments } from '../../../src/main/core/recorder/comment-recorder';
 import { toCommentCsv } from '../../../src/main/core/recorder/comment-csv';
+import { CommentViewStalledError } from '../../../src/main/vendor/nico-client/errors';
 import type { NicoComment, StreamOptions } from '../../../src/main/vendor/nico-client/types';
 
 // NDGR への接続は差し替え、渡されたオプションと abort の扱いを確認する
@@ -122,6 +123,15 @@ describe('recordComments', () => {
     expect(receivedInfo[1]).toBeUndefined();
     expect(counts).toEqual([1, 2, 3]);
     expect(fs.readFileSync(outputPath, 'utf8').trim().split('\n')).toHaveLength(4);
+  });
+
+  test('取得位置の停滞エラーでは再接続せず、保存済みコメントを残す', async () => {
+    const error = new CommentViewStalledError();
+    failures.push(error);
+    const outputPath = path.join(dir, 'stalled.csv');
+    await expect(recordComments({ programId: 'lv1', outputPath })).rejects.toBe(error);
+    expect(streamCalls).toHaveLength(1);
+    expect(fs.readFileSync(outputPath, 'utf8')).toContain('c1');
   });
 
   test('コメントの再試行待ちも停止でき、保存エラー以外の元の失敗は上限で返す', async () => {

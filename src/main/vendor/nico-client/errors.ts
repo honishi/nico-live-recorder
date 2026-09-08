@@ -1,5 +1,16 @@
 import type { HttpError } from './internal/httpClient';
 
+export class CommentViewStalledError extends Error {
+  public readonly code = 'COMMENT_VIEW_STALLED' as const;
+
+  constructor() {
+    super(
+      'コメントの取得位置が10分以上回復せず、10回以上停滞したため、コメント取得を停止しました。',
+    );
+    this.name = 'CommentViewStalledError';
+  }
+}
+
 export class ViewUriNotReceivedError extends Error {
   public readonly code = 'VIEW_URI_NOT_RECEIVED' as const;
 
