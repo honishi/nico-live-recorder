@@ -7,6 +7,7 @@ import { checkedFetch, object, TimeshiftError } from '../nico/timeshift-common';
 import { CSV_HEADER, toCommentCsv } from './comment-csv';
 import type { TimeshiftCommentResult } from './recording-types';
 
+// 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
 export type { TimeshiftCommentResult } from './recording-types';
 
 const COLORS: CommentColorName[] = [

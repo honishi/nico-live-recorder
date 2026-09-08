@@ -5,6 +5,7 @@ import { silentLogger, type Logger } from '../logger';
 import { asString } from '../util';
 import { parseStreamMessage, type HlsStreamInfo } from './watch-protocol';
 
+// 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
 export type { HlsStreamInfo, StreamCookie } from './watch-protocol';
 
 export interface WatchSessionOptions {

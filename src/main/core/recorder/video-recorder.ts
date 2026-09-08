@@ -13,8 +13,10 @@ import {
   selectBestVariant,
   type TrackResult,
 } from '../nico/hls';
-import { WatchSession, type HlsStreamInfo } from '../nico/watch-session';
+import { WatchSession } from '../nico/watch-session';
+import type { HlsStreamInfo } from '../nico/watch-protocol';
 
+// 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
 export type { VideoStopReason, VideoRecordResult } from './recording-types';
 
 export interface VideoRecorderOptions {

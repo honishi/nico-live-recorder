@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { ProgramRecorderOptions } from '../../src/main/core/recorder/program-recorder';
+import type { ProgramRecorderOptions } from '../../src/main/core/recorder/recording-types';
 import type { NicoLiveProgramInfo } from '../../src/main/vendor/nico-client/types';
 import { NicoLiveProgramStatus } from '../../src/main/vendor/nico-client/types';
 import { ERROR_CODES, parseErrorCode } from '../../src/shared/types';

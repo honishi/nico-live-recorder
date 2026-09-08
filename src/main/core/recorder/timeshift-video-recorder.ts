@@ -16,6 +16,7 @@ import type { TimeshiftProgress } from '../../../shared/types';
 import type { Logger } from '../logger';
 import { TimeshiftRemainingTime } from './timeshift-remaining-time';
 
+// 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
 export type { TimeshiftVideoReport } from './recording-types';
 
 /** ENDLIST のある固定 playlist を取得し、実際に書き込んだセグメント数で完了を判定する。 */

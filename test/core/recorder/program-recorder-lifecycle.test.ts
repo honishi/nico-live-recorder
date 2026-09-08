@@ -2,14 +2,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { recordProgram } from '../../../src/main/core/recorder/program-recorder';
-import {
-  recordVideo,
-  type VideoRecordResult,
-} from '../../../src/main/core/recorder/video-recorder';
-import {
-  recordComments,
-  type CommentRecordResult,
-} from '../../../src/main/core/recorder/comment-recorder';
+import { recordVideo } from '../../../src/main/core/recorder/video-recorder';
+import { recordComments } from '../../../src/main/core/recorder/comment-recorder';
+import type {
+  VideoRecordResult,
+  CommentRecordResult,
+} from '../../../src/main/core/recorder/recording-types';
 import {
   NicoLiveProgramStatus,
   type NicoLiveProgramInfo,

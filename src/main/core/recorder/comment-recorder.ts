@@ -10,6 +10,7 @@ import { NicoClient } from '../../vendor/nico-client/NicoClient';
 import type { NicoComment, NicoLiveProgramInfo } from '../../vendor/nico-client/types';
 import { silentLogger, type Logger } from '../logger';
 
+// 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
 export type { CommentRecordResult } from './recording-types';
 export { CSV_HEADER, toCommentRecord, toCommentCsv, type CommentRecord } from './comment-csv';
 

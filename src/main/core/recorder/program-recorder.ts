@@ -9,6 +9,7 @@ import { prefixLogger, silentLogger } from '../logger';
 import { recordComments } from './comment-recorder';
 import { recordVideo } from './video-recorder';
 
+// 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
 export type { ProgramRecorderOptions, ProgramRecordResult } from './recording-types';
 export { buildBaseName, sanitizeFileName } from './recording-paths';
 
