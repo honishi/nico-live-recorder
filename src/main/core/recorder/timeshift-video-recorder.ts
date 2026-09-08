@@ -20,6 +20,7 @@ import type { Logger } from '../logger';
 export interface TimeshiftVideoReport {
   startedAt: string;
   endedAt?: string;
+  ffmpegExitCode?: number | null;
   playlists?: { label: 'video' | 'audio'; diagnostic?: TimeshiftPlaylistDiagnostic }[];
   tracks: { expected: number; saved: number; missing: number; httpErrors: number[] }[];
 }
@@ -108,8 +109,6 @@ export async function recordTimeshiftVideo(
     },
     () => controller.abort(new TimeshiftError('FFMPEG_FAILED')),
   );
-  const kill = (): void => muxer.kill();
-  work.addEventListener('abort', kill, { once: true });
   let failure: unknown;
   try {
     work.throwIfAborted();
@@ -132,12 +131,6 @@ export async function recordTimeshiftVideo(
             },
             playlists[index].continuityCheckSeqs,
           );
-          if (
-            metrics.missingSegments ||
-            result.segments === 0 ||
-            result.segments !== playlists[index].summary.expectedSavedSegments
-          )
-            throw new TimeshiftError('SEGMENTS_INCOMPLETE');
           return result;
         } catch (error) {
           failure ??= error;
@@ -151,15 +144,26 @@ export async function recordTimeshiftVideo(
         }
       }),
     );
-    if (failure) throw failure instanceof Error ? failure : new TimeshiftError('TRACK_FAILED');
     options.onProgress?.({ phase: 'saving' });
-    finishTimer = setTimeout(
-      () => controller.abort(new TimeshiftError('FFMPEG_FINISH_TIMEOUT')),
-      15_000,
-    );
+    // 停止・欠落時もパイプへ渡したデータを排出する。終了しない場合だけ期限付きで停止する。
+    let finishTimedOut = false;
+    finishTimer = setTimeout(() => {
+      finishTimedOut = true;
+      muxer.kill();
+    }, 15_000);
     const exit = await muxer.finish();
+    report.ffmpegExitCode = exit.exitCode;
+    if (failure) throw failure instanceof Error ? failure : new TimeshiftError('TRACK_FAILED');
+    if (finishTimedOut) throw new TimeshiftError('FFMPEG_FINISH_TIMEOUT');
     work.throwIfAborted();
     if (exit.exitCode !== 0) throw new TimeshiftError('FFMPEG_FAILED');
+    // 欠落は両トラックの取得・保存を閉じてから判定し、相手のトラックを途中で捨てない。
+    if (
+      report.tracks.some(
+        (track) => track.missing || track.saved === 0 || track.saved !== track.expected,
+      )
+    )
+      throw new TimeshiftError('SEGMENTS_INCOMPLETE');
     if ((await fs.stat(options.outputPath)).size === 0) throw new TimeshiftError('OUTPUT_EMPTY');
     const saved = results.map((result) => {
       if (result.status === 'rejected') throw result.reason;
@@ -178,7 +182,6 @@ export async function recordTimeshiftVideo(
     clearTimeout(finishTimer);
     report.endedAt = new Date().toISOString();
     options.onReport?.(report);
-    work.removeEventListener('abort', kill);
     muxer.kill();
     await exited.catch(() => undefined);
   }

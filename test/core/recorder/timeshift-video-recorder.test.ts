@@ -220,3 +220,53 @@ test.each([false, true])(
     ]);
   },
 );
+
+test('一方に欠落があっても両方の保存を閉じてから一部失敗にする', async () => {
+  media({ missing: true });
+  const outputPath = path.join(dir, 'partial.ts');
+  let report: TimeshiftVideoReport | undefined;
+  await expect(
+    recordTimeshiftVideo(
+      stream,
+      {
+        outputPath,
+        ffmpegPath: binary,
+        onReport: (value) => {
+          report = value;
+        },
+      },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow('SEGMENTS_INCOMPLETE');
+  expect(report?.ffmpegExitCode).toBe(0);
+  expect(report?.tracks.map((track) => track.saved)).toEqual([2, 1]);
+  expect(fs.readFileSync(outputPath, 'utf8')).toBe('init-videovideo-11video-12');
+  expect(fs.readFileSync(outputPath + '.audio', 'utf8')).toBe('init-audioaudio-11');
+});
+
+test('手動停止でも渡したデータを排出しFFmpegを自然終了させる', async () => {
+  media();
+  const stop = new AbortController();
+  const outputPath = path.join(dir, 'stopped.ts');
+  let report: TimeshiftVideoReport | undefined;
+  await expect(
+    recordTimeshiftVideo(
+      stream,
+      {
+        outputPath,
+        ffmpegPath: binary,
+        onProgress: (value) => {
+          if ((value.savedSegments ?? 0) >= 1) stop.abort();
+        },
+        onReport: (value) => {
+          report = value;
+        },
+      },
+      stop.signal,
+    ),
+  ).rejects.toThrow();
+  expect(report?.ffmpegExitCode).toBe(0);
+  const saved =
+    fs.readFileSync(outputPath, 'utf8') + fs.readFileSync(outputPath + '.audio', 'utf8');
+  expect(saved).toMatch(/(?:video|audio)-11/);
+});
