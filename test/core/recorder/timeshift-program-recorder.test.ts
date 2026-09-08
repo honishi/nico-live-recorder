@@ -284,3 +284,48 @@ test('接続前に失敗した予約ファイルは片付け、診断JSONと以�
   expect(await fs.readFile(previous.videoPath, 'utf8')).toBe('video');
   expect(await fs.readFile(previous.commentsPath, 'utf8')).toBe('comments');
 });
+
+test('映像失敗でコメントURI待ちが閉じても主原因だけをエラー表示する', async () => {
+  const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
+  let rejectComments!: (error: Error) => void;
+  session.comments = new Promise((_resolve, reject) => {
+    rejectComments = reject;
+  });
+  session.close = vi.fn(() => rejectComments(new TimeshiftError('SESSION_CLOSED')));
+  vi.mocked(recordTimeshiftVideo).mockRejectedValue(new TimeshiftError('HTTP_ERROR', 403));
+  const result = await begin();
+  expect(result.errors).toEqual([
+    { target: 'video', message: 'タイムシフト: HTTP_ERROR (HTTP 403)' },
+  ]);
+  expect(result.timeshift?.commentReason).toBe('VIDEO_FAILED');
+});
+
+test.each(['VIDEO_FAILED', 'HTTP_ERROR'])(
+  'コメントの%sと映像失敗の重複を区別する',
+  async (reason) => {
+    const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
+    const ready = deferred<void>();
+    const originalComments = vi.mocked(recordTimeshiftComments).getMockImplementation()!;
+    vi.mocked(recordTimeshiftComments).mockImplementation(async (...args) => {
+      const result = await originalComments(...args);
+      ready.resolve();
+      if (reason === 'VIDEO_FAILED')
+        await new Promise<void>((resolve) =>
+          args[2].addEventListener('abort', () => resolve(), { once: true }),
+        );
+      return { ...result, status: 'partial', reason };
+    });
+    vi.mocked(recordTimeshiftVideo).mockImplementation(async () => {
+      await ready.promise;
+      throw new TimeshiftError('UNSUPPORTED_PLAYLIST_TAG');
+    });
+    const result = await begin();
+    expect(result.errors.filter((error) => error.target === 'comments')).toEqual(
+      reason === 'VIDEO_FAILED'
+        ? []
+        : [{ target: 'comments', message: 'タイムシフト: HTTP_ERROR' }],
+    );
+    expect(result.timeshift?.comments?.reason).toBe(reason);
+    expect(await fs.readFile(result.commentsPath, 'utf8')).toBe('comments');
+  },
+);

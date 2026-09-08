@@ -168,11 +168,17 @@ export async function recordTimeshiftProgram(
           endedAt: captured.endedAt,
         };
         update({ comments: captured.status });
-        if (captured.status !== 'complete' && !signal.aborted)
+        // 映像起因の停止は診断に残し、画面の原因を二重に増やさない。
+        if (captured.status !== 'complete' && !signal.aborted && captured.reason !== 'VIDEO_FAILED')
           result.errors.push({ target: 'comments', message: `タイムシフト: ${captured.reason}` });
       } catch (error) {
         update({ comments: 'partial' });
-        if (!signal.aborted)
+        const stoppedByVideo =
+          failedVideo.signal.aborted &&
+          error instanceof TimeshiftError &&
+          error.code === 'SESSION_CLOSED';
+        if (stoppedByVideo) result.timeshift!.commentReason = 'VIDEO_FAILED';
+        if (!signal.aborted && !stoppedByVideo)
           result.errors.push({ target: 'comments', message: timeshiftErrorText(error) });
       }
     })();
@@ -192,7 +198,7 @@ export async function recordTimeshiftProgram(
     }
     if (!commentsPresent) {
       update({ comments: 'partial' });
-      if (!signal.aborted)
+      if (!signal.aborted && result.timeshift!.commentReason !== 'VIDEO_FAILED')
         result.errors.push({ target: 'comments', message: 'タイムシフト: OUTPUT_MISSING' });
     }
     if (signal.aborted) result.timeshift!.completion = 'cancelled';
