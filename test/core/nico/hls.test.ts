@@ -8,7 +8,7 @@ import {
   parseMultivariantPlaylist,
   selectBestVariant,
 } from '../../../src/main/core/nico/hls';
-import type { StreamCookie } from '../../../src/main/core/nico/watch-session';
+import type { StreamCookie } from '../../../src/main/core/nico/watch-protocol';
 
 const BASE = 'https://example.test/hls/playlists/abc/def/multivariant/variant.m3u8';
 

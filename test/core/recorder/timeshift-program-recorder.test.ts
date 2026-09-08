@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { recordProgram, buildBaseName } from '../../../src/main/core/recorder/program-recorder';
+import { recordProgram } from '../../../src/main/core/recorder/program-recorder';
+import { buildBaseName } from '../../../src/main/core/recorder/recording-paths';
 import { reserveTimeshiftPaths } from '../../../src/main/core/recorder/timeshift-program-recorder';
 import { openTimeshiftSession } from '../../../src/main/core/nico/timeshift-session';
 import { recordTimeshiftVideo } from '../../../src/main/core/recorder/timeshift-video-recorder';

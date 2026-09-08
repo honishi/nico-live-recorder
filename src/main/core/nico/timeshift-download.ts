@@ -1,11 +1,10 @@
-import crypto from 'node:crypto';
+import { decryptHlsSegment } from './hls-crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
-import { setTimeout as delay } from 'node:timers/promises';
 import { cookieHeaderFor, type HlsSegment, type TrackResult } from './hls';
-import type { StreamCookie } from './watch-session';
+import type { StreamCookie } from './watch-protocol';
 import { TimeshiftError } from './timeshift-common';
-import { fetchTimeshiftBytes } from './timeshift-http';
+import { fetchTimeshiftBytes, retryTimeshiftRequest } from './timeshift-http';
 import {
   inspectFragmentTiming,
   requireContinuousFragments,
@@ -53,54 +52,40 @@ export async function downloadTimeshiftTrack(
   let failed = false;
 
   // HTTP 応答の本文を読み切るまで測る。並列要求の時間は累積なので実時間を超え得る。
-  const fetchBytes = async (url: string): Promise<Buffer> => {
-    for (let attempt = 0; ; attempt += 1) {
-      workSignal.throwIfAborted();
-      const started = performance.now();
-      activeRequests += 1;
-      metrics.requestCount += 1;
-      metrics.maxConcurrentRequests = Math.max(metrics.maxConcurrentRequests, activeRequests);
-      try {
-        return await fetchTimeshiftBytes(url, workSignal, {
-          cookie: cookieHeaderFor(cookies, url),
-          maxBytes: MAX_RESOURCE_BYTES,
-          limitCode: 'MEDIA_RESOURCE_LIMIT',
-          onBytes: (size) => {
-            metrics.receivedBytes += size;
-          },
-        });
-      } catch (caught) {
-        if (
-          caught instanceof TimeshiftError &&
-          caught.httpStatus !== undefined &&
-          !metrics.httpErrors.includes(caught.httpStatus)
-        )
-          metrics.httpErrors.push(caught.httpStatus);
-        if (
-          workSignal.aborted ||
-          attempt >= 3 ||
-          (caught instanceof TimeshiftError && caught.httpStatus === undefined)
-        )
+  const fetchBytes = (url: string): Promise<Buffer> =>
+    retryTimeshiftRequest(
+      async () => {
+        const started = performance.now();
+        activeRequests += 1;
+        metrics.requestCount += 1;
+        metrics.maxConcurrentRequests = Math.max(metrics.maxConcurrentRequests, activeRequests);
+        try {
+          return await fetchTimeshiftBytes(url, workSignal, {
+            cookie: cookieHeaderFor(cookies, url),
+            maxBytes: MAX_RESOURCE_BYTES,
+            limitCode: 'MEDIA_RESOURCE_LIMIT',
+            onBytes: (size) => {
+              metrics.receivedBytes += size;
+            },
+          });
+        } catch (caught) {
+          if (
+            caught instanceof TimeshiftError &&
+            caught.httpStatus !== undefined &&
+            !metrics.httpErrors.includes(caught.httpStatus)
+          )
+            metrics.httpErrors.push(caught.httpStatus);
           throw caught;
-        if (
-          caught instanceof TimeshiftError &&
-          caught.httpStatus! < 500 &&
-          ![408, 429].includes(caught.httpStatus!)
-        )
-          throw caught;
-      } finally {
-        activeRequests -= 1;
-        metrics.timingsMs.fetch += performance.now() - started;
-      }
-      // 既存取得処理と同じ最大4試行・指数バックオフ。認証更新は行わない。
-      const waiting = performance.now();
-      try {
-        await delay(500 * 2 ** attempt, undefined, { signal: workSignal });
-      } finally {
-        metrics.timingsMs.retryWait += performance.now() - waiting;
-      }
-    }
-  };
+        } finally {
+          activeRequests -= 1;
+          metrics.timingsMs.fetch += performance.now() - started;
+        }
+      },
+      workSignal,
+      (elapsedMs) => {
+        metrics.timingsMs.retryWait += elapsedMs;
+      },
+    );
   const resource = (url: string): Promise<Buffer> => {
     let task = resources.get(url);
     if (!task) {
@@ -184,16 +169,9 @@ export async function downloadTimeshiftTrack(
       if (loaded.key) {
         const started = performance.now();
         try {
-          const iv = Buffer.alloc(16);
-          if (segment.key?.iv) {
-            if (!/^[0-9a-f]{1,32}$/i.test(segment.key.iv))
-              throw new TimeshiftError('INVALID_ENCRYPTION_IV');
-            Buffer.from(segment.key.iv.padStart(32, '0'), 'hex').copy(iv);
-          } else {
-            iv.writeBigUInt64BE(BigInt(segment.seq), 8);
-          }
-          const decipher = crypto.createDecipheriv('aes-128-cbc', loaded.key, iv);
-          data = Buffer.concat([decipher.update(data), decipher.final()]);
+          if (segment.key?.iv && !/^[0-9a-f]{1,32}$/i.test(segment.key.iv))
+            throw new TimeshiftError('INVALID_ENCRYPTION_IV');
+          data = decryptHlsSegment(data, loaded.key, segment.seq, segment.key?.iv);
         } finally {
           metrics.timingsMs.decrypt += performance.now() - started;
         }

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { recordTimeshiftVideo } from '../../../src/main/core/recorder/timeshift-video-recorder';
-import type { TimeshiftVideoReport } from '../../../src/main/core/recorder/timeshift-video-recorder';
+import type { TimeshiftVideoReport } from '../../../src/main/core/recorder/recording-types';
 import type { TimeshiftProgress } from '../../../src/shared/types';
 import { fragment, fragmentInit } from '../../helpers/fmp4';
 

@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import type { HlsStreamInfo, StreamCookie } from './watch-session';
+import { parseStreamMessage, type HlsStreamInfo } from './watch-protocol';
 import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
 import { object, TimeshiftError } from './timeshift-common';
 
@@ -110,31 +110,10 @@ export function openTimeshiftSession(
           break;
         }
         case 'stream': {
-          if (data.protocol !== 'hls' || typeof data.uri !== 'string') break;
-          const streamCookies: StreamCookie[] = [];
-          for (const rawCookie of Array.isArray(data.cookies) ? data.cookies : []) {
-            const item = object(rawCookie);
-            if (
-              typeof item.name === 'string' &&
-              typeof item.value === 'string' &&
-              typeof item.path === 'string' &&
-              typeof item.domain === 'string'
-            )
-              streamCookies.push({
-                name: item.name,
-                value: item.value,
-                path: item.path,
-                domain: item.domain,
-              });
-          }
+          const info = parseStreamMessage(data, 'timeshift');
+          if (!info) break;
           clearTimeout(streamTimer);
-          stream.resolve({
-            uri: data.uri,
-            cookies: streamCookies,
-            quality: typeof data.quality === 'string' ? data.quality : '',
-            availableQualities: [],
-            receivedAt: new Date(),
-          });
+          stream.resolve(info);
           break;
         }
         case 'messageServer':

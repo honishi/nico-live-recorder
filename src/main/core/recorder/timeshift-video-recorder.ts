@@ -6,26 +6,18 @@ import {
   parseMultivariantPlaylist,
   selectBestVariant,
 } from '../nico/hls';
-import type { HlsStreamInfo } from '../nico/watch-session';
+import type { HlsStreamInfo } from '../nico/watch-protocol';
 import { checkedFetch, TimeshiftError } from '../nico/timeshift-common';
 import { retryTimeshiftRequest } from '../nico/timeshift-http';
 import { downloadMetrics, downloadTimeshiftTrack } from '../nico/timeshift-download';
-import {
-  prepareTimeshiftPlaylist,
-  type TimeshiftPlaylistDiagnostic,
-} from '../nico/timeshift-playlist';
-import type { VideoRecordResult } from './video-recorder';
+import { prepareTimeshiftPlaylist } from '../nico/timeshift-playlist';
+import type { VideoRecordResult, TimeshiftVideoReport } from './recording-types';
 import type { TimeshiftProgress } from '../../../shared/types';
 import type { Logger } from '../logger';
 import { TimeshiftRemainingTime } from './timeshift-remaining-time';
 
-export interface TimeshiftVideoReport {
-  startedAt: string;
-  endedAt?: string;
-  ffmpegExitCode?: number | null;
-  playlists?: { label: 'video' | 'audio'; diagnostic?: TimeshiftPlaylistDiagnostic }[];
-  tracks: { expected: number; saved: number; missing: number; httpErrors: number[] }[];
-}
+// 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
+export type { TimeshiftVideoReport } from './recording-types';
 
 /** ENDLIST のある固定 playlist を取得し、実際に書き込んだセグメント数で完了を判定する。 */
 export async function recordTimeshiftVideo(
