@@ -1,5 +1,14 @@
 export { formatBytes } from '@shared/format';
 
+/** 推定値なので10秒単位へ切り上げ、秒刻みの揺れを抑える。 */
+export function formatRemainingTime(seconds: number): string {
+  const rounded = Math.max(10, Math.ceil(seconds / 10) * 10);
+  const h = Math.floor(rounded / 3600);
+  const m = Math.floor((rounded % 3600) / 60);
+  const s = rounded % 60;
+  return `${h > 0 ? `${h}時間` : ''}${m > 0 ? `${m}分` : ''}${s > 0 ? `${s}秒` : ''}`;
+}
+
 export function formatDuration(start: string, end: string | undefined, now: number): string {
   const ms = (end ? new Date(end).getTime() : now) - new Date(start).getTime();
   const total = Math.max(0, Math.floor(ms / 1000));

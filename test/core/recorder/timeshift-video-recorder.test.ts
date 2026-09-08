@@ -48,6 +48,7 @@ beforeEach(() => {
   binary = writeFakeFfmpeg(dir);
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   fs.rmSync(dir, { recursive: true, force: true });
@@ -97,6 +98,9 @@ function media(options: { missing?: boolean; forbidden?: boolean; live?: boolean
 
 test('2トラックを並列取得・復号し、両方の保存数・FFmpeg・ファイルの成功を確認する', async () => {
   media();
+  // 接続後に時間が進む状況を固定し、実時間を待たず残り時間の通知を確認する。
+  let now = 0;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
   const outputPath = path.join(dir, 'video.ts');
   const progress: Partial<TimeshiftProgress>[] = [];
   let report: TimeshiftVideoReport | undefined;
@@ -105,7 +109,10 @@ test('2トラックを並列取得・復号し、両方の保存数・FFmpeg・�
     {
       outputPath,
       ffmpegPath: binary,
-      onProgress: (value) => progress.push(value),
+      onProgress: (value) => {
+        progress.push(value);
+        if (value.phase === 'downloading') now = 5000;
+      },
       onReport: (value) => {
         report = value;
       },
@@ -121,7 +128,9 @@ test('2トラックを並列取得・復号し、両方の保存数・FFmpeg・�
   expect(fs.readFileSync(outputPath, 'utf8')).toBe('init-videovideo-11video-12');
   expect(fs.readFileSync(outputPath + '.audio', 'utf8')).toBe('init-audioaudio-11audio-12');
   expect(progress).toContainEqual({ phase: 'downloading', totalSegments: 4, savedSegments: 0 });
-  expect(progress).toContainEqual({ savedSegments: 4 });
+  expect(progress).toContainEqual({ savedSegments: 4, estimatedRemainingSeconds: 0 });
+  expect(progress.some((value) => (value.estimatedRemainingSeconds ?? 0) > 0)).toBe(true);
+  expect(progress.at(-1)).toStrictEqual({ phase: 'saving', estimatedRemainingSeconds: undefined });
   expect(report?.tracks).toEqual([
     { expected: 2, saved: 2, missing: 0, httpErrors: [] },
     { expected: 2, saved: 2, missing: 0, httpErrors: [] },

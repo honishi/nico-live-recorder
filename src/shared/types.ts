@@ -57,6 +57,8 @@ export interface TimeshiftProgress {
   phase: 'connecting' | 'downloading' | 'saving' | 'comments';
   savedSegments: number;
   totalSegments: number;
+  /** 映像・音声の取得完了までの推定秒数。コメント取得・保存処理は含まない */
+  estimatedRemainingSeconds?: number;
   comments: 'pending' | 'complete' | 'partial';
 }
 

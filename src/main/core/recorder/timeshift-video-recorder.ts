@@ -17,6 +17,7 @@ import {
 import type { VideoRecordResult } from './video-recorder';
 import type { TimeshiftProgress } from '../../../shared/types';
 import type { Logger } from '../logger';
+import { TimeshiftRemainingTime } from './timeshift-remaining-time';
 
 export interface TimeshiftVideoReport {
   startedAt: string;
@@ -96,13 +97,26 @@ export async function recordTimeshiftVideo(
     httpErrors: [],
   }));
   const counts = urls.map(() => 0);
-  options.onProgress?.({ phase: 'downloading', totalSegments, savedSegments: 0 });
+  const remainingTime = new TimeshiftRemainingTime(report.tracks.map((track) => track.expected));
+  const updateProgress = (): void => {
+    options.onProgress?.({
+      savedSegments: counts.reduce((a, b) => a + b, 0),
+      estimatedRemainingSeconds: remainingTime.estimate(counts),
+    });
+  };
+  options.onProgress?.({
+    phase: 'downloading',
+    totalSegments,
+    savedSegments: 0,
+    estimatedRemainingSeconds: undefined,
+  });
   work.throwIfAborted();
   const muxer = new FfmpegMuxer({ ...options, separateAudio: !!best.audioUri });
   const pipes = muxer.start();
   const exited = muxer.wait();
   let tracksEnded = 0;
   let finishTimer: NodeJS.Timeout | undefined;
+  let progressTimer: NodeJS.Timeout | undefined;
   // FFmpeg の早期終了は、パイプで待機している要求も解除する。
   void exited.then(
     (exit) => {
@@ -114,6 +128,8 @@ export async function recordTimeshiftVideo(
   let failure: unknown;
   try {
     work.throwIfAborted();
+    // 通信が停滞した場合も推定を更新し、古い速度の残り時間を表示し続けない。
+    progressTimer = setInterval(updateProgress, 1000);
     const results = await Promise.allSettled(
       urls.map(async (url, index) => {
         const sink = index === 0 ? pipes.video : pipes.audio!;
@@ -129,7 +145,7 @@ export async function recordTimeshiftVideo(
             (saved) => {
               counts[index] = saved;
               report.tracks[index].saved = saved;
-              options.onProgress?.({ savedSegments: counts.reduce((a, b) => a + b, 0) });
+              updateProgress();
             },
             playlists[index].continuityCheckSeqs,
           );
@@ -146,7 +162,8 @@ export async function recordTimeshiftVideo(
         }
       }),
     );
-    options.onProgress?.({ phase: 'saving' });
+    clearInterval(progressTimer);
+    options.onProgress?.({ phase: 'saving', estimatedRemainingSeconds: undefined });
     // 停止・欠落時もパイプへ渡したデータを排出する。終了しない場合だけ期限付きで停止する。
     let finishTimedOut = false;
     finishTimer = setTimeout(() => {
@@ -181,6 +198,7 @@ export async function recordTimeshiftVideo(
       ffmpegExitCode: exit.exitCode,
     };
   } finally {
+    clearInterval(progressTimer);
     clearTimeout(finishTimer);
     report.endedAt = new Date().toISOString();
     options.onReport?.(report);

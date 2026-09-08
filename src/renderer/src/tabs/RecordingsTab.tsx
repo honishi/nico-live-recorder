@@ -3,7 +3,13 @@ import type { RecordingInfo } from '@shared/types';
 import { EmptyState } from '../components/Shell';
 import { ShowRecordingButton } from '../components/ShowRecordingButton';
 import { describeError } from '../lib/errors';
-import { formatBytes, formatCount, formatDuration, isToday } from '../lib/format';
+import {
+  formatBytes,
+  formatCount,
+  formatDuration,
+  formatRemainingTime,
+  isToday,
+} from '../lib/format';
 
 interface Props {
   recordings: RecordingInfo[];
@@ -174,6 +180,14 @@ function RecordingCard({
               映像・音声 {Math.floor((100 * r.timeshift.savedSegments) / r.timeshift.totalSegments)}
               % ({formatCount(r.timeshift.savedSegments)} / {formatCount(r.timeshift.totalSegments)}
               )
+            </span>
+          )}
+          {timeshift && !stopping && phase === 'downloading' && (
+            <span title="最近の取得速度から推定しています。コメント取得・保存処理の時間は含みません。">
+              映像・音声の残り{' '}
+              {r.timeshift?.estimatedRemainingSeconds === undefined
+                ? '計算中…'
+                : `約${formatRemainingTime(r.timeshift.estimatedRemainingSeconds)}`}
             </span>
           )}
         </div>
