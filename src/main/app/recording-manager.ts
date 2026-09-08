@@ -5,6 +5,7 @@ import { Notification } from 'electron';
 import { ProgramDetector, type DetectedProgram } from '../core/detector/program-detector';
 import { prefixLogger, type Logger } from '../core/logger';
 import { recordProgram } from '../core/recorder/program-recorder';
+import { TimeshiftError } from '../core/nico/timeshift-common';
 import { NicoClient } from '../vendor/nico-client/NicoClient';
 import { NicoLiveProgramStatus, type NicoLiveProgramInfo } from '../vendor/nico-client/types';
 import { setPushLogger } from '../vendor/web-push/push-diagnostics';
@@ -203,6 +204,13 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   async getHistoryPage(query: HistoryQuery): Promise<HistoryPage> {
     const matched = await HistoryStore.checkExistence(this.history.match(query));
     return HistoryStore.paginate(matched, query, this.history.providers());
+  }
+
+  async getCommentPaths(programId: string): Promise<string[]> {
+    const info = this.history.get(programId);
+    // 録画終了後に外部で消されたCSVも、メニューを開く時点で除外する。
+    const candidates = info?.commentsPaths ?? (info?.commentsPath ? [info.commentsPath] : []);
+    return (await statFiles(candidates)).map((file) => file.path);
   }
 
   removeHistory(programId: string): boolean {
@@ -629,7 +637,17 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     } catch (error) {
       throw codedError(ERROR_CODES.programUnavailable, (error as Error).message);
     }
-    if (programInfo.status === NicoLiveProgramStatus.ended || !programInfo.webSocketUrl) {
+    const mode =
+      source === 'manual' && programInfo.status === NicoLiveProgramStatus.ended
+        ? 'timeshift'
+        : 'live';
+    if (mode === 'timeshift' && !programInfo.webSocketUrl) {
+      throw codedError(ERROR_CODES.timeshiftUnavailable);
+    }
+    if (
+      (mode === 'live' && programInfo.status === NicoLiveProgramStatus.ended) ||
+      !programInfo.webSocketUrl
+    ) {
       throw codedError(ERROR_CODES.programUnavailable, programInfo.status);
     }
     this.detector?.markSeen(programId);
@@ -658,12 +676,26 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       previous?.commentsPath?.endsWith('.csv') && (await fileExists(previous.commentsPath))
         ? previous.commentsPath
         : undefined;
+    const priorCommentPaths =
+      mode === 'timeshift'
+        ? (
+            await statFiles(
+              [
+                ...new Set([
+                  ...(previous?.commentsPaths ?? []),
+                  ...(previousCommentsPath ? [previousCommentsPath] : []),
+                ]),
+              ].filter((name) => name.endsWith('.csv')),
+            )
+          ).map((entry) => entry.path)
+        : previous?.commentsPaths;
     const info: RecordingInfo = {
       programId,
       title: programInfo.title || meta.title || programId,
       providerId,
       providerName,
       source,
+      mode,
       state: 'starting',
       startedAt: new Date().toISOString(),
       commentCount: previousCommentsPath ? (previous?.commentCount ?? 0) : 0,
@@ -671,6 +703,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       outputDir,
       videoPaths: previousPaths.length > 0 ? previousPaths : undefined,
       commentsPath: previousCommentsPath,
+      commentsPaths: priorCommentPaths,
     };
     // 番組情報や既存ファイルの取得中に終了・ログアウトが始まった場合も起動しない
     if (this.stopped || this.loggingOut) {
@@ -691,12 +724,13 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.history.upsert(info);
     this.emitChange();
 
+    const recordingLabel = mode === 'timeshift' ? 'タイムシフト録画' : '録画';
     recording.done = (async () => {
       try {
         info.state = 'recording';
         this.emitChange();
         this.logger.info(`[rec] start ${programId} "${info.title}" by ${providerName ?? '?'}`);
-        this.notify('録画を開始しました', `${providerName ?? ''} ${info.title}`);
+        this.notify(`${recordingLabel}を開始しました`, `${providerName ?? ''} ${info.title}`);
 
         recording.sizeTimer = setInterval(() => void this.pollSize(recording), SIZE_POLL_MS);
 
@@ -704,10 +738,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         let attempt = 1;
         let delayMs = RETRY_BASE_DELAY_MS;
         let outcome: 'done' | 'failed' = 'done';
+        let progressEmittedAt = 0;
         let lastReason = 'no video';
         while (true) {
           // コメント件数はパートをまたいで累計する
-          const countBefore = info.commentCount;
+          const countBefore = mode === 'timeshift' ? 0 : info.commentCount;
           // パート単位の停止 (出力ファイルの消失など) は録画全体の停止と分けて扱う
           const part: RecordingPart = {
             controller: new AbortController(),
@@ -723,6 +758,23 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               ffmpegPath: this.ffmpegPath,
               logger: prefixLogger(this.logger, programId),
               programInfo,
+              mode,
+              onTimeshiftProgress: (progress) => {
+                const changed =
+                  info.timeshift?.phase !== progress.phase ||
+                  info.timeshift?.comments !== progress.comments;
+                info.timeshift = progress;
+                if (info.completion !== 'cancelled') {
+                  info.state =
+                    progress.phase === 'saving' || progress.phase === 'comments'
+                      ? 'finishing'
+                      : 'recording';
+                }
+                if (changed || Date.now() - progressEmittedAt >= 500) {
+                  progressEmittedAt = Date.now();
+                  this.emitChange();
+                }
+              },
               attempt,
               // 既存ファイルと重ならない連番を recorder が選ぶので、実際の値をここで受け取る
               onPaths: (paths) => {
@@ -731,14 +783,22 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
                 if (!info.videoPaths?.includes(paths.videoPath)) {
                   info.videoPaths = [...(info.videoPaths ?? []), paths.videoPath];
                 }
-                info.commentsPath ??= paths.commentsPath;
+                if (mode === 'timeshift') {
+                  info.commentCount = 0;
+                  info.commentsPath = paths.commentsPath;
+                  info.commentsPaths = [
+                    ...new Set([...(info.commentsPaths ?? []), paths.commentsPath]),
+                  ];
+                } else {
+                  info.commentsPath ??= paths.commentsPath;
+                }
                 part.path = paths.videoPath;
                 // クラッシュしてもこのパートのファイルが履歴から辿れるように、決まった時点で書く
                 this.history.upsert(info);
                 recording.snapshotAt = Date.now();
               },
               // コメントは最初のパートのファイルに追記し続ける
-              commentsPath: info.commentsPath,
+              commentsPath: mode === 'live' ? info.commentsPath : undefined,
               // コメントファイルを新しく作るときだけ過去分を取得する (既存ファイルへの追記では重複するため)
               prefetchBackwardComments: !info.commentsPath,
               onComment: (_comment, count) => {
@@ -757,6 +817,19 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           // このパートは完了済みの合計に繰り入れる。再開待ちの間のサイズ監視は何も数えない
           recording.part = undefined;
           const outputMissing = part.lost;
+          // 空の予約ファイルは成果物一覧に残さない。失敗の履歴と診断JSONは維持する。
+          if (mode === 'timeshift') {
+            const videos = (await statFiles(info.videoPaths ?? [])).filter((file) => file.size > 0);
+            info.videoPaths = videos.map((file) => file.path);
+            info.videoBytes = sumSizes(videos);
+            const comments = (await statFiles(info.commentsPaths ?? [])).filter(
+              (file) => file.size > 0,
+            );
+            info.commentsPaths = comments.map((file) => file.path);
+            if (!info.commentsPaths.includes(info.commentsPath ?? ''))
+              info.commentsPath = undefined;
+          }
+
           // 消えたパートは後始末で一覧から外してあるので、代表パスは残っている最後のパート
           info.videoPath = info.videoPaths?.at(-1);
           recording.finishedPartBytes = info.videoBytes;
@@ -767,6 +840,26 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           lastReason = outputMissing
             ? 'output file disappeared'
             : (result.video?.reason ?? 'no video');
+          // 有限取得は再開しない。番組の終了状態だけで成功扱いにするライブの判定へ進めない。
+          if (mode === 'timeshift') {
+            info.timeshift = result.timeshift?.progress ?? info.timeshift;
+            if (controller.signal.aborted) info.completion = 'cancelled';
+            else if (outputMissing) info.completion = 'partial';
+            else info.completion = result.timeshift?.completion ?? 'partial';
+            outcome =
+              info.completion === 'cancelled' || (result.video && !outputMissing)
+                ? 'done'
+                : 'failed';
+            info.error =
+              info.completion === 'cancelled'
+                ? undefined
+                : errorText ||
+                  (info.completion === 'partial'
+                    ? 'タイムシフトの取得が完了しませんでした'
+                    : undefined);
+            if (info.error) this.logger.warn(`[rec] ${programId}: ${info.error}`);
+            break;
+          }
           const videoOk = result.video !== undefined;
           const abnormal =
             !controller.signal.aborted &&
@@ -833,15 +926,35 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         this.logger.info(
           `[rec] ${outcome === 'done' ? 'finished' : 'failed'} ${programId} "${info.title}" (${lastReason}, ${info.commentCount} comments, ${attempt} part${attempt > 1 ? 's' : ''})`,
         );
-        this.notify(
-          outcome === 'done' ? '録画が終了しました' : '録画に失敗しました',
-          `${providerName ?? ''} ${info.title}`,
-        );
+        let notification =
+          outcome === 'done'
+            ? `${recordingLabel}が終了しました`
+            : `${recordingLabel}に失敗しました`;
+        // 動画が保存できても、コメントなどが欠けた場合は正常完了と区別する。
+        if (mode === 'timeshift' && info.completion === 'partial' && outcome === 'done')
+          notification = `${recordingLabel}が一部失敗しました`;
+        if (info.completion === 'cancelled') notification = `${recordingLabel}を停止しました`;
+        this.notify(notification, `${providerName ?? ''} ${info.title}`);
       } catch (error) {
         info.state = 'failed';
-        info.error = (error as Error).message;
-        this.logger.error(`[rec] failed ${programId}`, error);
-        this.notify('録画に失敗しました', `${info.title}: ${info.error}`);
+        info.error =
+          mode === 'timeshift'
+            ? 'タイムシフトの取得または保存に失敗しました'
+            : (error as Error).message;
+        if (mode === 'timeshift') {
+          info.completion = controller.signal.aborted ? 'cancelled' : 'partial';
+          if (controller.signal.aborted) {
+            info.state = 'done';
+            info.error = undefined;
+          }
+        }
+        if (info.completion === 'cancelled') {
+          this.logger.info(`[rec] stopped ${programId}`);
+          this.notify(`${recordingLabel}を停止しました`, info.title);
+        } else {
+          this.logger.error(`[rec] failed ${programId}`, mode === 'timeshift' ? info.error : error);
+          this.notify(`${recordingLabel}に失敗しました`, `${info.title}: ${info.error}`);
+        }
       } finally {
         if (recording.sizeTimer) {
           clearInterval(recording.sizeTimer);
@@ -862,6 +975,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       return false;
     }
     recording.info.state = 'finishing';
+    if (recording.info.mode === 'timeshift') recording.info.completion = 'cancelled';
     this.manuallyStopped.add(programId);
     recording.controller.abort();
     this.logger.info(`[rec] stop requested ${programId}`);
@@ -927,7 +1041,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     }
     // 消失を検知した後に、削除前に始まった stat が成功で戻ってきても、消えた分を足し戻さない
     if (size !== undefined && !part.lost) {
-      part.fileSeen = true;
+      if (info.mode !== 'timeshift' || size > 0) part.fileSeen = true;
       const total = recording.finishedPartBytes + size;
       if (total !== info.videoBytes) {
         info.videoBytes = total;
@@ -941,11 +1055,13 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       return;
     }
     this.logger.error(
-      `[rec] output file disappeared while recording ${info.programId}: ${videoPath}. Restarting as a new part`,
+      `[rec] output file disappeared while recording ${info.programId}: ${videoPath}.${info.mode === 'timeshift' ? ' Stopping timeshift' : ' Restarting as a new part'}`,
     );
     part.lost = true;
     // 先に書き込みを止め、残ったファイルの数え直しは録画ループが待ち合わせる
-    part.controller.abort();
+    part.controller.abort(
+      info.mode === 'timeshift' ? new TimeshiftError('OUTPUT_MISSING') : undefined,
+    );
     part.cleanup = this.discardLostPart(recording, videoPath);
     await part.cleanup;
   }
@@ -958,6 +1074,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     info.videoPaths = survivors.length > 0 ? survivors.map((p) => p.path) : undefined;
     recording.finishedPartBytes = sumSizes(survivors);
     info.videoBytes = recording.finishedPartBytes;
+    if (info.mode === 'timeshift')
+      info.commentsPaths = (await statFiles(info.commentsPaths ?? [])).map((file) => file.path);
     // コメントファイルも一緒に消えていれば、次のパートで作り直して過去分を取り直す
     if (info.commentsPath && !(await fileExists(info.commentsPath))) {
       this.logger.warn(`[rec] comment file disappeared too: ${info.commentsPath}`);

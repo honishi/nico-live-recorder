@@ -46,7 +46,7 @@ const COMMENT_COLUMNS = [
   'id',
   'liveId',
 ] as const satisfies readonly (keyof NicoComment)[];
-const CSV_HEADER = '\uFEFF' + COMMENT_COLUMNS.join(',') + '\n';
+export const CSV_HEADER = '\uFEFF' + COMMENT_COLUMNS.join(',') + '\n';
 
 /** CSV の各列に保存する値 (投稿時刻は日本時間、RGB 色は #RRGGBB にする) */
 export interface CommentRecord extends Omit<NicoComment, 'at' | 'color'> {

@@ -318,7 +318,10 @@ export function registerIpcHandlers(ctx: IpcContext): void {
     ctx.manager.getHistoryPage({
       query: typeof query?.query === 'string' ? query.query : undefined,
       provider: typeof query?.provider === 'string' ? query.provider : undefined,
-      state: query?.state === 'done' || query?.state === 'failed' ? query.state : undefined,
+      state:
+        query?.state === 'done' || query?.state === 'failed' || query?.state === 'cancelled'
+          ? query.state
+          : undefined,
       offset: typeof query?.offset === 'number' ? query.offset : 0,
       limit: typeof query?.limit === 'number' ? Math.min(200, query.limit) : undefined,
     }),
@@ -329,8 +332,9 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   // 履歴行の右クリックメニュー。ファイル操作は main 側で行う
   ipcMain.handle(
     IPC.historyContextMenu,
-    (event, programId: string, videoPath?: string, commentsPath?: string) =>
-      new Promise<void>((resolve) => {
+    async (event, programId: string, videoPath?: string, commentsPath?: string) => {
+      const commentFiles = await ctx.manager.getCommentPaths(programId);
+      return new Promise<void>((resolve) => {
         const menu = Menu.buildFromTemplate([
           {
             label: 'フォルダで表示',
@@ -342,12 +346,19 @@ export function registerIpcHandlers(ctx: IpcContext): void {
             enabled: typeof commentsPath === 'string' && commentsPath.length > 0,
             click: () => void shell.openPath(commentsPath ?? ''),
           },
+          ...commentFiles
+            .filter((file) => file !== commentsPath)
+            .map((file, index) => ({
+              label: `以前のコメントを開く (${index + 1})`,
+              click: () => void shell.openPath(file),
+            })),
           { type: 'separator' },
           { label: '履歴から削除', click: () => void ctx.manager.removeHistory(String(programId)) },
         ]);
         const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
         menu.popup({ window, callback: () => resolve() });
-      }),
+      });
+    },
   );
 }
 
