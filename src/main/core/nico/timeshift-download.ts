@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+import { decryptHlsSegment } from './hls-crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
 import { cookieHeaderFor, type HlsSegment, type TrackResult } from './hls';
@@ -169,16 +169,9 @@ export async function downloadTimeshiftTrack(
       if (loaded.key) {
         const started = performance.now();
         try {
-          const iv = Buffer.alloc(16);
-          if (segment.key?.iv) {
-            if (!/^[0-9a-f]{1,32}$/i.test(segment.key.iv))
-              throw new TimeshiftError('INVALID_ENCRYPTION_IV');
-            Buffer.from(segment.key.iv.padStart(32, '0'), 'hex').copy(iv);
-          } else {
-            iv.writeBigUInt64BE(BigInt(segment.seq), 8);
-          }
-          const decipher = crypto.createDecipheriv('aes-128-cbc', loaded.key, iv);
-          data = Buffer.concat([decipher.update(data), decipher.final()]);
+          if (segment.key?.iv && !/^[0-9a-f]{1,32}$/i.test(segment.key.iv))
+            throw new TimeshiftError('INVALID_ENCRYPTION_IV');
+          data = decryptHlsSegment(data, loaded.key, segment.seq, segment.key?.iv);
         } finally {
           metrics.timingsMs.decrypt += performance.now() - started;
         }

@@ -1,4 +1,4 @@
-import crypto from 'node:crypto';
+import { decryptHlsSegment } from './hls-crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
 import { DEFAULT_USER_AGENT } from '../../vendor/nico-client/internal/userAgent';
@@ -435,14 +435,7 @@ export class HlsTrackDownloader {
       }
       this.keyCache.set(key.uri, keyBytes);
     }
-    const iv = Buffer.alloc(16);
-    if (key.iv) {
-      Buffer.from(key.iv.padStart(32, '0'), 'hex').copy(iv);
-    } else {
-      iv.writeBigUInt64BE(BigInt(segment.seq), 8);
-    }
-    const decipher = crypto.createDecipheriv('aes-128-cbc', keyBytes, iv);
-    return Buffer.concat([decipher.update(data), decipher.final()]);
+    return decryptHlsSegment(data, keyBytes, segment.seq, key.iv);
   }
 
   private async fetchWithRetry(
