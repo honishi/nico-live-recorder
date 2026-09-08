@@ -4,7 +4,8 @@ import type { Writable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { cookieHeaderFor, type HlsSegment, type TrackResult } from './hls';
 import type { StreamCookie } from './watch-session';
-import { checkedFetch, TimeshiftError } from './timeshift-common';
+import { TimeshiftError } from './timeshift-common';
+import { fetchTimeshiftBytes } from './timeshift-http';
 import {
   inspectFragmentTiming,
   requireContinuousFragments,
@@ -60,19 +61,14 @@ export async function downloadTimeshiftTrack(
       metrics.requestCount += 1;
       metrics.maxConcurrentRequests = Math.max(metrics.maxConcurrentRequests, activeRequests);
       try {
-        const response = await checkedFetch(url, workSignal, cookieHeaderFor(cookies, url));
-        if (!response.body) throw new TimeshiftError('MEDIA_BODY_MISSING');
-        const chunks: Buffer[] = [];
-        let size = 0;
-        for await (const raw of response.body) {
-          workSignal.throwIfAborted();
-          const chunk = Buffer.from(raw as Uint8Array);
-          size += chunk.length;
-          metrics.receivedBytes += chunk.length;
-          if (size > MAX_RESOURCE_BYTES) throw new TimeshiftError('MEDIA_RESOURCE_LIMIT');
-          chunks.push(chunk);
-        }
-        return Buffer.concat(chunks);
+        return await fetchTimeshiftBytes(url, workSignal, {
+          cookie: cookieHeaderFor(cookies, url),
+          maxBytes: MAX_RESOURCE_BYTES,
+          limitCode: 'MEDIA_RESOURCE_LIMIT',
+          onBytes: (size) => {
+            metrics.receivedBytes += size;
+          },
+        });
       } catch (caught) {
         if (
           caught instanceof TimeshiftError &&
