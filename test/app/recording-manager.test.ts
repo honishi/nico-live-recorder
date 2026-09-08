@@ -298,6 +298,51 @@ describe('RecordingManager', () => {
     expect(call.signal?.aborted).toBe(false);
   });
 
+  test('履歴確定後に削除された以前のCSVをメニュー候補から除く', async () => {
+    const retained = path.join(dir, 'retained.csv');
+    const deleted = path.join(dir, 'deleted.csv');
+    fs.writeFileSync(retained, 'comments');
+    history.upsert({
+      programId: 'lv1',
+      title: 'old',
+      source: 'manual',
+      mode: 'timeshift',
+      state: 'done',
+      startedAt: new Date().toISOString(),
+      outputDir: dir,
+      commentCount: 1,
+      videoBytes: 0,
+      commentsPaths: [deleted, retained],
+    });
+    expect(await manager.getCommentPaths('lv1')).toEqual([retained]);
+    expect(fs.readFileSync(retained, 'utf8')).toBe('comments');
+  });
+
+  test('タイムシフト中のフォルダ消失を一部失敗として停止し、削除済みCSVを残さない', async () => {
+    getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+    await manager.startRecording('lv1', 'manual');
+    const call = await nextRecordCall(0);
+    const result = finishedResult(call, { timeshift: { completion: 'cancelled' } });
+    fs.mkdirSync(call.options.outputDir, { recursive: true });
+    fs.writeFileSync(path.join(call.options.outputDir, 'rec.ts'), 'video');
+    fs.writeFileSync(path.join(call.options.outputDir, 'rec.comments.csv'), 'comments');
+    await expectVideoBytes(manager, 5);
+    fs.rmSync(call.options.outputDir, { recursive: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitFor(() => call.signal!.aborted);
+    expect(call.signal?.reason).toMatchObject({ code: 'OUTPUT_MISSING' });
+    call.resolve(result);
+    await waitFor(() => !manager.hasActiveRecordings());
+    expect(history.get('lv1')).toMatchObject({
+      state: 'failed',
+      completion: 'partial',
+      commentsPaths: [],
+    });
+    expect(await manager.getCommentPaths('lv1')).toEqual([]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(recordCalls).toHaveLength(1);
+  });
+
   test('視聴できないタイムシフトや取得できない番組はコード付きの例外にする', async () => {
     getProgramInfo.mockResolvedValueOnce(
       info({ status: NicoLiveProgramStatus.ended, webSocketUrl: undefined }),
@@ -389,7 +434,7 @@ describe('RecordingManager', () => {
     expect(entry.commentsPaths).toEqual([oldCsv, entry.commentsPath]);
     expect(entry.videoPaths).toContain(oldVideo);
     expect(fs.readFileSync(oldCsv, 'utf8')).toBe('old comments');
-    expect(manager.getCommentPaths('lv1')).toEqual(entry.commentsPaths);
+    expect(await manager.getCommentPaths('lv1')).toEqual(entry.commentsPaths);
   });
 
   test('自動ライブ録画と手動タイムシフトを同時に動かし停止を分離する', async () => {

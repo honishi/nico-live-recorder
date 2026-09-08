@@ -206,9 +206,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     return HistoryStore.paginate(matched, query, this.history.providers());
   }
 
-  getCommentPaths(programId: string): string[] {
+  async getCommentPaths(programId: string): Promise<string[]> {
     const info = this.history.get(programId);
-    return info?.commentsPaths ?? (info?.commentsPath ? [info.commentsPath] : []);
+    // 録画終了後に外部で消されたCSVも、メニューを開く時点で除外する。
+    const candidates = info?.commentsPaths ?? (info?.commentsPath ? [info.commentsPath] : []);
+    return (await statFiles(candidates)).map((file) => file.path);
   }
 
   removeHistory(programId: string): boolean {
@@ -1065,6 +1067,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     info.videoPaths = survivors.length > 0 ? survivors.map((p) => p.path) : undefined;
     recording.finishedPartBytes = sumSizes(survivors);
     info.videoBytes = recording.finishedPartBytes;
+    if (info.mode === 'timeshift')
+      info.commentsPaths = (await statFiles(info.commentsPaths ?? [])).map((file) => file.path);
     // コメントファイルも一緒に消えていれば、次のパートで作り直して過去分を取り直す
     if (info.commentsPath && !(await fileExists(info.commentsPath))) {
       this.logger.warn(`[rec] comment file disappeared too: ${info.commentsPath}`);

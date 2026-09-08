@@ -332,8 +332,9 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   // 履歴行の右クリックメニュー。ファイル操作は main 側で行う
   ipcMain.handle(
     IPC.historyContextMenu,
-    (event, programId: string, videoPath?: string, commentsPath?: string) =>
-      new Promise<void>((resolve) => {
+    async (event, programId: string, videoPath?: string, commentsPath?: string) => {
+      const commentFiles = await ctx.manager.getCommentPaths(programId);
+      return new Promise<void>((resolve) => {
         const menu = Menu.buildFromTemplate([
           {
             label: 'フォルダで表示',
@@ -345,8 +346,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
             enabled: typeof commentsPath === 'string' && commentsPath.length > 0,
             click: () => void shell.openPath(commentsPath ?? ''),
           },
-          ...ctx.manager
-            .getCommentPaths(programId)
+          ...commentFiles
             .filter((file) => file !== commentsPath)
             .map((file, index) => ({
               label: `以前のコメントを開く (${index + 1})`,
@@ -357,7 +357,8 @@ export function registerIpcHandlers(ctx: IpcContext): void {
         ]);
         const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
         menu.popup({ window, callback: () => resolve() });
-      }),
+      });
+    },
   );
 }
 
