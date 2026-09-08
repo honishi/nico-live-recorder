@@ -46,6 +46,7 @@ export interface ProgramRecordResult {
       | 'sorted'
       | 'duplicates'
       | 'invalidCount'
+      | 'viewRequests'
       | 'startedAt'
       | 'endedAt'
     >;

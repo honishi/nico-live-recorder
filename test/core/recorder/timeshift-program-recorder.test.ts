@@ -258,3 +258,12 @@ test('映像終了後に出力が消えても成功にせず、取得済みコ�
     message: 'タイムシフト: OUTPUT_MISSING',
   });
 });
+
+test('映像取得前の拒否に出力消失という二次エラーを追加しない', async () => {
+  const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
+  vi.mocked(recordTimeshiftVideo).mockRejectedValue(new TimeshiftError('UNSUPPORTED_PLAYLIST_TAG'));
+  const result = await begin();
+  expect(result.errors.filter((error) => error.target === 'video')).toEqual([
+    { target: 'video', message: 'タイムシフト: UNSUPPORTED_PLAYLIST_TAG' },
+  ]);
+});

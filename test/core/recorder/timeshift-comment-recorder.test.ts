@@ -18,6 +18,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
   await fs.rm(dir, { recursive: true, force: true });
 });
 const message = (id: string, seconds: number, nanos = 0, no = 1) => ({
@@ -55,7 +56,7 @@ async function routes(messages: unknown[], options: { cycle?: boolean; truncated
     ).finish(),
     'https://example.test/forward': options.truncated ? forward.slice(0, -1) : forward,
   };
-  const mocked = vi.fn((url: string) => {
+  const mocked = vi.fn((url: string, _init?: RequestInit) => {
     if (!data[url]) throw new Error('unexpected request');
     return Promise.resolve(new Response(Buffer.from(data[url])));
   });
@@ -177,4 +178,75 @@ test('ソート結果の置換失敗でも取得済みCSVを失わない', async
   });
   expect(await fs.readFile(output, 'utf8')).toContain('"saved"');
   expect(await fs.readdir(dir)).toEqual(['comments.csv']);
+});
+
+test.each([25_000, 61_000])('View応答が%s msかかる場合の待機と上限を確認する', async (delayMs) => {
+  const mocked = await routes([message('saved', 1000)]);
+  const respond = mocked.getMockImplementation()!;
+  vi.useFakeTimers();
+  vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException('timeout', 'TimeoutError')), ms);
+    return controller.signal;
+  });
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  mocked.mockImplementation((url, init) => {
+    if (!url.endsWith('at=now')) return respond(url, init);
+    const waiting = new Promise<Response>((resolve, reject) => {
+      setTimeout(() => {
+        void respond(url, init).then(resolve, reject);
+      }, delayMs);
+      init?.signal?.addEventListener(
+        'abort',
+        () => reject(new DOMException('timeout', 'TimeoutError')),
+        { once: true },
+      );
+    });
+    entered();
+    return waiting;
+  });
+  const pending = recordTimeshiftComments(
+    'https://example.test/view',
+    output,
+    new AbortController().signal,
+  );
+  await ready;
+  await vi.advanceTimersByTimeAsync(Math.min(delayMs, 60_000));
+  const result = await pending;
+  expect(result).toMatchObject(
+    delayMs < 60_000
+      ? { status: 'complete', count: 2 }
+      : { status: 'partial', reason: 'COMMENT_VIEW_TIMEOUT', count: 0 },
+  );
+  expect(result.viewRequests?.[0]).toMatchObject({ entries: delayMs < 60_000 ? 1 : 0 });
+});
+
+test('本文待機のAbortErrorもViewタイムアウトとして記録し、利用者の停止と区別する', async () => {
+  await routes([]);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new DOMException('body aborted', 'AbortError'));
+            },
+          }),
+        ),
+    ),
+  );
+  const result = await recordTimeshiftComments(
+    'https://example.test/view',
+    output,
+    new AbortController().signal,
+  );
+  expect(result).toMatchObject({
+    status: 'partial',
+    reason: 'COMMENT_VIEW_TIMEOUT',
+    aborted: false,
+  });
 });

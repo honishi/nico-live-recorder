@@ -163,6 +163,7 @@ export async function recordTimeshiftProgram(
           sorted: captured.sorted,
           duplicates: captured.duplicates,
           invalidCount: captured.invalidCount,
+          viewRequests: captured.viewRequests,
           startedAt: captured.startedAt,
           endedAt: captured.endedAt,
         };
@@ -185,7 +186,7 @@ export async function recordTimeshiftProgram(
       (stat) => stat.size > 0,
       () => false,
     );
-    if (!videoPresent && !signal.aborted) {
+    if (result.video && !videoPresent && !signal.aborted) {
       result.video = undefined;
       result.errors.push({ target: 'video', message: 'タイムシフト: OUTPUT_MISSING' });
     }

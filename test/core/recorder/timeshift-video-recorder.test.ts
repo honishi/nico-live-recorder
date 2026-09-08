@@ -5,6 +5,7 @@ import path from 'node:path';
 import { recordTimeshiftVideo } from '../../../src/main/core/recorder/timeshift-video-recorder';
 import type { TimeshiftVideoReport } from '../../../src/main/core/recorder/timeshift-video-recorder';
 import type { TimeshiftProgress } from '../../../src/shared/types';
+import { fragment, fragmentInit } from '../../helpers/fmp4';
 
 function writeFakeFfmpeg(dir: string): string {
   const script = path.join(dir, 'fake-ffmpeg.cjs');
@@ -149,5 +150,73 @@ test.each(['missing', 'forbidden', 'live', 'ffmpeg', 'early-exit'] as const)(
       ),
     ).rejects.toThrow();
     if (failure === 'missing') expect(report?.tracks[1].missing).toBe(1);
+  },
+);
+
+test.each([false, true])(
+  '映像だけが本編途中の境界でも復号後に時刻を検査する（巻き戻り=%s）',
+  async (reset) => {
+    const key = Buffer.alloc(16, 9);
+    const init = fragmentInit();
+    const first = fragment(0n);
+    const second = fragment(reset ? 0n : 6n);
+    const audio = fragment(6n);
+    const routes: Record<string, string | Buffer> = {
+      '/master':
+        '#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Main",DEFAULT=YES,URI="/audio"\n#EXT-X-STREAM-INF:BANDWIDTH=1000,AUDIO="a"\n/video\n',
+      '/key': key,
+      '/init': init,
+    };
+    // 映像は0秒から本編、音声だけ冒頭6秒がblankの実例を再現する。
+    for (const track of ['video', 'audio']) {
+      routes['/' + track] =
+        `#EXTM3U\n#EXT-X-MAP:URI="/init"\n#EXT-X-KEY:METHOD=AES-128,URI="/key"\n#EXTINF:6,\n${track === 'video' ? '/first' : '/blank/0'}\n#EXT-X-DISCONTINUITY\n#EXTINF:6,\n/${track}-1\n#EXT-X-ENDLIST\n`;
+    }
+    for (const [url, data, seq] of [
+      ['/first', first, 0],
+      ['/video-1', second, 1],
+      ['/audio-1', audio, 1],
+    ] as const) {
+      const iv = Buffer.alloc(16);
+      iv.writeBigUInt64BE(BigInt(seq), 8);
+      const cipher = crypto.createCipheriv('aes-128-cbc', key, iv);
+      routes[url] = Buffer.concat([cipher.update(data), cipher.final()]);
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        const body = routes[new URL(url).pathname];
+        if (body === undefined) throw new Error('unexpected request');
+        return new Response(body);
+      }),
+    );
+    const outputPath = path.join(dir, 'video.ts');
+    let report: TimeshiftVideoReport | undefined;
+    const recording = recordTimeshiftVideo(
+      stream,
+      {
+        outputPath,
+        ffmpegPath: binary,
+        onReport: (value) => {
+          report = value;
+        },
+      },
+      new AbortController().signal,
+    );
+    if (reset) {
+      await expect(recording).rejects.toThrow('DISCONTINUITY_TIMESTAMP_CHANGED');
+    } else {
+      await expect(recording).resolves.toMatchObject({
+        video: { segments: 2 },
+        audio: { segments: 1 },
+        reason: 'endlist',
+      });
+      expect(fs.readFileSync(outputPath)).toEqual(Buffer.concat([init, first, second]));
+      expect(fs.readFileSync(outputPath + '.audio')).toEqual(Buffer.concat([init, audio]));
+    }
+    expect(report?.playlists).toMatchObject([
+      { label: 'video', diagnostic: { blankSegments: 0, continuityCheckCount: 1 } },
+      { label: 'audio', diagnostic: { blankSegments: 1, continuityCheckCount: 0 } },
+    ]);
   },
 );

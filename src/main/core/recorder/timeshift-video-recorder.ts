@@ -9,7 +9,10 @@ import {
 import type { HlsStreamInfo } from '../nico/watch-session';
 import { checkedFetch, TimeshiftError } from '../nico/timeshift-common';
 import { downloadMetrics, downloadTimeshiftTrack } from '../nico/timeshift-download';
-import { prepareTimeshiftPlaylist } from '../nico/timeshift-playlist';
+import {
+  prepareTimeshiftPlaylist,
+  type TimeshiftPlaylistDiagnostic,
+} from '../nico/timeshift-playlist';
 import type { VideoRecordResult } from './video-recorder';
 import type { TimeshiftProgress } from '../../../shared/types';
 import type { Logger } from '../logger';
@@ -17,6 +20,7 @@ import type { Logger } from '../logger';
 export interface TimeshiftVideoReport {
   startedAt: string;
   endedAt?: string;
+  playlists?: { label: 'video' | 'audio'; diagnostic?: TimeshiftPlaylistDiagnostic }[];
   tracks: { expected: number; saved: number; missing: number; httpErrors: number[] }[];
 }
 
@@ -50,27 +54,44 @@ export async function recordTimeshiftVideo(
   };
   const best = selectBestVariant(parseMultivariantPlaylist(await get(stream.uri), stream.uri));
   const urls = [best.video.uri, ...(best.audioUri ? [best.audioUri] : [])];
+  const report: TimeshiftVideoReport = {
+    startedAt: startedAt.toISOString(),
+    tracks: [],
+    playlists: urls.map((_url, index) => ({ label: index === 0 ? 'video' : 'audio' })),
+  };
+  options.onReport?.(report);
   const prepared = await Promise.allSettled(
-    urls.map(async (url) => prepareTimeshiftPlaylist(await get(url), url)),
+    urls.map(async (url, index) =>
+      prepareTimeshiftPlaylist(await get(url), url, (diagnostic) => {
+        report.playlists![index].diagnostic = diagnostic;
+        const label = index === 0 ? 'video' : 'audio';
+        if (diagnostic.unsupportedCount) {
+          options.logger?.warn(
+            `timeshift ${label} playlist rejected: ${JSON.stringify(diagnostic)}`,
+          );
+        } else {
+          options.logger?.debug(`timeshift ${label} playlist: ${JSON.stringify(diagnostic)}`);
+        }
+      }),
+    ),
   );
   const playlists = prepared.map((result) => {
-    if (result.status === 'rejected') throw result.reason;
+    if (result.status === 'rejected') {
+      report.endedAt = new Date().toISOString();
+      throw result.reason;
+    }
     return result.value;
   });
   const totalSegments = playlists.reduce(
     (sum, item) => sum + item.summary.expectedSavedSegments,
     0,
   );
-  const report: TimeshiftVideoReport = {
-    startedAt: startedAt.toISOString(),
-    tracks: playlists.map((item) => ({
-      expected: item.summary.expectedSavedSegments,
-      saved: 0,
-      missing: 0,
-      httpErrors: [],
-    })),
-  };
-  options.onReport?.(report);
+  report.tracks = playlists.map((item) => ({
+    expected: item.summary.expectedSavedSegments,
+    saved: 0,
+    missing: 0,
+    httpErrors: [],
+  }));
   const counts = urls.map(() => 0);
   options.onProgress?.({ phase: 'downloading', totalSegments, savedSegments: 0 });
   work.throwIfAborted();
@@ -109,6 +130,7 @@ export async function recordTimeshiftVideo(
               report.tracks[index].saved = saved;
               options.onProgress?.({ savedSegments: counts.reduce((a, b) => a + b, 0) });
             },
+            playlists[index].continuityCheckSeqs,
           );
           if (
             metrics.missingSegments ||

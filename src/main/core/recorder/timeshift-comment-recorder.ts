@@ -40,6 +40,7 @@ export interface TimeshiftCommentResult extends CommentRecordResult {
   sorted: boolean;
   duplicates: number;
   invalidCount: number;
+  viewRequests?: { durationMs: number; entries: number }[];
 }
 
 function integer(value: unknown, fallback = 0): number {
@@ -111,14 +112,16 @@ export async function recordTimeshiftComments(
   let reason = 'snapshot-exhausted';
   let complete = false;
   let sorted = false;
+  const viewRequests: { durationMs: number; entries: number }[] = [];
+  let readingView = false;
   const addBytes = (length: number): void => {
     bytes += length;
     if (bytes > limits.bytes) throw new TimeshiftError('COMMENT_BYTE_LIMIT');
   };
   const decode = (type: Type, data: Uint8Array): Record<string, unknown> =>
     object(type.toObject(type.decode(data), { longs: String }));
-  const frames = async function* (url: string, type: Type) {
-    const response = await checkedFetch(url, signal);
+  const frames = async function* (url: string, type: Type, timeoutMs = 20_000) {
+    const response = await checkedFetch(url, signal, undefined, timeoutMs);
     if (!response.body) throw new TimeshiftError('COMMENT_BODY_MISSING');
     const reader = new ProtobufStreamReader();
     let pendingBytes = 0;
@@ -177,21 +180,32 @@ export async function recordTimeshiftComments(
       url.searchParams.set('at', requestAt);
       let next: string | undefined;
       marker = false;
-      for await (const entry of frames(url.toString(), registry.ChunkedEntry)) {
-        const back = object(object(entry.backward).segment).uri;
-        if (typeof back === 'string' && back) backward = back;
-        for (const candidate of [entry.previous, entry.segment]) {
-          const uri = object(candidate).uri;
-          if (typeof uri === 'string' && uri) forwards.add(uri);
+      // Viewはnextカーソルの先で応答を待つ。通常ファイルの20秒制限とは分ける。
+      const request = { durationMs: 0, entries: 0 };
+      viewRequests.push(request);
+      const requestStarted = performance.now();
+      readingView = true;
+      try {
+        for await (const entry of frames(url.toString(), registry.ChunkedEntry, 60_000)) {
+          request.entries += 1;
+          const back = object(object(entry.backward).segment).uri;
+          if (typeof back === 'string' && back) backward = back;
+          for (const candidate of [entry.previous, entry.segment]) {
+            const uri = object(candidate).uri;
+            if (typeof uri === 'string' && uri) forwards.add(uri);
+          }
+          if (entry.next !== undefined) {
+            const at = object(entry.next).at;
+            if ((typeof at === 'string' || typeof at === 'number') && /^\d{1,19}$/.test(String(at)))
+              next = String(at);
+            marker = next !== undefined;
+            break;
+          }
         }
-        if (entry.next !== undefined) {
-          const at = object(entry.next).at;
-          if ((typeof at === 'string' || typeof at === 'number') && /^\d{1,19}$/.test(String(at)))
-            next = String(at);
-          marker = next !== undefined;
-          break;
-        }
+      } finally {
+        request.durationMs = Math.round(performance.now() - requestStarted);
       }
+      readingView = false;
       if (backward || forwards.size) break;
       if (!next) throw new TimeshiftError('VIEW_MARKER_MISSING');
       requestAt = next;
@@ -226,11 +240,17 @@ export async function recordTimeshiftComments(
     if (rows.length >= limits.count) throw new TimeshiftError('COMMENT_COUNT_LIMIT');
     complete = true;
   } catch (error) {
+    // fetchの本文待機中のタイムアウトはAbortErrorになる。利用者の停止はsignalで区別する。
+    const requestTimedOut = ['TimeoutError', 'AbortError'].includes(String(object(error).name));
     reason = signal.aborted
       ? 'interrupted'
       : error instanceof TimeshiftError
         ? error.code
-        : 'COMMENT_FETCH_OR_SAVE_FAILED';
+        : requestTimedOut
+          ? readingView
+            ? 'COMMENT_VIEW_TIMEOUT'
+            : 'COMMENT_REQUEST_TIMEOUT'
+          : 'COMMENT_FETCH_OR_SAVE_FAILED';
   } finally {
     await file.close();
   }
@@ -283,5 +303,6 @@ export async function recordTimeshiftComments(
     sorted,
     duplicates,
     invalidCount,
+    viewRequests,
   };
 }

@@ -23,10 +23,11 @@ export async function checkedFetch(
   url: string,
   signal: AbortSignal,
   cookie?: string,
+  timeoutMs = 20_000,
 ): Promise<Response> {
   const response = await fetch(url, {
     headers: { 'user-agent': DEFAULT_USER_AGENT, ...(cookie ? { cookie } : {}) },
-    signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]),
   });
   if (!response.ok) {
     await response.body?.cancel();

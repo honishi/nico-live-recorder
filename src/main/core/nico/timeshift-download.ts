@@ -5,6 +5,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { cookieHeaderFor, type HlsSegment, type TrackResult } from './hls';
 import type { StreamCookie } from './watch-session';
 import { checkedFetch, TimeshiftError } from './timeshift-common';
+import {
+  inspectFragmentTiming,
+  requireContinuousFragments,
+  type FragmentTiming,
+} from './timeshift-continuity';
 
 const MAX_RESOURCE_BYTES = 32 * 1024 * 1024;
 
@@ -32,6 +37,7 @@ export async function downloadTimeshiftTrack(
   signal: AbortSignal,
   metrics: Metrics,
   onProgress: (saved: number) => void = () => {},
+  continuityCheckSeqs: ReadonlySet<number> = new Set(),
 ): Promise<TrackResult> {
   if (!Number.isInteger(threads) || threads < 1 || threads > 5)
     throw new TimeshiftError('INVALID_SEGMENT_THREADS');
@@ -159,6 +165,7 @@ export async function downloadTimeshiftTrack(
     }
   };
 
+  let previousTiming: FragmentTiming | undefined;
   let sentMapUri: string | undefined;
   try {
     workSignal.throwIfAborted();
@@ -171,12 +178,11 @@ export async function downloadTimeshiftTrack(
       workSignal.throwIfAborted();
       // 書き込みを待つ間にも次を取得する。保持量は先読み threads 個＋出力中1個まで。
       start(index + threads);
-      if (!loaded) continue;
-      const segment = selected[index];
-      if (loaded.map && segment.mapUri !== sentMapUri) {
-        await write(loaded.map);
-        sentMapUri = segment.mapUri;
+      if (!loaded) {
+        previousTiming = undefined;
+        continue;
       }
+      const segment = selected[index];
       let data = loaded.data;
       if (!data.length) throw new TimeshiftError('EMPTY_SEGMENT');
       if (loaded.key) {
@@ -195,6 +201,19 @@ export async function downloadTimeshiftTrack(
         } finally {
           metrics.timingsMs.decrypt += performance.now() - started;
         }
+      }
+      // 不連続マーカーを無条件に無視せず、次の本編を書き込む前に連続性を検証する。
+      const checkCurrent = continuityCheckSeqs.has(segment.seq);
+      const checkNext =
+        index + 1 < selected.length && continuityCheckSeqs.has(selected[index + 1].seq);
+      if (checkCurrent || checkNext) {
+        const timing = inspectFragmentTiming(data, loaded.map);
+        if (checkCurrent) requireContinuousFragments(previousTiming, timing);
+        previousTiming = checkNext ? timing : undefined;
+      } else previousTiming = undefined;
+      if (loaded.map && segment.mapUri !== sentMapUri) {
+        await write(loaded.map);
+        sentMapUri = segment.mapUri;
       }
       await write(data);
       result.segments += 1;
