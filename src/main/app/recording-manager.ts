@@ -813,6 +813,19 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           // このパートは完了済みの合計に繰り入れる。再開待ちの間のサイズ監視は何も数えない
           recording.part = undefined;
           const outputMissing = part.lost;
+          // 空の予約ファイルは成果物一覧に残さない。失敗の履歴と診断JSONは維持する。
+          if (mode === 'timeshift') {
+            const videos = (await statFiles(info.videoPaths ?? [])).filter((file) => file.size > 0);
+            info.videoPaths = videos.map((file) => file.path);
+            info.videoBytes = sumSizes(videos);
+            const comments = (await statFiles(info.commentsPaths ?? [])).filter(
+              (file) => file.size > 0,
+            );
+            info.commentsPaths = comments.map((file) => file.path);
+            if (!info.commentsPaths.includes(info.commentsPath ?? ''))
+              info.commentsPath = undefined;
+          }
+
           // 消えたパートは後始末で一覧から外してあるので、代表パスは残っている最後のパート
           info.videoPath = info.videoPaths?.at(-1);
           recording.finishedPartBytes = info.videoBytes;
@@ -1018,7 +1031,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     }
     // 消失を検知した後に、削除前に始まった stat が成功で戻ってきても、消えた分を足し戻さない
     if (size !== undefined && !part.lost) {
-      part.fileSeen = true;
+      if (info.mode !== 'timeshift' || size > 0) part.fileSeen = true;
       const total = recording.finishedPartBytes + size;
       if (total !== info.videoBytes) {
         info.videoBytes = total;

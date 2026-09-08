@@ -207,6 +207,15 @@ export async function recordTimeshiftProgram(
   } finally {
     session?.close();
   }
+  // 今回だけの予約ファイルが空のままなら除去する。部分データと診断JSONは残す。
+  for (const file of [paths.videoPath, paths.commentsPath]) {
+    try {
+      if ((await fs.stat(file)).size === 0) await fs.unlink(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
+        options.logger?.warn('タイムシフトの空ファイルを整理できませんでした');
+    }
+  }
   await metadata();
   return result;
 }

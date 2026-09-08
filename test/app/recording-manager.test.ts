@@ -268,6 +268,36 @@ describe('RecordingManager', () => {
     await vi.advanceTimersByTimeAsync(ms);
   }
 
+  test('空の予約を見た後に開始失敗しても出力消失とせず、成果物一覧から除外する', async () => {
+    getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+    await manager.startRecording('lv1', 'manual');
+    const call = await nextRecordCall(0);
+    const result = finishedResult(call, {
+      video: undefined,
+      errors: [{ target: 'video', message: 'CONNECT_TIMEOUT' }],
+      timeshift: { completion: 'partial' },
+    });
+    const base = path.join(call.options.outputDir, 'rec');
+    fs.mkdirSync(call.options.outputDir, { recursive: true });
+    fs.writeFileSync(base + '.ts', '');
+    fs.writeFileSync(base + '.comments.csv', '');
+    await vi.advanceTimersByTimeAsync(1_000);
+    fs.unlinkSync(base + '.ts');
+    fs.unlinkSync(base + '.comments.csv');
+    call.resolve(result);
+    await waitFor(() => !manager.hasActiveRecordings());
+    expect(history.get('lv1')).toMatchObject({
+      state: 'failed',
+      completion: 'partial',
+      videoPaths: [],
+      commentsPaths: [],
+      error: 'video: CONNECT_TIMEOUT',
+    });
+    expect(history.get('lv1')?.videoPath).toBeUndefined();
+    expect(history.get('lv1')?.commentsPath).toBeUndefined();
+    expect(call.signal?.aborted).toBe(false);
+  });
+
   test('視聴できないタイムシフトや取得できない番組はコード付きの例外にする', async () => {
     getProgramInfo.mockResolvedValueOnce(
       info({ status: NicoLiveProgramStatus.ended, webSocketUrl: undefined }),
@@ -349,6 +379,8 @@ describe('RecordingManager', () => {
     const call = await nextRecordCall(0);
     expect(call.options.commentsPath).toBeUndefined();
     const result = finishedResult(call, { timeshift: { completion: 'complete' } });
+    fs.mkdirSync(call.options.outputDir, { recursive: true });
+    fs.writeFileSync(path.join(call.options.outputDir, 'rec.comments.csv'), 'new comments');
     call.options.onComment?.({} as never, 2);
     call.resolve(result);
     await waitFor(() => !manager.hasActiveRecordings());

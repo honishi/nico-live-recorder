@@ -267,3 +267,20 @@ test('映像取得前の拒否に出力消失という二次エラーを追加�
     { target: 'video', message: 'タイムシフト: UNSUPPORTED_PLAYLIST_TAG' },
   ]);
 });
+
+test('接続前に失敗した予約ファイルは片付け、診断JSONと以前の成果物を残す', async () => {
+  const previous = await begin();
+  vi.mocked(openTimeshiftSession).mockImplementation(() => {
+    throw new Error('connection failed');
+  });
+  const failed = await begin();
+  expect(failed.attempt).toBe(2);
+  await expect(fs.stat(failed.videoPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(fs.stat(failed.commentsPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  const diagnostic = JSON.parse(await fs.readFile(failed.metadataPath, 'utf8')) as {
+    errors: unknown[];
+  };
+  expect(diagnostic.errors).not.toHaveLength(0);
+  expect(await fs.readFile(previous.videoPath, 'utf8')).toBe('video');
+  expect(await fs.readFile(previous.commentsPath, 'utf8')).toBe('comments');
+});
