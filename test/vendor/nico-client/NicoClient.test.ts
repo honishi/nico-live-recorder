@@ -44,6 +44,7 @@ let respond: (index: number) => Promise<object[]>;
 let responseDelayMs: number;
 let httpStream: MockInstance<HttpClient['stream']>;
 let httpText: MockInstance<HttpClient['getText']>;
+let warn = vi.fn();
 
 beforeEach(async () => {
   registry = await getProtoRegistry();
@@ -51,6 +52,7 @@ beforeEach(async () => {
   controller = new AbortController();
   requests = [];
   responseDelayMs = 0;
+  warn = vi.fn();
   respond = async () => [];
   vi.spyOn(NicoClient.prototype as any, 'openViewSocket').mockResolvedValue(
     'https://example.test/view',
@@ -75,7 +77,7 @@ afterEach(() => {
 
 async function consume(): Promise<NicoComment[]> {
   const comments: NicoComment[] = [];
-  for await (const comment of new NicoClient('lv1').streamComments(
+  for await (const comment of new NicoClient('lv1', { logger: { warn } }).streamComments(
     { signal: controller.signal },
     info,
   ))
@@ -137,6 +139,7 @@ test('コメント0件でも取得位置が進めば長時間の監視を続け�
   expect(await task).toEqual([]);
   expect(requests).toHaveLength(120);
   expect(requests.every((r, i) => r.time === i * 32_000)).toBe(true);
+  expect(warn).not.toHaveBeenCalled();
 });
 
 test('即時応答で取得位置が進んでも要求は1秒に1回までにする', async () => {
@@ -204,6 +207,37 @@ test('コメントと終了通知を受け取る通常経路を維持する', as
 function allowPageRefresh() {
   return vi.spyOn(NicoClient.prototype as any, 'fetchProgramInfo').mockResolvedValue(info);
 }
+
+test.each(['停滞', '欠落', '交互'])(
+  '取得位置の%sが続く間だけ一度警告し、回復待ちは継続する',
+  async (kind) => {
+    allowPageRefresh();
+    respond = async (index) => {
+      if (kind === '欠落' || (kind === '交互' && index % 2 === 1)) return [];
+      return [{ next: { at: 100 } }];
+    };
+    const task = consume();
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(450_000);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      'コメントの取得位置の異常が続いています。取得間隔をあけて回復を待っています。',
+    );
+    controller.abort();
+    await expect(task).resolves.toEqual([]);
+  },
+);
+
+test('取得位置が前進すれば、次に異常が続いたときに再び一度警告する', async () => {
+  respond = async (index) => {
+    if (index === 39) controller.abort();
+    return [{ next: { at: 100 + Math.floor(index / 20) } }];
+  };
+  const task = consume();
+  await vi.advanceTimersByTimeAsync(20 * 60_000);
+  await task;
+  expect(warn).toHaveBeenCalledTimes(2);
+});
 
 test.each([
   { label: 'next欠落', entries: [] },

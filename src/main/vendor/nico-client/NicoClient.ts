@@ -206,6 +206,16 @@ export class NicoClient {
       let stalledSince: number | undefined;
       let missingViews = 0;
       let missingSince: number | undefined;
+      let recoveryWarned = false;
+      // 停滞と欠落が混在しても、回復するまでは警告を一度だけ出す。
+      const warnIfRecoveryContinues = (failures: number): void => {
+        if (!recoveryWarned && failures >= NicoClient.minViewFailures) {
+          recoveryWarned = true;
+          this.logger.warn(
+            'コメントの取得位置の異常が続いています。取得間隔をあけて回復を待っています。',
+          );
+        }
+      };
 
       while (!options.signal?.aborted) {
         // 即時応答は最低1秒、停滞中は最大30秒に間隔を延ばして回復を待つ。
@@ -251,6 +261,7 @@ export class NicoClient {
             performance.now() - missingSince >= NicoClient.viewRecoveryTimeoutMs
           )
             throw new CommentViewMarkerMissingError();
+          warnIfRecoveryContinues(missingViews);
           this.logger.debug(
             'ChunkedEntry.next が取得できなかったため、viewUri を再取得してストリーミングを継続します。',
           );
@@ -290,6 +301,7 @@ export class NicoClient {
             performance.now() - stalledSince >= NicoClient.viewRecoveryTimeoutMs
           )
             throw new CommentViewStalledError();
+          warnIfRecoveryContinues(stalledViews);
         } else {
           latestCursor = nextCursor;
           stalledViews = 0;
@@ -297,6 +309,7 @@ export class NicoClient {
           // 古いnextを一度返すだけでは回復とみなさず、前進を確認して欠落の予算を戻す。
           missingViews = 0;
           missingSince = undefined;
+          recoveryWarned = false;
         }
         state.nextAt = String(latestCursor);
       }
