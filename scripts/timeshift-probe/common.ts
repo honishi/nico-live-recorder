@@ -13,12 +13,13 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
     options: {
       help: { type: 'boolean' },
       anonymous: { type: 'boolean' },
+      full: { type: 'boolean' },
       mode: { type: 'string', default: 'inspect' },
       label: { type: 'string', default: 'unlabelled' },
       out: { type: 'string', default: '.cache/timeshift-probe' },
-      'media-seconds': { type: 'string', default: '30' },
-      timeout: { type: 'string', default: '120' },
-      'comment-limit': { type: 'string', default: '1000' },
+      'media-seconds': { type: 'string' },
+      timeout: { type: 'string' },
+      'comment-limit': { type: 'string' },
       'view-at': { type: 'string', default: 'now' },
       'view-pages': { type: 'string', default: '3' },
     },
@@ -39,6 +40,10 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
       throw new Error(`${name} は 1〜${max} の整数で指定してください`);
     return number;
   };
+  if (values.full && values.mode === 'inspect')
+    throw new Error('full は video または comments 用です');
+  if (values.full && values['media-seconds'] !== undefined)
+    throw new Error('full と media-seconds は併用できません');
   const session = values.anonymous ? undefined : env.NICO_USER_SESSION?.trim();
   if (!values.anonymous && !session)
     throw new Error('NICO_USER_SESSION または --anonymous を指定してください');
@@ -47,14 +52,19 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
   if (session?.includes(';') || session?.startsWith('user_session='))
     throw new Error('セッションには Cookie の値だけを指定してください');
   return {
+    full: values.full ?? false,
     programId: match[1],
     mode: values.mode as ProbeMode,
     label: values.label,
     out: values.out,
     session,
-    mediaSeconds: positive('media-seconds', values['media-seconds'], 300),
-    timeout: positive('timeout', values.timeout, 600),
-    commentLimit: positive('comment-limit', values['comment-limit'], 10000),
+    mediaSeconds: positive('media-seconds', values['media-seconds'] ?? '30', 300),
+    timeout: positive('timeout', values.timeout ?? (values.full ? '1800' : '120'), 7200),
+    commentLimit: positive(
+      'comment-limit',
+      values['comment-limit'] ?? (values.full ? '200000' : '1000'),
+      values.full ? 200000 : 10000,
+    ),
     viewAt: values['view-at'],
     viewPages: positive('view-pages', values['view-pages'], 10),
   };
@@ -137,4 +147,19 @@ export function parsePage(html: string) {
       endTime: typeof program.endTime === 'number' ? program.endTime : undefined,
     },
   };
+}
+
+// 失敗した工程も finally で計測し、レポートには URL や入力値を含めない。
+export class ProbeTimings {
+  readonly milliseconds: Record<string, number> = {};
+
+  async measure<T>(stage: string, task: () => Promise<T>): Promise<T> {
+    const start = performance.now();
+    try {
+      return await task();
+    } finally {
+      this.milliseconds[stage] =
+        (this.milliseconds[stage] ?? 0) + Math.round(performance.now() - start);
+    }
+  }
 }

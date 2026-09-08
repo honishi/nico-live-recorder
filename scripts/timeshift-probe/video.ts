@@ -8,7 +8,7 @@ import {
   selectBestVariant,
 } from '../../src/main/core/nico/hls';
 import type { HlsStreamInfo } from '../../src/main/core/nico/watch-session';
-import { checkedFetch, ProbeError } from './common';
+import { checkedFetch, ProbeError, ProbeTimings } from './common';
 
 const UNSUPPORTED_TAGS = ['EXT-X-BYTERANGE', 'EXT-X-DISCONTINUITY', 'EXT-X-GAP'];
 const OBSERVED_TAGS = [
@@ -43,14 +43,15 @@ function inspectTags(text: string) {
   return { counts, firstUnsupportedPositions };
 }
 
-// 最初の playlist の短区間を固定して保存する。追加した ENDLIST は全編完了の証拠にしない。
+// 初回 playlist の短区間を固定する。seconds が null なら元の ENDLIST を要求して全体を選ぶ。
 export function clipPlaylist(
   text: string,
   url: string,
-  seconds: number,
+  seconds: number | null,
   onDiagnostics: (summary: Record<string, unknown>) => void = () => {},
 ) {
   const parsed = parseMediaPlaylist(text, url);
+  if (seconds === null && !parsed.endList) throw new ProbeError('ORIGINAL_ENDLIST_MISSING');
   if (!parsed.segments.length) throw new ProbeError('EMPTY_PLAYLIST');
   let duration = 0;
   let count = 0;
@@ -59,7 +60,7 @@ export function clipPlaylist(
       throw new ProbeError('UNSUPPORTED_ENCRYPTION');
     duration += segment.duration;
     count += 1;
-    if (duration >= seconds) break;
+    if (seconds !== null && duration >= seconds) break;
   }
   const lines: string[] = [];
   let pendingSegment = false;
@@ -118,13 +119,15 @@ export function clipPlaylist(
 export async function sampleVideo(
   stream: HlsStreamInfo,
   dir: string,
-  seconds: number,
+  seconds: number | null,
   signal: AbortSignal,
   onProgress: (summary: Record<string, unknown>) => void = () => {},
 ) {
   const controller = new AbortController();
   const workSignal = AbortSignal.any([signal, controller.signal]);
+  const timings = new ProbeTimings();
   const progress = {
+    timingsMs: timings.milliseconds,
     status: 'playlists',
     tracks: [] as Record<string, unknown>[],
     httpErrors: [] as number[],
@@ -132,14 +135,16 @@ export async function sampleVideo(
   };
   onProgress(progress);
   const get = (url: string) => checkedFetch(url, workSignal, cookieHeaderFor(stream.cookies, url));
-  const master = await (await get(stream.uri)).text();
+  const master = await timings.measure('master', async () => (await get(stream.uri)).text());
   const tracks = selectBestVariant(parseMultivariantPlaylist(master, stream.uri));
   const urls = [tracks.video.uri, ...(tracks.audioUri ? [tracks.audioUri] : [])];
   const playlistResults = await Promise.allSettled(
     urls.map(async (url, index) =>
-      clipPlaylist(await (await get(url)).text(), url, seconds, (summary) => {
-        progress.tracks[index] = { label: index === 0 ? 'video' : 'audio', ...summary };
-      }),
+      timings.measure(index === 0 ? 'videoPlaylist' : 'audioPlaylist', async () =>
+        clipPlaylist(await (await get(url)).text(), url, seconds, (summary) => {
+          progress.tracks[index] = { label: index === 0 ? 'video' : 'audio', ...summary };
+        }),
+      ),
     ),
   );
   const playlists = playlistResults.map((result) => {
@@ -177,7 +182,9 @@ export async function sampleVideo(
       });
       const sink = index === 0 ? pipes.video : pipes.audio!;
       try {
-        const result = await downloader.run(sink, workSignal);
+        const result = await timings.measure(index === 0 ? 'videoDownload' : 'audioDownload', () =>
+          downloader.run(sink, workSignal),
+        );
         if (result.reason !== 'endlist') throw new ProbeError('TRACK_INCOMPLETE');
         return result;
       } catch (error) {
@@ -190,22 +197,30 @@ export async function sampleVideo(
     const results = await Promise.allSettled(tasks);
     const failure = results.find((r) => r.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
-    const exit = await muxer.finish();
+    const exit = await timings.measure('muxerFinish', () => muxer.finish());
     if (exit.exitCode !== 0) throw new ProbeError('FFMPEG_FAILED');
     const saved = results.map((r) => {
       if (r.status !== 'fulfilled') throw new ProbeError('TRACK_FAILED');
       return r.value;
     });
+    const complete =
+      !missingSegments &&
+      saved.every(
+        (result, index) =>
+          result.segments > 0 && result.segments === playlists[index].summary.expectedSavedSegments,
+      );
+    let status = 'incomplete';
+    if (complete) status = seconds === null ? 'playlist-saved' : 'sample-saved';
     return {
-      status:
-        missingSegments ||
-        saved.some(
-          (r, i) => r.segments !== playlists[i].summary.expectedSavedSegments || r.segments === 0,
-        )
-          ? 'incomplete'
-          : 'sample-saved',
+      status,
+      timingsMs: timings.milliseconds,
+      playlistCoverage: complete && seconds === null ? 'complete' : 'not-verified',
       missingSegments,
-      tracks: saved.map((result, i) => ({ ...playlists[i].summary, saved: result })),
+      tracks: saved.map((result, i) => ({
+        label: i === 0 ? 'video' : 'audio',
+        ...playlists[i].summary,
+        saved: result,
+      })),
       fullCoverage: 'not-verified',
       playbackAndSync: 'requires-human-check',
     };
