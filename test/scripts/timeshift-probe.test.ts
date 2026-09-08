@@ -9,7 +9,7 @@ import {
   ProbeError,
 } from '../../scripts/timeshift-probe/common';
 import { clipPlaylist, sampleVideo } from '../../scripts/timeshift-probe/video';
-import { sampleComments } from '../../scripts/timeshift-probe/comments';
+import { buildProbeViewUrl, sampleComments } from '../../scripts/timeshift-probe/comments';
 import { getProtoRegistry } from '../../src/main/vendor/nico-client/internal/protoLoader';
 import { HlsForbiddenError } from '../../src/main/core/nico/hls';
 import { observeSession } from '../../scripts/timeshift-probe/session';
@@ -138,9 +138,104 @@ test('短区間は境界に切り上げ、合成した ENDLIST と元の全編�
   });
   expect(clipped.text).toContain('#EXT-X-ENDLIST');
   expect(clipped.text).not.toContain('3.ts');
-  expect(() =>
-    clipPlaylist(playlist + '#EXT-X-DISCONTINUITY\n', 'https://example.test/media.m3u8', 4),
-  ).toThrow(ProbeError);
+  const later = clipPlaylist(
+    playlist + '#EXT-X-DISCONTINUITY\n',
+    'https://example.test/media.m3u8',
+    4,
+  );
+  expect(later.summary.tags.counts['EXT-X-DISCONTINUITY']).toBe(1);
+  expect(later.summary.unsupportedTags).toEqual([]);
+});
+
+test('DISCONTINUITY-SEQUENCE を不連続境界と誤認しない', () => {
+  const result = clipPlaylist(
+    playlist.replace('#EXTM3U', '#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:3'),
+    'https://example.test/media.m3u8',
+    4,
+  );
+  expect(result.summary.selectedTagCounts['EXT-X-DISCONTINUITY-SEQUENCE']).toBe(1);
+  expect(result.summary.unsupportedTags).toEqual([]);
+});
+
+test('対象区間内の不連続は拒否し、両トラックの診断を URL 抜きで残す', async () => {
+  const unsafe = playlist.replace('2.ts', '#EXT-X-DISCONTINUITY\n2.ts');
+  mockFetch({
+    'https://example.test/master.m3u8':
+      '#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Main",URI="audio.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=100,AUDIO="a"\nmedia.m3u8\n',
+    'https://example.test/media.m3u8': unsafe,
+    'https://example.test/audio.m3u8': playlist,
+  });
+  const progress = vi.fn<(summary: Record<string, unknown>) => void>();
+  await expect(
+    sampleVideo(
+      {
+        uri: 'https://example.test/master.m3u8',
+        quality: 'abr',
+        availableQualities: [],
+        cookies: [],
+        receivedAt: new Date(),
+      },
+      dir,
+      4,
+      new AbortController().signal,
+      progress,
+    ),
+  ).rejects.toThrow(ProbeError);
+  expect(progress.mock.calls[0]?.[0]).toMatchObject({
+    tracks: [
+      {
+        label: 'video',
+        unsupportedTags: ['EXT-X-DISCONTINUITY'],
+        tags: {
+          firstUnsupportedPositions: [
+            { tag: 'EXT-X-DISCONTINUITY', segmentIndex: 1, atSeconds: 3 },
+          ],
+        },
+      },
+      { label: 'audio', unsupportedTags: [] },
+    ],
+  });
+  expect(JSON.stringify(progress.mock.calls)).not.toContain('https://');
+});
+
+test('コメント開始位置を省略・now・数値で正確に切り替える', () => {
+  expect(buildProbeViewUrl('https://example.test/view?at=now&token=secret', 'beginning')).toBe(
+    'https://example.test/view?token=secret',
+  );
+  expect(buildProbeViewUrl('https://example.test/view?at=1', 'now')).toBe(
+    'https://example.test/view?at=now',
+  );
+  expect(buildProbeViewUrl('https://example.test/view', '1788692366')).toBe(
+    'https://example.test/view?at=1788692366',
+  );
+  expect(parseOptions(['lv1', '--anonymous', '--view-at', '1788692366'], {})?.viewAt).toBe(
+    '1788692366',
+  );
+  expect(() => parseOptions(['lv1', '--anonymous', '--view-at', '123&token=secret'], {})).toThrow();
+});
+
+test('next だけの応答を空の履歴と断定せず、int64 カーソルを丸めずに保存する', async () => {
+  const registry = await getProtoRegistry();
+  mockFetch({
+    'https://example.test/view': registry.ChunkedEntry.encodeDelimited(
+      registry.ChunkedEntry.fromObject({ next: { at: '9223372036854775807' } }),
+    ).finish(),
+  });
+  const result = await sampleComments(
+    'https://example.test/view?at=now',
+    dir,
+    1000,
+    'beginning',
+    new AbortController().signal,
+  );
+  expect(result).toMatchObject({
+    count: 0,
+    requestedAt: 'omitted',
+    nextAt: '9223372036854775807',
+    historyExhausted: false,
+    fullCoverage: 'not-verified',
+    viewEntries: { total: 1, next: 1, backward: 0, previous: 0, segment: 0 },
+  });
 });
 
 test.each([false, true])('セグメント欠落=%s を短区間の保存成功と区別する', async (missing) => {

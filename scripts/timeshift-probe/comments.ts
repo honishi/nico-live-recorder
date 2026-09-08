@@ -8,6 +8,20 @@ import { checkedFetch, object, ProbeError } from './common';
 const MAX_BYTES = 16 * 1024 * 1024;
 const MAX_PACKED_PAGES = 20;
 
+// next.at はカーソルとして保存する。大きな int64 を丸めたり、日時だと決めつけたりしない。
+function cursor(value: unknown): string | undefined {
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined;
+  const text = String(value);
+  return /^\d{1,19}$/.test(text) ? text : undefined;
+}
+
+export function buildProbeViewUrl(viewUri: string, viewAt: string): string {
+  const view = new URL(viewUri);
+  view.searchParams.delete('at');
+  if (viewAt !== 'beginning') view.searchParams.set('at', viewAt);
+  return view.toString();
+}
+
 // JSON 化は int64 を文字列に固定する。protobuf の内容自体は共有用レポートへ出さない。
 function decode(type: Type, bytes: Uint8Array): Record<string, unknown> {
   return object(type.toObject(type.decode(bytes), { longs: String }));
@@ -31,6 +45,8 @@ export async function sampleComments(
   let duplicates = 0;
   let backwardUri: string | undefined;
   let nextMarker = false;
+  let nextAt: string | undefined;
+  const viewEntries = { total: 0, backward: 0, previous: 0, segment: 0, next: 0 };
   let firstAt: string | undefined;
   let lastAt: string | undefined;
   let historyExhausted = false;
@@ -48,6 +64,9 @@ export async function sampleComments(
     packedPages: packed.size,
     forwardSegments: forwards.size,
     nextMarker,
+    nextAt,
+    requestedAt: viewAt === 'beginning' ? 'omitted' : viewAt,
+    viewEntries,
     historyExhausted,
     fullCoverage: 'not-verified',
   });
@@ -98,9 +117,12 @@ export async function sampleComments(
   };
   try {
     // 最初の View 応答だけを観測する。next の無限ポーリングや再接続はこの段階では行わない。
-    const view = new URL(viewUri);
-    if (viewAt === 'now') view.searchParams.set('at', 'now');
-    for await (const entry of frames(view.toString(), registry.ChunkedEntry)) {
+    const view = buildProbeViewUrl(viewUri, viewAt);
+    for await (const entry of frames(view, registry.ChunkedEntry)) {
+      viewEntries.total += 1;
+      for (const type of ['backward', 'previous', 'segment', 'next'] as const) {
+        if (entry[type] !== undefined) viewEntries[type] += 1;
+      }
       const back = object(object(entry.backward).segment).uri;
       if (typeof back === 'string') backwardUri = back;
       for (const candidate of [entry.previous, entry.segment]) {
@@ -109,6 +131,7 @@ export async function sampleComments(
       }
       if (entry.next !== undefined) {
         nextMarker = true;
+        nextAt = cursor(object(entry.next).at);
         break;
       }
     }

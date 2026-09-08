@@ -20,7 +20,7 @@ const HELP = `使い方:
   --label standard              比較条件のラベル（英数字・ハイフン・下線）
   --media-seconds 30             video のメディア長（秒、セグメント境界へ切り上げ）
   --comment-limit 1000           comments の保存件数上限
-  --view-at now|beginning        beginning は at を省略する実験（先頭取得の保証なし）
+  --view-at now|beginning|数値   beginning は at を省略、数値は at にそのまま指定
   --timeout 120                 全工程の実行時間上限（秒、最大600）
   --out .cache/timeshift-probe   実行ごとにサブディレクトリを作成
 `;
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
   const dir = await fs.mkdtemp(path.join(baseDir, `${options.programId}-${options.label}-`));
   await fs.chmod(dir, 0o700);
   const report: Record<string, unknown> = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     startedAt,
     programId: options.programId,
     label: options.label,

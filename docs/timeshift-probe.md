@@ -62,7 +62,9 @@ npx tsx scripts/timeshift-probe.ts lv123456789 --mode video --label premium-unre
 
 既存の HLS ダウンローダー・復号・FFmpeg 多重化を再利用します。検証側で短区間の playlist を固定し、終了マーカーを追加します。`originalEndList` は元の playlist にあった終了マーカー、`selectedDuration` は選択区間の長さです。合成した終了マーカーを全編取得の証拠にしません。
 
-404 で読み飛ばされたセグメント、保存予定数と実績の不一致、0セグメントの保存は `incomplete` になります。`/blank/` の除外件数も残します。BYTERANGE・DISCONTINUITY・GAP など、既存部品で正しく評価できない構成は `UNSUPPORTED_PLAYLIST_TAG` として止めます。403 を含む途中エラーでの認証更新・自動再開は行いません。
+404 で読み飛ばされたセグメント、保存予定数と実績の不一致、0セグメントの保存は `incomplete` になります。`/blank/` の除外件数も残します。取得する短区間に BYTERANGE・DISCONTINUITY・GAP が含まれる場合は `UNSUPPORTED_PLAYLIST_TAG` として止めます。取得対象より後のタグや、不連続境界そのものではない DISCONTINUITY-SEQUENCE だけでは止めません。403 を含む途中エラーでの認証更新・自動再開は行いません。
+
+`schemaVersion: 2` 以降は、拒否した場合にも両トラックの `video.tracks` に診断を残します。`tags.counts` は元の playlist 全体のタグ数、`selectedTagCounts` は取得区間のタグ数、`unsupportedTags` は実際に拒否したタグ名です。`tags.firstUnsupportedPositions` は最初の20箇所について、0始まりのセグメント位置と playlist の先頭からの秒数を示します。タグの URI・属性値は保存しません。初版では DISCONTINUITY-SEQUENCE を DISCONTINUITY と誤認し、取得範囲外のタグでも停止していたため、旧レポートのエラーだけでは原因タグを特定できません。
 
 出力の `video.ts` を再生し、映像と音声があるか、音声がずれていないかを確認してください。FFmpeg の終了コードが0でも、人間による再生確認は別に必要です。
 
@@ -76,7 +78,13 @@ npx tsx scripts/timeshift-probe.ts lv123456789 --mode comments --label premium-u
 
 上限は既定1000コメント、PackedSegment 20ページ、総受信量16MiBです。巡回 URI の循環と実行時間上限でも止めます。件数が少なくても、提供された履歴が尽きたか、通信や上限で中断したかを区別します。`historyExhausted` は backward の巡回終了を表し、番組全体のコメントが揃った保証ではありません。番組ページのコメント数との一致だけでも完全性は判断できません。
 
-最初の View リクエストは `at=now` です。必要なら `--view-at beginning` で `at` を省略した結果と比較できます。名前は比較用であり、先頭から取得できる保証ではありません。next の連続ポーリング・接続更新はまだ行いません。投稿時刻順に保存される保証もありません。
+最初の View リクエストは `at=now` です。next だけが返ってコメントが0件の場合、コメントが存在しないとは断定せず、まず `--view-at beginning` で `at` を省略した結果と比較します。受信 URI にもともと `at` があれば削除します。名前は比較用であり、先頭から取得できる保証ではありません。
+
+`comments.requestedAt` は実際の指定（省略は `omitted`）、`viewEntries` は受信した種類別の件数、`nextAt` は返された数値カーソルを文字列のまま保存したものです。次の位置を試す必要があるときは `--view-at 数値` で指定できますが、値の単位・意味は未確定です。時刻と決めつけず、観測結果から判断します。next の連続ポーリング・接続更新はまだ行いません。投稿時刻順に保存される保証もありません。
+
+```bash
+npx tsx scripts/timeshift-probe.ts lv123456789 --mode comments --label premium-unreserved --view-at beginning
+```
 
 ## 結果と制限
 
@@ -96,3 +104,16 @@ npx tsx scripts/timeshift-probe.ts lv123456789 --mode comments --label premium-u
 終了コードは接続情報の受信・サンプル保存で0、検証が不完全／失敗なら2、入力・初期化・結果保存の問題は1です。既定の実行時間上限は120秒、`--timeout` で最大600秒まで変更できます。タイムアウトはデータ取得の上限で、終了後にファイル・プロセスの後始末を行います。
 
 次の段階では、この結果を元に短い番組の全編保存・コメントの終端判定・失敗時の途中再開を検証します。スクリプト側だけが失敗する条件では、同じ番組とセッションで streamlink の結果と比較します。
+
+## ユーザー実行で得られた観測（2026-09-08）
+
+対象は `lv351334237`、タイムシフトの公開状態は `Open`、両セッションともページ上のログイン認識は成功しました。
+
+| 条件・モード                      | 観測結果                                                                      |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| 一般会員・事前予約なし / inspect  | 視聴 WebSocket URL なし。公式サイトでも視聴不可との確認あり                   |
+| プレミアム会員 / inspect          | タイムシフト用 WebSocket で HLS・コメント両方の接続情報を受信                 |
+| プレミアム会員 / video（初版）    | `UNSUPPORTED_PLAYLIST_TAG` で停止。実際の原因タグは未確認                     |
+| プレミアム会員 / comments、at=now | 9バイトの応答、next のみ、コメント0件。過去コメントの不存在を示すものではない |
+
+一般会員の予約済みケース、映像・コメントの実データ保存、全編取得はまだ未確認です。会員種別の一般的な視聴条件を、この1番組の結果だけで確定しません。

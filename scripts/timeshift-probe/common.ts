@@ -30,7 +30,8 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
   if (!['inspect', 'video', 'comments'].includes(values.mode)) throw new Error('mode が不正です');
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(values.label))
     throw new Error('label は英数字・ハイフン・下線で指定してください');
-  if (!['now', 'beginning'].includes(values['view-at'])) throw new Error('view-at が不正です');
+  if (!['now', 'beginning'].includes(values['view-at']) && !/^\d{1,19}$/.test(values['view-at']))
+    throw new Error('view-at が不正です');
   const positive = (name: string, value: string, max: number): number => {
     const number = Number(value);
     if (!Number.isInteger(number) || number < 1 || number > max)

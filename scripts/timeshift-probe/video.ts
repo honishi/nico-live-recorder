@@ -10,10 +10,46 @@ import {
 import type { HlsStreamInfo } from '../../src/main/core/nico/watch-session';
 import { checkedFetch, ProbeError } from './common';
 
+const UNSUPPORTED_TAGS = ['EXT-X-BYTERANGE', 'EXT-X-DISCONTINUITY', 'EXT-X-GAP'];
+const OBSERVED_TAGS = [
+  ...UNSUPPORTED_TAGS,
+  'EXT-X-DISCONTINUITY-SEQUENCE',
+  'EXT-X-MAP',
+  'EXT-X-KEY',
+  'EXT-X-ENDLIST',
+];
+
+// タグ名は完全一致で数え、URI・属性値を保存しない。SEQUENCE と実際の不連続境界を区別する。
+function inspectTags(text: string) {
+  const counts: Record<string, number> = {};
+  const firstUnsupportedPositions: { tag: string; segmentIndex: number; atSeconds: number }[] = [];
+  let segmentIndex = 0;
+  let atSeconds = 0;
+  let pendingDuration: number | undefined;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    const tag = line.startsWith('#') ? line.slice(1).split(':', 1)[0] : '';
+    if (OBSERVED_TAGS.includes(tag)) counts[tag] = (counts[tag] ?? 0) + 1;
+    if (UNSUPPORTED_TAGS.includes(tag) && firstUnsupportedPositions.length < 20) {
+      firstUnsupportedPositions.push({ tag, segmentIndex, atSeconds });
+    }
+    if (line.startsWith('#EXTINF:')) pendingDuration = Number(line.slice(8).split(',')[0]) || 0;
+    if (line && !line.startsWith('#') && pendingDuration !== undefined) {
+      segmentIndex += 1;
+      atSeconds += pendingDuration;
+      pendingDuration = undefined;
+    }
+  }
+  return { counts, firstUnsupportedPositions };
+}
+
 // 最初の playlist の短区間を固定して保存する。追加した ENDLIST は全編完了の証拠にしない。
-export function clipPlaylist(text: string, url: string, seconds: number) {
-  if (/#EXT-X-(BYTERANGE|DISCONTINUITY|GAP)\b/.test(text))
-    throw new ProbeError('UNSUPPORTED_PLAYLIST_TAG');
+export function clipPlaylist(
+  text: string,
+  url: string,
+  seconds: number,
+  onDiagnostics: (summary: Record<string, unknown>) => void = () => {},
+) {
   const parsed = parseMediaPlaylist(text, url);
   if (!parsed.segments.length) throw new ProbeError('EMPTY_PLAYLIST');
   let duration = 0;
@@ -28,8 +64,9 @@ export function clipPlaylist(text: string, url: string, seconds: number) {
   const lines: string[] = [];
   let pendingSegment = false;
   let included = 0;
-  for (const line of text.split(/\r?\n/)) {
-    if (line.trim() === '#EXT-X-ENDLIST') continue;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line === '#EXT-X-ENDLIST') continue;
     lines.push(line);
     if (line.startsWith('#EXTINF:')) pendingSegment = true;
     if (pendingSegment && line.trim() && !line.startsWith('#')) {
@@ -39,18 +76,26 @@ export function clipPlaylist(text: string, url: string, seconds: number) {
     }
   }
   const selected = parsed.segments.slice(0, count);
-  return {
-    text: `${lines.join('\n')}\n#EXT-X-ENDLIST\n`,
-    summary: {
-      playlistSegments: parsed.segments.length,
-      playlistDuration: parsed.segments.reduce((sum, s) => sum + s.duration, 0),
-      originalEndList: parsed.endList,
-      selectedDuration: duration,
-      selectedSegments: count,
-      blankSegments: selected.filter((s) => s.uri.includes('/blank/')).length,
-      expectedSavedSegments: selected.filter((s) => !s.uri.includes('/blank/')).length,
-    },
+  const selectedText = lines.join('\n');
+  const tags = inspectTags(text);
+  const selectedTags = inspectTags(selectedText);
+  const unsupportedTags = UNSUPPORTED_TAGS.filter((tag) => selectedTags.counts[tag]);
+  const summary = {
+    playlistSegments: parsed.segments.length,
+    playlistDuration: parsed.segments.reduce((sum, s) => sum + s.duration, 0),
+    originalEndList: parsed.endList,
+    selectedDuration: duration,
+    selectedSegments: count,
+    blankSegments: selected.filter((s) => s.uri.includes('/blank/')).length,
+    expectedSavedSegments: selected.filter((s) => !s.uri.includes('/blank/')).length,
+    tags,
+    selectedTagCounts: selectedTags.counts,
+    unsupportedTags,
   };
+  // 拒否した playlist も種類・位置を報告する。取得対象外の境界は短区間取得を妨げない。
+  onDiagnostics(summary);
+  if (unsupportedTags.length) throw new ProbeError('UNSUPPORTED_PLAYLIST_TAG');
+  return { text: `${selectedText}\n#EXT-X-ENDLIST\n`, summary };
 }
 
 export async function sampleVideo(
@@ -62,20 +107,29 @@ export async function sampleVideo(
 ) {
   const controller = new AbortController();
   const workSignal = AbortSignal.any([signal, controller.signal]);
-  const get = (url: string) => checkedFetch(url, workSignal, cookieHeaderFor(stream.cookies, url));
-  const master = await (await get(stream.uri)).text();
-  const tracks = selectBestVariant(parseMultivariantPlaylist(master, stream.uri));
-  const urls = [tracks.video.uri, ...(tracks.audioUri ? [tracks.audioUri] : [])];
-  const playlists = await Promise.all(
-    urls.map(async (url) => clipPlaylist(await (await get(url)).text(), url, seconds)),
-  );
   const progress = {
-    status: 'downloading',
-    tracks: playlists.map((p) => p.summary),
+    status: 'playlists',
+    tracks: [] as Record<string, unknown>[],
     httpErrors: [] as number[],
     fullCoverage: 'not-verified',
   };
   onProgress(progress);
+  const get = (url: string) => checkedFetch(url, workSignal, cookieHeaderFor(stream.cookies, url));
+  const master = await (await get(stream.uri)).text();
+  const tracks = selectBestVariant(parseMultivariantPlaylist(master, stream.uri));
+  const urls = [tracks.video.uri, ...(tracks.audioUri ? [tracks.audioUri] : [])];
+  const playlistResults = await Promise.allSettled(
+    urls.map(async (url, index) =>
+      clipPlaylist(await (await get(url)).text(), url, seconds, (summary) => {
+        progress.tracks[index] = { label: index === 0 ? 'video' : 'audio', ...summary };
+      }),
+    ),
+  );
+  const playlists = playlistResults.map((result) => {
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
+  progress.status = 'downloading';
   const muxer = new FfmpegMuxer({
     outputPath: path.join(dir, 'video.ts'),
     separateAudio: Boolean(tracks.audioUri),
