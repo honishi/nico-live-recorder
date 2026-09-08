@@ -648,6 +648,7 @@ select {
 
 .rec-card .stats {
   display: flex;
+  align-items: center;
   gap: var(--sp-4);
   font-size: var(--fs-sub);
   color: var(--text-2);
