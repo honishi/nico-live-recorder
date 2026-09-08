@@ -6,6 +6,8 @@ import { reserveTimeshiftPaths } from '../../../src/main/core/recorder/timeshift
 import { openTimeshiftSession } from '../../../src/main/core/nico/timeshift-session';
 import { recordTimeshiftVideo } from '../../../src/main/core/recorder/timeshift-video-recorder';
 import { recordTimeshiftComments } from '../../../src/main/core/recorder/timeshift-comment-recorder';
+import { TimeshiftError } from '../../../src/main/core/nico/timeshift-common';
+import type { TimeshiftProgress } from '../../../src/shared/types';
 import {
   NicoLiveProgramStatus,
   type NicoLiveProgramInfo,
@@ -101,7 +103,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
-const begin = (signal?: AbortSignal) =>
+const begin = (signal?: AbortSignal, onTimeshiftProgress?: (progress: TimeshiftProgress) => void) =>
   recordProgram(
     {
       programId: 'lv1',
@@ -109,6 +111,7 @@ const begin = (signal?: AbortSignal) =>
       outputDir: dir,
       mode: 'timeshift',
       cookies: { user_session: 'SECRET_COOKIE' },
+      onTimeshiftProgress,
     },
     signal,
   );
@@ -184,6 +187,82 @@ test('コメント失敗で映像を止めず一部失敗として保存する',
   expect(JSON.stringify(result.errors)).not.toContain('TOKEN');
   expect(vi.mocked(recordTimeshiftVideo).mock.calls[0][2].aborted).toBe(false);
 });
+
+test.each([false, true])(
+  '動画欠落後もコメントを完走する（コメントURI待機=%s）',
+  async (waitingForUri) => {
+    const commentsPhase = deferred<void>();
+    const finishComments = deferred<void>();
+    const commentsUri = deferred<string>();
+    if (waitingForUri) session.comments = commentsUri.promise;
+    const originalComments = vi.mocked(recordTimeshiftComments).getMockImplementation()!;
+    vi.mocked(recordTimeshiftComments).mockImplementation(async (...args) => {
+      await finishComments.promise;
+      args[2].throwIfAborted();
+      return originalComments(...args);
+    });
+    vi.mocked(recordTimeshiftVideo).mockImplementation(async (_stream, options) => {
+      await fs.writeFile(options.outputPath, 'partial video');
+      throw new TimeshiftError('SEGMENTS_INCOMPLETE');
+    });
+    const task = begin(undefined, (progress) => {
+      if (progress.phase === 'comments') commentsPhase.resolve();
+    });
+    await commentsPhase.promise;
+    expect(session.close).not.toHaveBeenCalled();
+    expect(vi.mocked(recordTimeshiftVideo).mock.calls[0][2].aborted).toBe(false);
+    commentsUri.resolve('https://example.test/comments');
+    finishComments.resolve();
+    const result = await task;
+    expect(result.video).toBeUndefined();
+    expect(result.timeshift).toMatchObject({
+      completion: 'partial',
+      progress: { phase: 'comments', comments: 'complete' },
+      comments: { status: 'complete', sorted: true },
+    });
+    expect(result.errors).toEqual([
+      { target: 'video', message: 'タイムシフト: SEGMENTS_INCOMPLETE' },
+    ]);
+    expect(await fs.readFile(result.videoPath, 'utf8')).toBe('partial video');
+    expect(await fs.readFile(result.commentsPath, 'utf8')).toBe('comments');
+    expect(JSON.parse(await fs.readFile(result.metadataPath, 'utf8'))).toMatchObject({
+      timeshift: { completion: 'partial', comments: { status: 'complete' } },
+      comments: { count: 2 },
+    });
+    expect(session.close).toHaveBeenCalledOnce();
+  },
+);
+
+test.each(['user', 'connection'] as const)(
+  '動画欠落後のコメント待ちも%sによる停止に従う',
+  async (cause) => {
+    const stop = new AbortController();
+    const connection = new AbortController();
+    const commentsPhase = deferred<void>();
+    session.signal = AbortSignal.any([stop.signal, connection.signal]);
+    const originalComments = vi.mocked(recordTimeshiftComments).getMockImplementation()!;
+    vi.mocked(recordTimeshiftComments).mockImplementation(async (...args) => {
+      await new Promise<void>((resolve) => {
+        if (args[2].aborted) resolve();
+        else args[2].addEventListener('abort', () => resolve(), { once: true });
+      });
+      return { ...(await originalComments(...args)), status: 'partial', reason: 'interrupted' };
+    });
+    vi.mocked(recordTimeshiftVideo).mockRejectedValue(new TimeshiftError('SEGMENTS_INCOMPLETE'));
+    const task = begin(stop.signal, (progress) => {
+      if (progress.phase === 'comments') commentsPhase.resolve();
+    });
+    await commentsPhase.promise;
+    if (cause === 'user') stop.abort();
+    else connection.abort(new TimeshiftError('SESSION_DISCONNECTED'));
+    const result = await task;
+    expect(vi.mocked(recordTimeshiftComments).mock.calls[0][2].aborted).toBe(true);
+    expect(result.timeshift?.completion).toBe(cause === 'user' ? 'cancelled' : 'partial');
+    expect(result.timeshift?.progress.comments).toBe('partial');
+    expect(await fs.readFile(result.commentsPath, 'utf8')).toBe('comments');
+    expect(session.close).toHaveBeenCalledOnce();
+  },
+);
 
 test('映像失敗でコメントを止め、クリーンアップまで待つ', async () => {
   const started = deferred<void>();

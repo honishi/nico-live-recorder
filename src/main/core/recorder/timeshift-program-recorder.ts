@@ -138,13 +138,19 @@ export async function recordTimeshiftProgram(
           },
           work,
         );
-        if (progress.comments === 'pending') update({ phase: 'comments' });
       } catch (error) {
         if (!signal.aborted)
           result.errors.push({ target: 'video', message: timeshiftErrorText(error) });
-        failedVideo.abort(new TimeshiftError('VIDEO_FAILED'));
-        connection.close();
+        // 全セグメントの取得とFFmpegの排出を終えた欠落だけは、コメントを最後まで取得する。
+        // 通信・保存の障害や利用者停止では、従来どおり残りの処理を中断する。
+        const segmentsIncomplete =
+          error instanceof TimeshiftError && error.code === 'SEGMENTS_INCOMPLETE';
+        if (!segmentsIncomplete || work.aborted) {
+          failedVideo.abort(new TimeshiftError('VIDEO_FAILED'));
+          connection.close();
+        }
       }
+      if (!work.aborted && progress.comments === 'pending') update({ phase: 'comments' });
     })();
     const comments = (async () => {
       try {
