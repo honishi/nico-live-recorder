@@ -20,6 +20,7 @@ const HELP = `使い方:
   --mode inspect|video|comments  既定: inspect（接続情報まで）
   --label standard              比較条件のラベル（英数字・ハイフン・下線）
   --full                         video: 全プレイリスト / comments: 提供された履歴の終端まで
+  --segment-threads 1           video の検証用先読み取得（1〜5、未指定は既存方式）
   --media-seconds 30             video のメディア長（秒、セグメント境界へ切り上げ）
   --comment-limit 1000           comments の保存件数上限（full の既定: 200000）
   --view-at now|beginning|数値   beginning は at を省略、数値は at にそのまま指定
@@ -52,7 +53,7 @@ async function main(): Promise<void> {
   const dir = await fs.mkdtemp(path.join(baseDir, `${options.programId}-${options.label}-`));
   await fs.chmod(dir, 0o700);
   const report: Record<string, unknown> = {
-    schemaVersion: 4,
+    schemaVersion: 5,
     startedAt,
     scope: options.full ? 'full' : 'sample',
     timingsMs: timings.milliseconds,
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
       commentLimit: options.commentLimit,
       timeoutSeconds: options.timeout,
       viewPages: options.viewPages,
+      segmentThreads: options.segmentThreads ?? null,
     },
     viewAt: options.viewAt,
     status: 'running',
@@ -118,9 +120,16 @@ async function main(): Promise<void> {
         options.full ? '映像・音声の全編を取得しています…' : '映像・音声の短区間を取得しています…',
       );
       const result = await timings.measure('video', () =>
-        sampleVideo(stream, dir, options.full ? null : options.mediaSeconds, signal, (summary) => {
-          report.video = summary;
-        }),
+        sampleVideo(
+          stream,
+          dir,
+          options.full ? null : options.mediaSeconds,
+          signal,
+          (summary) => {
+            report.video = summary;
+          },
+          options.segmentThreads,
+        ),
       );
       report.video = result;
       report.status = result.status;

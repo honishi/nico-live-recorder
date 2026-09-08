@@ -21,6 +21,7 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
       timeout: { type: 'string' },
       'comment-limit': { type: 'string' },
       'view-at': { type: 'string', default: 'now' },
+      'segment-threads': { type: 'string' },
       'view-pages': { type: 'string', default: '3' },
     },
   });
@@ -44,6 +45,8 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
     throw new Error('full は video または comments 用です');
   if (values.full && values['media-seconds'] !== undefined)
     throw new Error('full と media-seconds は併用できません');
+  if (values['segment-threads'] !== undefined && values.mode !== 'video')
+    throw new Error('segment-threads は video 用です');
   const session = values.anonymous ? undefined : env.NICO_USER_SESSION?.trim();
   if (!values.anonymous && !session)
     throw new Error('NICO_USER_SESSION または --anonymous を指定してください');
@@ -52,6 +55,10 @@ export function parseOptions(args: string[], env: NodeJS.ProcessEnv = process.en
   if (session?.includes(';') || session?.startsWith('user_session='))
     throw new Error('セッションには Cookie の値だけを指定してください');
   return {
+    segmentThreads:
+      values['segment-threads'] === undefined
+        ? undefined
+        : positive('segment-threads', values['segment-threads'], 5),
     full: values.full ?? false,
     programId: match[1],
     mode: values.mode as ProbeMode,

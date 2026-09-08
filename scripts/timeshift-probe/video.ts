@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { downloadMetrics, downloadProbeTrack } from './download';
 import { FfmpegMuxer } from '../../src/main/core/nico/ffmpeg';
 import {
   HlsTrackDownloader,
@@ -122,11 +123,15 @@ export async function sampleVideo(
   seconds: number | null,
   signal: AbortSignal,
   onProgress: (summary: Record<string, unknown>) => void = () => {},
+  segmentThreads?: number,
 ) {
   const controller = new AbortController();
   const workSignal = AbortSignal.any([signal, controller.signal]);
   const timings = new ProbeTimings();
+  const engine = segmentThreads === undefined ? 'core' : 'probe-prefetch';
   const progress = {
+    engine,
+    segmentThreads: segmentThreads ?? 1,
     timingsMs: timings.milliseconds,
     status: 'playlists',
     tracks: [] as Record<string, unknown>[],
@@ -138,11 +143,16 @@ export async function sampleVideo(
   const master = await timings.measure('master', async () => (await get(stream.uri)).text());
   const tracks = selectBestVariant(parseMultivariantPlaylist(master, stream.uri));
   const urls = [tracks.video.uri, ...(tracks.audioUri ? [tracks.audioUri] : [])];
+  const downloads = urls.map(() => (segmentThreads === undefined ? undefined : downloadMetrics()));
   const playlistResults = await Promise.allSettled(
     urls.map(async (url, index) =>
       timings.measure(index === 0 ? 'videoPlaylist' : 'audioPlaylist', async () =>
         clipPlaylist(await (await get(url)).text(), url, seconds, (summary) => {
-          progress.tracks[index] = { label: index === 0 ? 'video' : 'audio', ...summary };
+          progress.tracks[index] = {
+            label: index === 0 ? 'video' : 'audio',
+            ...summary,
+            download: downloads[index],
+          };
         }),
       ),
     ),
@@ -163,6 +173,8 @@ export async function sampleVideo(
   const kill = (): void => muxer.kill();
   workSignal.addEventListener('abort', kill, { once: true });
   let missingSegments = 0;
+  let trackFailure: unknown;
+  let trackFailed = false;
   try {
     workSignal.throwIfAborted();
     const tasks = urls.map(async (url, index) => {
@@ -183,11 +195,22 @@ export async function sampleVideo(
       const sink = index === 0 ? pipes.video : pipes.audio!;
       try {
         const result = await timings.measure(index === 0 ? 'videoDownload' : 'audioDownload', () =>
-          downloader.run(sink, workSignal),
+          segmentThreads === undefined
+            ? downloader.run(sink, workSignal)
+            : downloadProbeTrack(
+                parseMediaPlaylist(playlists[index].text, url).segments,
+                sink,
+                stream.cookies,
+                segmentThreads,
+                workSignal,
+                downloads[index]!,
+              ),
         );
         if (result.reason !== 'endlist') throw new ProbeError('TRACK_INCOMPLETE');
         return result;
       } catch (error) {
+        if (!trackFailed) trackFailure = error;
+        trackFailed = true;
         controller.abort();
         throw error;
       } finally {
@@ -195,14 +218,22 @@ export async function sampleVideo(
       }
     });
     const results = await Promise.allSettled(tasks);
-    const failure = results.find((r) => r.status === 'rejected');
-    if (failure?.status === 'rejected') throw failure.reason;
+    for (const download of downloads) {
+      for (const code of download?.httpErrors ?? []) {
+        if (!progress.httpErrors.includes(code)) progress.httpErrors.push(code);
+      }
+    }
+    if (trackFailed) throw trackFailure;
     const exit = await timings.measure('muxerFinish', () => muxer.finish());
     if (exit.exitCode !== 0) throw new ProbeError('FFMPEG_FAILED');
     const saved = results.map((r) => {
       if (r.status !== 'fulfilled') throw new ProbeError('TRACK_FAILED');
       return r.value;
     });
+    missingSegments += downloads.reduce(
+      (total, download) => total + (download?.missingSegments ?? 0),
+      0,
+    );
     const complete =
       !missingSegments &&
       saved.every(
@@ -213,6 +244,8 @@ export async function sampleVideo(
     if (complete) status = seconds === null ? 'playlist-saved' : 'sample-saved';
     return {
       status,
+      engine,
+      segmentThreads: segmentThreads ?? 1,
       timingsMs: timings.milliseconds,
       playlistCoverage: complete && seconds === null ? 'complete' : 'not-verified',
       missingSegments,
@@ -220,6 +253,7 @@ export async function sampleVideo(
         label: i === 0 ? 'video' : 'audio',
         ...playlists[i].summary,
         saved: result,
+        download: downloads[i],
       })),
       fullCoverage: 'not-verified',
       playbackAndSync: 'requires-human-check',

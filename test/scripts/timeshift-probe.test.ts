@@ -165,42 +165,47 @@ test('DISCONTINUITY-SEQUENCE を不連続境界と誤認しない', () => {
 const blankPrefix =
   '#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-MAP:URI="/blank-init"\n#EXTINF:1,\n/blank/0.mp4\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI="/main-init"\n#EXT-X-KEY:METHOD=AES-128,URI="/key"\n#EXTINF:6,\n/main.m4s\n';
 
-test('冒頭 blank の境界だけを許可し、本編の初期化情報と元の sequence による IV を使う', async () => {
-  const key = Buffer.alloc(16, 1);
-  const iv = Buffer.alloc(16);
-  iv.writeBigUInt64BE(11n, 8);
-  const encryptor = crypto.createCipheriv('aes-128-cbc', key, iv);
-  mockFetch({
-    'https://example.test/master': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\n/media\n',
-    'https://example.test/media': blankPrefix + '#EXT-X-ENDLIST\n',
-    'https://example.test/main-init': 'init-main',
-    'https://example.test/key': key,
-    'https://example.test/main.m4s': Buffer.concat([
-      encryptor.update('main-content'),
-      encryptor.final(),
-    ]),
-  });
-  const result = await sampleVideo(
-    {
-      uri: 'https://example.test/master',
-      quality: 'abr',
-      availableQualities: [],
-      cookies: [],
-      receivedAt: new Date(),
-    },
-    dir,
-    7,
-    new AbortController().signal,
-  );
-  expect(result.status).toBe('sample-saved');
-  expect(result.tracks[0]).toMatchObject({
-    leadingBlankSegments: 1,
-    leadingBlankBoundaryCount: 1,
-    savedDuration: 6,
-    saved: { segments: 1, firstSeq: 11 },
-  });
-  expect(Buffer.concat(muxed.chunks).toString()).toBe('init-mainmain-content');
-});
+test.each([undefined, 1, 5])(
+  '冒頭 blank の境界だけを許可し、本編の初期化情報と元の sequence による IV を使う（並列数=%s）',
+  async (threads) => {
+    const key = Buffer.alloc(16, 1);
+    const iv = Buffer.alloc(16);
+    iv.writeBigUInt64BE(11n, 8);
+    const encryptor = crypto.createCipheriv('aes-128-cbc', key, iv);
+    mockFetch({
+      'https://example.test/master': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\n/media\n',
+      'https://example.test/media': blankPrefix + '#EXT-X-ENDLIST\n',
+      'https://example.test/main-init': 'init-main',
+      'https://example.test/key': key,
+      'https://example.test/main.m4s': Buffer.concat([
+        encryptor.update('main-content'),
+        encryptor.final(),
+      ]),
+    });
+    const result = await sampleVideo(
+      {
+        uri: 'https://example.test/master',
+        quality: 'abr',
+        availableQualities: [],
+        cookies: [],
+        receivedAt: new Date(),
+      },
+      dir,
+      7,
+      new AbortController().signal,
+      undefined,
+      threads,
+    );
+    expect(result.status).toBe('sample-saved');
+    expect(result.tracks[0]).toMatchObject({
+      leadingBlankSegments: 1,
+      leadingBlankBoundaryCount: 1,
+      savedDuration: 6,
+      saved: { segments: 1, firstSeq: 11 },
+    });
+    expect(Buffer.concat(muxed.chunks).toString()).toBe('init-mainmain-content');
+  },
+);
 
 test('冒頭 blank 後でも、本編内の追加の不連続は拒否する', () => {
   const laterBoundary = blankPrefix + '#EXT-X-DISCONTINUITY\n#EXTINF:6,\n/main2.m4s\n';
@@ -442,7 +447,12 @@ test('全編オプションは短区間指定と区別し、既定の上限を�
   ).toThrow();
 });
 
-test.each([false, true])('全プレイリストの取得で欠落=%s を完了と区別する', async (missing) => {
+test.each([
+  { missing: false },
+  { missing: true },
+  { missing: false, threads: 5 },
+  { missing: true, threads: 5 },
+])('全プレイリストの取得で欠落を完了と区別する: %j', async ({ missing, threads }) => {
   expect(() => clipPlaylist(playlist, 'https://example.test/media', null)).toThrow(
     'ORIGINAL_ENDLIST_MISSING',
   );
@@ -464,6 +474,8 @@ test.each([false, true])('全プレイリストの取得で欠落=%s を完了�
     dir,
     null,
     new AbortController().signal,
+    undefined,
+    threads,
   );
   expect(result.status).toBe(missing ? 'incomplete' : 'playlist-saved');
   expect(result.playlistCoverage).toBe(missing ? 'not-verified' : 'complete');
