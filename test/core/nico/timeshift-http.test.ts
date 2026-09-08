@@ -1,3 +1,8 @@
+import { Writable } from 'node:stream';
+import {
+  downloadMetrics,
+  downloadTimeshiftTrack,
+} from '../../../src/main/core/nico/timeshift-download';
 import {
   fetchTimeshiftBytes,
   retryTimeshiftRequest,
@@ -93,7 +98,7 @@ test.each(['header', 'body', 'stop'] as const)('%s待機の期限・利用者停
   expect(vi.getTimerCount()).toBe(0);
 });
 
-test.each([403, 404, 429, 503, undefined])(
+test.each([400, 401, 403, 404, 408, 429, 500, 503, undefined])(
   'HTTP %sで再試行対象と回数上限を守る',
   async (status) => {
     const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
@@ -104,7 +109,7 @@ test.each([403, 404, 429, 503, undefined])(
     const rejected = expect(pending).rejects.toBeInstanceOf(TimeshiftError);
     await vi.advanceTimersByTimeAsync(3500);
     await rejected;
-    expect(attempt).toHaveBeenCalledTimes(status === 429 || status === 503 ? 4 : 1);
+    expect(attempt).toHaveBeenCalledTimes(status && [408, 429, 500, 503].includes(status) ? 4 : 1);
   },
 );
 
@@ -121,3 +126,45 @@ test('バックオフ中の停止で次のリクエストを開始しない', as
   await vi.advanceTimersByTimeAsync(10_000);
   expect(attempt).toHaveBeenCalledOnce();
 });
+
+test.each([false, true])(
+  'セグメントの再試行・待機計測と停止を共通処理で維持する（停止=%s）',
+  async (cancel) => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValue(new Response('saved'));
+    vi.stubGlobal('fetch', fetcher);
+    const stop = new AbortController();
+    const metrics = downloadMetrics();
+    const chunks: string[] = [];
+    const sink = new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        chunks.push(chunk.toString());
+        done();
+      },
+    });
+    const pending = downloadTimeshiftTrack(
+      [{ seq: 1, duration: 6, uri: 'https://example.test/1' }],
+      sink,
+      [],
+      1,
+      stop.signal,
+      metrics,
+    );
+    const checked = cancel
+      ? expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+      : expect(pending).resolves.toMatchObject({ segments: 1 });
+    await vi.advanceTimersByTimeAsync(cancel ? 250 : 500);
+    if (cancel) stop.abort();
+    await checked;
+    expect(metrics.requestCount).toBe(cancel ? 1 : 2);
+    expect(fetcher).toHaveBeenCalledTimes(cancel ? 1 : 2);
+    expect(metrics.timingsMs.retryWait).toBe(cancel ? 250 : 500);
+    expect(metrics.maxConcurrentRequests).toBe(1);
+    expect(metrics.httpErrors).toEqual([503]);
+    expect(chunks).toEqual(cancel ? [] : ['saved']);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);

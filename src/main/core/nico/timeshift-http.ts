@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 export async function retryTimeshiftRequest<T>(
   operation: () => Promise<T>,
   signal: AbortSignal,
+  onRetryWait?: (elapsedMs: number) => void,
 ): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     signal.throwIfAborted();
@@ -20,7 +21,13 @@ export async function retryTimeshiftRequest<T>(
       )
         throw error;
     }
-    await delay(500 * 2 ** attempt, undefined, { signal });
+    // 待機中の停止も計測する。呼び出し元は取得処理と待機の時間を分けて記録できる。
+    const waiting = performance.now();
+    try {
+      await delay(500 * 2 ** attempt, undefined, { signal });
+    } finally {
+      onRetryWait?.(performance.now() - waiting);
+    }
   }
 }
 

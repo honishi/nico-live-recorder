@@ -1,11 +1,10 @@
 import crypto from 'node:crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
-import { setTimeout as delay } from 'node:timers/promises';
 import { cookieHeaderFor, type HlsSegment, type TrackResult } from './hls';
 import type { StreamCookie } from './watch-session';
 import { TimeshiftError } from './timeshift-common';
-import { fetchTimeshiftBytes } from './timeshift-http';
+import { fetchTimeshiftBytes, retryTimeshiftRequest } from './timeshift-http';
 import {
   inspectFragmentTiming,
   requireContinuousFragments,
@@ -53,54 +52,40 @@ export async function downloadTimeshiftTrack(
   let failed = false;
 
   // HTTP 応答の本文を読み切るまで測る。並列要求の時間は累積なので実時間を超え得る。
-  const fetchBytes = async (url: string): Promise<Buffer> => {
-    for (let attempt = 0; ; attempt += 1) {
-      workSignal.throwIfAborted();
-      const started = performance.now();
-      activeRequests += 1;
-      metrics.requestCount += 1;
-      metrics.maxConcurrentRequests = Math.max(metrics.maxConcurrentRequests, activeRequests);
-      try {
-        return await fetchTimeshiftBytes(url, workSignal, {
-          cookie: cookieHeaderFor(cookies, url),
-          maxBytes: MAX_RESOURCE_BYTES,
-          limitCode: 'MEDIA_RESOURCE_LIMIT',
-          onBytes: (size) => {
-            metrics.receivedBytes += size;
-          },
-        });
-      } catch (caught) {
-        if (
-          caught instanceof TimeshiftError &&
-          caught.httpStatus !== undefined &&
-          !metrics.httpErrors.includes(caught.httpStatus)
-        )
-          metrics.httpErrors.push(caught.httpStatus);
-        if (
-          workSignal.aborted ||
-          attempt >= 3 ||
-          (caught instanceof TimeshiftError && caught.httpStatus === undefined)
-        )
+  const fetchBytes = (url: string): Promise<Buffer> =>
+    retryTimeshiftRequest(
+      async () => {
+        const started = performance.now();
+        activeRequests += 1;
+        metrics.requestCount += 1;
+        metrics.maxConcurrentRequests = Math.max(metrics.maxConcurrentRequests, activeRequests);
+        try {
+          return await fetchTimeshiftBytes(url, workSignal, {
+            cookie: cookieHeaderFor(cookies, url),
+            maxBytes: MAX_RESOURCE_BYTES,
+            limitCode: 'MEDIA_RESOURCE_LIMIT',
+            onBytes: (size) => {
+              metrics.receivedBytes += size;
+            },
+          });
+        } catch (caught) {
+          if (
+            caught instanceof TimeshiftError &&
+            caught.httpStatus !== undefined &&
+            !metrics.httpErrors.includes(caught.httpStatus)
+          )
+            metrics.httpErrors.push(caught.httpStatus);
           throw caught;
-        if (
-          caught instanceof TimeshiftError &&
-          caught.httpStatus! < 500 &&
-          ![408, 429].includes(caught.httpStatus!)
-        )
-          throw caught;
-      } finally {
-        activeRequests -= 1;
-        metrics.timingsMs.fetch += performance.now() - started;
-      }
-      // 既存取得処理と同じ最大4試行・指数バックオフ。認証更新は行わない。
-      const waiting = performance.now();
-      try {
-        await delay(500 * 2 ** attempt, undefined, { signal: workSignal });
-      } finally {
-        metrics.timingsMs.retryWait += performance.now() - waiting;
-      }
-    }
-  };
+        } finally {
+          activeRequests -= 1;
+          metrics.timingsMs.fetch += performance.now() - started;
+        }
+      },
+      workSignal,
+      (elapsedMs) => {
+        metrics.timingsMs.retryWait += elapsedMs;
+      },
+    );
   const resource = (url: string): Promise<Buffer> => {
     let task = resources.get(url);
     if (!task) {
