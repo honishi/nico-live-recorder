@@ -316,3 +316,29 @@ test.each([
     aborted: true,
   });
 });
+
+test('0件でもbackwardが提供されなければ全履歴を確認した扱いにしない', async () => {
+  const registry = await getProtoRegistry();
+  const entry = (value: object) =>
+    registry.ChunkedEntry.encodeDelimited(registry.ChunkedEntry.fromObject(value)).finish();
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async (url: string) =>
+        new Response(
+          url.includes('/view')
+            ? Buffer.concat([
+                entry({ segment: { uri: 'https://example.test/empty' } }),
+                entry({ next: { at: 123 } }),
+              ])
+            : Buffer.alloc(0),
+        ),
+    ),
+  );
+  const result = await recordTimeshiftComments(
+    'https://example.test/view',
+    output,
+    new AbortController().signal,
+  );
+  expect(result).toMatchObject({ count: 0, status: 'partial', reason: 'BACKWARD_NOT_PROVIDED' });
+});

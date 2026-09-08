@@ -115,3 +115,25 @@ test.each(['reconnect', 'error', 'close', 'abort'] as const)(
     expect(vi.getTimerCount()).toBe(0);
   },
 );
+
+test('pingへ応答し、seat更新で保持間隔を切り替え、終了時にタイマーを残さない', async () => {
+  const { session, socket, send } = begin();
+  socket.emit('open');
+  send('stream', { protocol: 'hls', uri: 'https://example.test/media' });
+  send('messageServer', { viewUri: 'https://example.test/comments' });
+  await Promise.all([session.stream, session.comments]);
+  send('ping');
+  expect(socket.sent.slice(-2)).toEqual([{ type: 'pong' }, { type: 'keepSeat' }]);
+  const count = () =>
+    socket.sent.filter((value) => (value as { type: string }).type === 'keepSeat').length;
+  send('seat', { keepIntervalSec: 3 });
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(count()).toBe(3);
+  send('seat', { keepIntervalSec: 5 });
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(count()).toBe(3);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(count()).toBe(4);
+  session.close();
+  expect(vi.getTimerCount()).toBe(0);
+});

@@ -343,6 +343,28 @@ describe('RecordingManager', () => {
     expect(recordCalls).toHaveLength(1);
   });
 
+  test('映像成功・コメント一部失敗は動画を取り直さずdone/partialで履歴に残す', async () => {
+    getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+    await manager.startRecording('lv1', 'manual');
+    const call = await nextRecordCall(0);
+    const result = finishedResult(call, {
+      timeshift: { completion: 'partial' },
+      errors: [{ target: 'comments', message: 'COMMENT_VIEW_TIMEOUT' }],
+    });
+    fs.mkdirSync(call.options.outputDir, { recursive: true });
+    fs.writeFileSync(path.join(call.options.outputDir, 'rec.ts'), 'video');
+    call.resolve(result);
+    await waitFor(() => !manager.hasActiveRecordings());
+    expect(history.get('lv1')).toMatchObject({
+      state: 'done',
+      completion: 'partial',
+      videoBytes: 5,
+      error: 'comments: COMMENT_VIEW_TIMEOUT',
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(recordCalls).toHaveLength(1);
+  });
+
   test('視聴できないタイムシフトや取得できない番組はコード付きの例外にする', async () => {
     getProgramInfo.mockResolvedValueOnce(
       info({ status: NicoLiveProgramStatus.ended, webSocketUrl: undefined }),
