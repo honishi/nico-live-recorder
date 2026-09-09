@@ -277,6 +277,34 @@ https://cdn.test/seg/11.cmfv
     },
   );
 
+  test.each([1024 * 1024, 1024 * 1024 + 1])(
+    '初期化情報が %i bytes のとき上限内だけプレビューへ渡し、録画は全量保存する',
+    async (size) => {
+      const init = Buffer.alloc(size);
+      const { fetchImpl } = makeFetch(new Set(), { 'https://cdn.test/init.cmfv': init });
+      const { sink, output } = collect();
+      const onVideoSample = vi.fn();
+      const downloader = new HlsTrackDownloader({
+        label: 'video',
+        playlistUrl: 'https://cdn.test/media.m3u8',
+        cookies: () => [],
+        fetchImpl,
+        onVideoSample,
+      });
+
+      // 上限超過で表示用の通知を省いても、録画用データや完了結果は変えない。
+      expect(await downloader.run(sink)).toMatchObject({ reason: 'endlist', segments: 2 });
+      expect(output()).toEqual(Buffer.concat([init, SEG1, SEG2]));
+      if (size === 1024 * 1024) {
+        expect(onVideoSample).toHaveBeenCalledTimes(2);
+        expect(onVideoSample).toHaveBeenNthCalledWith(1, { data: SEG1, init });
+        expect(onVideoSample).toHaveBeenNthCalledWith(2, { data: SEG2, init });
+      } else {
+        expect(onVideoSample).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   test('ffmpeg への書き込みが詰まっていても abort で終了する', async () => {
     const { fetchImpl, calls } = makeFetch(new Set());
     let onWrite: () => void = () => {};

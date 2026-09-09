@@ -86,6 +86,26 @@ describe('プレビュー画像の別プロセス生成', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  test.each([
+    { label: '空の出力', bytes: [] },
+    { label: '先頭1バイトだけ', bytes: [0xff] },
+    { label: '2バイト目が異なる出力', bytes: [0xff, 0x00] },
+    { label: '1バイト目が異なる出力', bytes: [0x00, 0xd8] },
+  ])('正常終了でも $label はJPEGとして受け取らない', async ({ bytes }) => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const task = extractPreviewImage(
+      { data: Buffer.from('segment') },
+      new AbortController().signal,
+      '/fake/ffmpeg',
+    );
+    const rejected = expect(task).rejects.toThrow('preview image unavailable (ffmpeg exit 0)');
+    child.stdout.write(Buffer.from(bytes));
+    child.emit('close', 0);
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   test('生成失敗には終了コードとstderrの末尾2行だけを含める', async () => {
     const child = fakeChild();
     spawn.mockReturnValue(child);
