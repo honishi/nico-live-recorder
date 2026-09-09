@@ -77,7 +77,6 @@ export function RecordingPreview({
       ) : (
         <span>プレビュー待機中</span>
       )}
-      {stale && <span className="rec-preview-stale">更新待ち</span>}
     </div>
   );
 }
