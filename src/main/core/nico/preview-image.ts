@@ -32,7 +32,9 @@ export function extractPreviewImage(
         '-frames:v',
         '1',
         '-vf',
-        'scale=320:180:force_original_aspect_ratio=decrease',
+        // FFmpeg 8.0.3のx86で、外部ASM無効時に縮小画像が壊れるMMX経路を避ける。
+        // scripts/ffmpeg/source.jsonの更新時に、上流修正62285beの取り込み状況と必要性を再評価する。
+        'scale=320:180:force_original_aspect_ratio=decrease:flags=bicubic+accurate_rnd',
         '-filter_threads',
         '1',
         '-threads',

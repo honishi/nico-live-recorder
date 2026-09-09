@@ -42,6 +42,9 @@ describe('プレビュー画像の別プロセス生成', () => {
       '-frames:v',
       '1',
     ]);
+    expect(args[args.indexOf('-vf') + 1]).toBe(
+      'scale=320:180:force_original_aspect_ratio=decrease:flags=bicubic+accurate_rnd',
+    );
     child.stdout.write(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
     child.emit('close', 0);
     expect(await task).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));

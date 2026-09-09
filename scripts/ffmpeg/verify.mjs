@@ -8,6 +8,7 @@ import { listPackage } from '@electron/asar';
 import { fileURLToPath } from 'node:url';
 import { FfmpegMuxer } from '../../src/main/core/nico/ffmpeg.ts';
 import { assertLicense, configureArgs, sha256, source, sourceName } from './config.mjs';
+import { assertPreviewColors } from './preview-colors.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const target = `${process.platform}-${process.arch}`;
@@ -149,6 +150,14 @@ function probe(file) {
 const fixtures = path.join(root, 'test', 'fixtures', 'ffmpeg');
 const work = mkdtempSync(path.join(tmpdir(), 'nlr-ffmpeg-verify-'));
 try {
+  // JPEGとして正常終了しても色が壊れる不具合を、実際の縮小を伴う入力で検出する。
+  const colorImage = await extractPreviewImage(
+    { data: readFileSync(path.join(fixtures, 'preview-colors.mp4')) },
+    new AbortController().signal,
+    ffmpeg,
+  );
+  assertPreviewColors(colorImage);
+  console.log('Preview colors OK: 640x360 → 320x180, red/green/blue/white');
   for (const separateAudio of [true, false]) {
     // 配布する実体で JPEG 出力まで通す。縮小フィルタ・エンコーダの入れ忘れも検出する。
     const image = await extractPreviewImage(
