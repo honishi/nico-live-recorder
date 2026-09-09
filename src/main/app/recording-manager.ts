@@ -5,6 +5,7 @@ import { Notification } from 'electron';
 import { ProgramDetector, type DetectedProgram } from '../core/detector/program-detector';
 import { prefixLogger, type Logger } from '../core/logger';
 import { recordProgram } from '../core/recorder/program-recorder';
+import { extractPreviewImage } from '../core/nico/preview-image';
 import { TimeshiftError } from '../core/nico/timeshift-common';
 import { NicoClient } from '../vendor/nico-client/NicoClient';
 import { NicoLiveProgramStatus, type NicoLiveProgramInfo } from '../vendor/nico-client/types';
@@ -18,11 +19,13 @@ import {
   type HistoryQuery,
   type PushStatusInfo,
   type RecordingInfo,
+  type RecordingPreview,
   type AppSettings,
   type RecordingSource,
 } from '../../shared/types';
 import type { NicoAuth } from './auth';
 import { formatBytes } from '../../shared/format';
+import { RecordingPreviews } from './recording-preview';
 import { HistoryStore } from './history-store';
 import type { SettingsStore } from './settings-store';
 
@@ -88,6 +91,7 @@ const RETRY_MAX_DELAY_MS = 60_000;
  * ログイン状態と設定に応じて push / ポーリングを起動し、対象配信者の放送を録画する。
  */
 export class RecordingManager extends EventEmitter<{ change: [] }> {
+  private readonly previews: RecordingPreviews;
   private readonly settings: SettingsStore;
   private readonly auth: NicoAuth;
   private readonly pushStore: PushStateStore;
@@ -131,6 +135,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     this.history = options.history;
     this.logger = options.logger;
     this.ffmpegPath = options.ffmpegPath;
+    this.previews = new RecordingPreviews(this.logger, (sample, signal) =>
+      extractPreviewImage(sample, signal, this.ffmpegPath),
+    );
     this.diskProbe = options.diskProbe ?? freeSpaceOf;
 
     const pushLogger = prefixLogger(this.logger, 'autopush');
@@ -161,6 +168,25 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         void this.refreshDiskSpace();
       }
     });
+  }
+
+  /** 既存の録画IDだけを受け付け、画面が要求した間だけサンプリングする。 */
+  getRecordingPreview(
+    programId: string,
+    visible: boolean,
+    after?: number,
+  ): RecordingPreview | undefined {
+    const recording = this.active.get(programId);
+    if (!visible || this.stopped || !recording || recording.controller.signal.aborted) {
+      this.previews.remove(programId);
+      return undefined;
+    }
+    const image = this.previews.request(programId);
+    return image?.capturedAt === after ? undefined : image;
+  }
+
+  pausePreviews(): void {
+    this.previews.clear();
   }
 
   get detectorRunning(): boolean {
@@ -333,6 +359,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
 
   async shutdown(): Promise<void> {
     this.stopped = true;
+    this.pausePreviews();
     this.detector?.stop();
     this.detector = undefined;
     if (this.diskTimer) {
@@ -758,6 +785,9 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               ffmpegPath: this.ffmpegPath,
               logger: prefixLogger(this.logger, programId),
               programInfo,
+              onVideoSample: (sample) => {
+                if (!controller.signal.aborted) this.previews.offer(programId, sample);
+              },
               mode,
               onTimeshiftProgress: (progress) => {
                 const changed =
@@ -778,6 +808,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               attempt,
               // 既存ファイルと重ならない連番を recorder が選ぶので、実際の値をここで受け取る
               onPaths: (paths) => {
+                this.previews.remove(programId);
                 info.attempt = paths.attempt;
                 info.videoPath = paths.videoPath;
                 if (!info.videoPaths?.includes(paths.videoPath)) {
@@ -960,6 +991,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           clearInterval(recording.sizeTimer);
         }
         info.endedAt = new Date().toISOString();
+        this.previews.remove(programId);
         this.active.delete(programId);
         this.history.upsert(info);
         this.historyVersionCounter += 1;
@@ -974,6 +1006,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     if (!recording) {
       return false;
     }
+    this.previews.remove(programId);
     recording.info.state = 'finishing';
     if (recording.info.mode === 'timeshift') recording.info.completion = 'cancelled';
     this.manuallyStopped.add(programId);

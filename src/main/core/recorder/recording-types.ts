@@ -3,9 +3,12 @@ import type { NicoLiveProgramInfo, NicoComment } from '../../vendor/nico-client/
 import type { Logger } from '../logger';
 import type { TrackResult } from '../nico/hls';
 import type { TimeshiftPlaylistDiagnostic } from '../nico/timeshift-playlist';
+import type { VideoSampleListener } from '../nico/video-sample';
 
 export interface ProgramRecorderOptions {
   mode?: RecordingMode;
+  /** 復号済み映像の任意の観測先。録画を待たせず受付だけ行う。 */
+  onVideoSample?: VideoSampleListener;
   onTimeshiftProgress?: (progress: TimeshiftProgress) => void;
   programId: string;
   /** 録画ファイルを置くディレクトリ (存在しなければ作成する) */

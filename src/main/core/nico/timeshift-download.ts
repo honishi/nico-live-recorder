@@ -1,3 +1,4 @@
+import { offerVideoSample, type VideoSampleListener } from './video-sample';
 import { decryptHlsSegment } from './hls-crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
@@ -38,6 +39,7 @@ export async function downloadTimeshiftTrack(
   metrics: Metrics,
   onProgress: (saved: number) => void = () => {},
   continuityCheckSeqs: ReadonlySet<number> = new Set(),
+  onVideoSample?: VideoSampleListener,
 ): Promise<TrackResult> {
   if (!Number.isInteger(threads) || threads < 1 || threads > 5)
     throw new TimeshiftError('INVALID_SEGMENT_THREADS');
@@ -190,6 +192,7 @@ export async function downloadTimeshiftTrack(
         sentMapUri = segment.mapUri;
       }
       await write(data);
+      offerVideoSample(onVideoSample, data, loaded.map);
       result.segments += 1;
       result.bytes += data.length;
       result.firstSeq ??= segment.seq;

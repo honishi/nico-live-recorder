@@ -617,9 +617,40 @@ select {
   border-radius: var(--r-card);
   padding: var(--pad);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 128px minmax(0, 1fr) auto;
   gap: var(--pad);
   align-items: center;
+}
+
+.rec-preview {
+  position: relative;
+  width: 128px;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--r-card);
+  background: #16191d;
+  color: #d0d4da;
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-micro);
+}
+
+.rec-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.rec-preview.stale img {
+  opacity: 0.5;
+}
+
+.rec-preview-stale {
+  position: absolute;
+  bottom: 4px;
+  background: #16191dcc;
+  padding: 2px 6px;
+  border-radius: 3px;
 }
 
 .rec-card .body {
@@ -634,6 +665,7 @@ select {
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
+  flex-wrap: wrap;
 }
 
 .rec-card .name {
@@ -653,6 +685,7 @@ select {
   font-size: var(--fs-sub);
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
 }
 
 /* タイムシフトの進捗・取得回数は狭いウィンドウでも項目単位で折り返す。 */

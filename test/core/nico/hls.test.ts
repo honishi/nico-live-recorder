@@ -223,6 +223,26 @@ https://cdn.test/seg/11.cmfv
     expect(calls.filter((u) => u.endsWith('.key'))).toHaveLength(1);
   });
 
+  test('プレビューへ復号済み映像と初期化情報を渡し、失敗しても録画と取得回数を維持する', async () => {
+    const { fetchImpl, calls } = makeFetch(new Set());
+    const { sink, output } = collect();
+    const onVideoSample = vi.fn(() => {
+      throw new Error('preview failed');
+    });
+    const downloader = new HlsTrackDownloader({
+      label: 'video',
+      playlistUrl: 'https://cdn.test/media.m3u8',
+      cookies: () => [],
+      fetchImpl,
+      onVideoSample,
+    });
+    expect((await downloader.run(sink)).segments).toBe(2);
+    expect(onVideoSample).toHaveBeenNthCalledWith(1, { data: SEG1, init: INIT });
+    expect(onVideoSample).toHaveBeenNthCalledWith(2, { data: SEG2, init: INIT });
+    expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
+    expect(calls.filter((url) => url.endsWith('init.cmfv'))).toHaveLength(1);
+  });
+
   test('ffmpeg への書き込みが詰まっていても abort で終了する', async () => {
     const { fetchImpl, calls } = makeFetch(new Set());
     let onWrite: () => void = () => {};

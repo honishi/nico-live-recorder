@@ -19,17 +19,19 @@ export function configureArgs(platform = process.platform) {
     '--enable-static',
     '--disable-x86asm',
     '--disable-avdevice',
-    '--disable-swscale',
+    '--enable-swscale',
     '--disable-swresample',
     '--disable-ffplay',
     '--enable-ffmpeg',
     '--enable-ffprobe',
     '--enable-protocol=file,pipe',
     '--enable-demuxer=mov,mpegts,aac,h264',
-    '--enable-muxer=mpegts',
+    '--enable-muxer=mpegts,image2pipe',
     '--enable-parser=h264,aac',
-    // 入力の解析と ffprobe の検証用。エンコーダは有効にしない。
+    // 録画は stream copy。プレビューだけキーフレームを縮小して JPEG にする。
     '--enable-decoder=h264,aac',
+    '--enable-encoder=mjpeg',
+    '--enable-filter=scale',
     '--enable-bsf=h264_mp4toannexb,aac_adtstoasc',
   ];
   if (platform === 'win32') {

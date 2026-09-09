@@ -1,0 +1,87 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { extractPreviewImage } from '../../../src/main/core/nico/preview-image';
+
+const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }));
+vi.mock('node:child_process', () => ({ spawn }));
+
+function fakeChild() {
+  return Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    kill: vi.fn(),
+  });
+}
+
+describe('プレビュー画像の別プロセス生成', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    spawn.mockReset();
+  });
+  afterEach(() => vi.useRealTimers());
+
+  test('初期化情報と1セグメントだけを渡し、キーフレーム1枚を生成する', async () => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const input: Buffer[] = [];
+    child.stdin.on('data', (chunk: Buffer) => input.push(chunk));
+    const task = extractPreviewImage(
+      { init: Buffer.from('init'), data: Buffer.from('segment') },
+      new AbortController().signal,
+      '/fake/ffmpeg',
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(Buffer.concat(input)).toEqual(Buffer.from('initsegment'));
+    const args = spawn.mock.calls[0][1] as string[];
+    expect(args.slice(args.indexOf('-skip_frame'), args.indexOf('-skip_frame') + 2)).toEqual([
+      '-skip_frame',
+      'nokey',
+    ]);
+    expect(args.slice(args.indexOf('-frames:v'), args.indexOf('-frames:v') + 2)).toEqual([
+      '-frames:v',
+      '1',
+    ]);
+    child.stdout.write(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    child.emit('close', 0);
+    expect(await task).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test.each(['abort', 'timeout', 'oversize'])(
+    '%s で子プロセスを止め、終了を待つ',
+    async (reason) => {
+      const child = fakeChild();
+      spawn.mockReturnValue(child);
+      const controller = new AbortController();
+      const task = extractPreviewImage(
+        { data: Buffer.from('segment') },
+        controller.signal,
+        '/fake/ffmpeg',
+      );
+      const rejected = expect(task).rejects.toThrow('preview');
+      if (reason === 'abort') controller.abort();
+      if (reason === 'timeout') await vi.advanceTimersByTimeAsync(3_000);
+      if (reason === 'oversize') child.stdout.write(Buffer.alloc(256 * 1024 + 1));
+      expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+      child.emit('close', null);
+      await rejected;
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  test('起動失敗や画像なしを拒否し、stdin の EPIPE は吸収する', async () => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const task = extractPreviewImage(
+      { data: Buffer.from('segment') },
+      new AbortController().signal,
+      '/fake/ffmpeg',
+    );
+    const rejected = expect(task).rejects.toThrow('spawn failed');
+    child.stdin.emit('error', new Error('EPIPE'));
+    child.emit('error', new Error('spawn failed'));
+    child.emit('close', -1);
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

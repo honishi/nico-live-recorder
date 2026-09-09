@@ -15,6 +15,7 @@ import type { VideoRecordResult, TimeshiftVideoReport } from './recording-types'
 import type { TimeshiftProgress } from '../../../shared/types';
 import type { Logger } from '../logger';
 import { TimeshiftRemainingTime } from './timeshift-remaining-time';
+import type { VideoSampleListener } from '../nico/video-sample';
 
 // 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
 export type { TimeshiftVideoReport } from './recording-types';
@@ -23,6 +24,7 @@ export type { TimeshiftVideoReport } from './recording-types';
 export async function recordTimeshiftVideo(
   stream: HlsStreamInfo,
   options: {
+    onVideoSample?: VideoSampleListener;
     outputPath: string;
     ffmpegPath?: string;
     logger?: Logger;
@@ -140,6 +142,7 @@ export async function recordTimeshiftVideo(
               updateProgress();
             },
             playlists[index].continuityCheckSeqs,
+            index === 0 ? options.onVideoSample : undefined,
           );
           return result;
         } catch (error) {

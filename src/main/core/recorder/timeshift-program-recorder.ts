@@ -127,6 +127,7 @@ export async function recordTimeshiftProgram(
           {
             outputPath: paths.videoPath,
             ffmpegPath: options.ffmpegPath,
+            onVideoSample: options.onVideoSample,
             logger: options.logger,
             onProgress: update,
             onReport: (report) => {

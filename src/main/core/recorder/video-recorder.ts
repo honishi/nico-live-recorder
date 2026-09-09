@@ -15,11 +15,13 @@ import {
 } from '../nico/hls';
 import { WatchSession } from '../nico/watch-session';
 import type { HlsStreamInfo } from '../nico/watch-protocol';
+import type { VideoSampleListener } from '../nico/video-sample';
 
 // 既存の開発スクリプト等のimport互換用。新規コードは定義元を直接参照する。
 export type { VideoStopReason, VideoRecordResult } from './recording-types';
 
 export interface VideoRecorderOptions {
+  onVideoSample?: VideoSampleListener;
   programId: string;
   outputPath: string;
   /** ログイン済み cookie (user_session など)。未指定なら匿名視聴 */
@@ -156,6 +158,7 @@ export async function recordVideo(
     const videoTrack = new HlsTrackDownloader({
       ...trackOptions,
       label: 'video',
+      onVideoSample: options.onVideoSample,
       playlistUrl: tracks.video.uri,
     });
     const audioTrack = tracks.audioUri

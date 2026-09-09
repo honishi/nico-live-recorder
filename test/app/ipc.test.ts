@@ -29,6 +29,55 @@ vi.mock('electron', () => ({
   dialog: { showMessageBox },
 }));
 
+describe('プレビューの要求元と表示状態', () => {
+  test('メイン画面の表示中の録画タブだけを許可し、他の要求は購読を解除する', () => {
+    handle.mockClear();
+    const frame = {};
+    const getRecordingPreview = vi.fn();
+    let visible = true;
+    let minimized = false;
+    let tab = 'recordings';
+    const ctx = {
+      auth: new EventEmitter(),
+      manager: { getRecordingPreview },
+      settings: { get: () => ({ ui: { tab } }) },
+      getMainWindow: () => ({
+        webContents: { mainFrame: frame },
+        isVisible: () => visible,
+        isMinimized: () => minimized,
+      }),
+    } as unknown as IpcContext;
+    registerIpcHandlers(ctx);
+    const handler = handle.mock.calls.find(
+      ([channel]) => channel === IPC.getRecordingPreview,
+    )![1] as unknown as (
+      event: { senderFrame: object },
+      id: unknown,
+      visible: unknown,
+      after?: unknown,
+    ) => void;
+    handler({ senderFrame: {} }, 'lv1', true);
+    handler({ senderFrame: frame }, '/etc/passwd', true);
+    expect(getRecordingPreview).not.toHaveBeenCalled();
+    handler({ senderFrame: frame }, 'lv1', true, 100);
+    expect(getRecordingPreview).toHaveBeenLastCalledWith('lv1', true, 100);
+    visible = false;
+    handler({ senderFrame: frame }, 'lv1', true);
+    expect(getRecordingPreview).toHaveBeenLastCalledWith('lv1', false, undefined);
+    visible = true;
+    minimized = true;
+    handler({ senderFrame: frame }, 'lv1', true);
+    expect(getRecordingPreview).toHaveBeenLastCalledWith('lv1', false, undefined);
+    minimized = false;
+    tab = 'history';
+    handler({ senderFrame: frame }, 'lv1', true);
+    expect(getRecordingPreview).toHaveBeenLastCalledWith('lv1', false, undefined);
+    tab = 'recordings';
+    handler({ senderFrame: frame }, 'lv1', false);
+    expect(getRecordingPreview).toHaveBeenLastCalledWith('lv1', false, undefined);
+  });
+});
+
 describe('ログアウトの確認', () => {
   let logout: () => Promise<void>;
   let performLogout: ReturnType<typeof vi.fn<() => Promise<void>>>;

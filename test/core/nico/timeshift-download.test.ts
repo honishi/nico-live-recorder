@@ -309,3 +309,36 @@ test.each(['continuous', 'reset', 'format'] as const)(
     }
   },
 );
+
+test('プレビュー失敗でもタイムシフトを最後まで保存し、初期化情報を渡す', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string) => Promise.resolve(new Response(url.endsWith('/init') ? 'init' : 'video'))),
+  );
+  const { sink, chunks } = output();
+  const onVideoSample = vi.fn(() => {
+    throw new Error('preview failed');
+  });
+  const tracks = segments(2).map((segment) => ({
+    ...segment,
+    mapUri: 'https://example.test/init',
+  }));
+  const result = await downloadTimeshiftTrack(
+    tracks,
+    sink,
+    [],
+    2,
+    new AbortController().signal,
+    downloadMetrics(),
+    undefined,
+    undefined,
+    onVideoSample,
+  );
+  expect(result.segments).toBe(2);
+  expect(chunks).toEqual(['init', 'video', 'video']);
+  expect(onVideoSample).toHaveBeenCalledTimes(2);
+  expect(onVideoSample).toHaveBeenCalledWith({
+    data: Buffer.from('video'),
+    init: Buffer.from('init'),
+  });
+});

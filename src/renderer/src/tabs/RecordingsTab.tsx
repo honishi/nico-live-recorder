@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactElement } from 'react';
 import type { RecordingInfo } from '@shared/types';
 import { EmptyState } from '../components/Shell';
 import { ShowRecordingButton } from '../components/ShowRecordingButton';
+import { RecordingPreview } from '../components/RecordingPreview';
 import { describeError } from '../lib/errors';
 import {
   formatBytes,
@@ -151,6 +152,11 @@ function RecordingCard({
   else if (phase === 'comments') statusLabel = 'コメント取得中';
   return (
     <div className={`rec-card ${timeshift ? 'timeshift' : ''}`}>
+      <RecordingPreview
+        key={`${r.programId}:${r.attempt ?? 1}`}
+        programId={r.programId}
+        now={now}
+      />
       <div className="body">
         <div className="head">
           <span className="badge badge-rec">{statusLabel}</span>

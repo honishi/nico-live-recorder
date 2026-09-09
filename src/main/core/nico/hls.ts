@@ -1,3 +1,4 @@
+import { offerVideoSample, type VideoSampleListener } from './video-sample';
 import { decryptHlsSegment } from './hls-crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
@@ -232,6 +233,7 @@ export interface TrackResult {
 }
 
 export interface HlsTrackDownloaderOptions {
+  onVideoSample?: VideoSampleListener;
   label: string;
   playlistUrl: string;
   /** 常に最新の cookie を返す (再接続で更新されるため関数で受け取る) */
@@ -261,6 +263,7 @@ const MAX_FETCH_ATTEMPTS = 4;
  * 1 トラック (映像 or 音声) につき 1 インスタンス。
  */
 export class HlsTrackDownloader {
+  private readonly onVideoSample?: VideoSampleListener;
   private playlistUrl: string;
   private readonly label: string;
   private readonly cookies: () => StreamCookie[];
@@ -275,6 +278,7 @@ export class HlsTrackDownloader {
   private readonly keyCache = new Map<string, Buffer>();
 
   constructor(options: HlsTrackDownloaderOptions) {
+    this.onVideoSample = options.onVideoSample;
     this.label = options.label;
     this.playlistUrl = options.playlistUrl;
     this.cookies = options.cookies;
@@ -305,6 +309,7 @@ export class HlsTrackDownloader {
     let lastSeq: number | undefined;
     let lastPlaylist: { url: string; text: string } | undefined;
     let sentMapUri: string | undefined;
+    let previewInit: Buffer | undefined;
     let lastProgressAt = Date.now();
 
     const write = async (chunk: Buffer): Promise<void> => {
@@ -349,7 +354,10 @@ export class HlsTrackDownloader {
             break;
           }
           if (segment.mapUri && segment.mapUri !== sentMapUri) {
-            await write(await this.fetchWithRetry(segment.mapUri, signal, playlistUrl));
+            const init = await this.fetchWithRetry(segment.mapUri, signal, playlistUrl);
+            await write(init);
+            // 表示用には小さな初期化情報だけを保持し、セグメントの履歴は溜めない。
+            previewInit = this.onVideoSample && init.length <= 1024 * 1024 ? init : undefined;
             sentMapUri = segment.mapUri;
           }
           let data: Buffer;
@@ -367,6 +375,8 @@ export class HlsTrackDownloader {
             data = await this.decrypt(data, segment, signal, playlistUrl);
           }
           await write(data);
+          if (!segment.mapUri || previewInit)
+            offerVideoSample(this.onVideoSample, data, segment.mapUri ? previewInit : undefined);
           result.segments += 1;
           result.bytes += data.length;
           result.firstSeq ??= segment.seq;
