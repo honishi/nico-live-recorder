@@ -15,6 +15,7 @@ import { LogTab } from './tabs/LogTab';
 import { RecordingsTab } from './tabs/RecordingsTab';
 import { SettingsTab } from './tabs/SettingsTab';
 import { TargetsTab } from './tabs/TargetsTab';
+import { pruneRecordingPreviewImages } from './lib/recording-preview-cache';
 
 export function App(): ReactElement {
   const [status, setStatus] = useState<AppStatus>();
@@ -71,6 +72,11 @@ export function App(): ReactElement {
       unsubscribe();
     };
   }, []);
+
+  // 画像の寿命はタブではなく録画に合わせ、非表示中に終了した録画の分も解放する。
+  useEffect(() => {
+    pruneRecordingPreviewImages(status?.recordings ?? []);
+  }, [status?.recordings]);
 
   // 経過時間の表示を 1 秒ごとに進める
   useEffect(() => {

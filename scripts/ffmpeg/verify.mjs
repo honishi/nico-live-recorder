@@ -1,3 +1,4 @@
+import { extractPreviewImage } from '../../src/main/core/nico/preview-image.ts';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
@@ -149,6 +150,15 @@ const fixtures = path.join(root, 'test', 'fixtures', 'ffmpeg');
 const work = mkdtempSync(path.join(tmpdir(), 'nlr-ffmpeg-verify-'));
 try {
   for (const separateAudio of [true, false]) {
+    // 配布する実体で JPEG 出力まで通す。縮小フィルタ・エンコーダの入れ忘れも検出する。
+    const image = await extractPreviewImage(
+      { data: readFileSync(path.join(fixtures, separateAudio ? 'video.mp4' : 'combined.mp4')) },
+      new AbortController().signal,
+      ffmpeg,
+    );
+    assert.equal(image.subarray(0, 2).toString('hex'), 'ffd8');
+    assert.equal(image.subarray(-2).toString('hex'), 'ffd9');
+    console.log(`Preview OK: ${image.length} bytes`);
     const outputPath = path.join(work, `mux-${separateAudio}.ts`);
     const muxer = new FfmpegMuxer({ ffmpegPath: ffmpeg, outputPath, separateAudio });
     const streams = muxer.start();

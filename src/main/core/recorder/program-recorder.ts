@@ -115,6 +115,7 @@ export async function recordProgram(
       cookies: options.cookies,
       userAgent: options.userAgent,
       ffmpegPath: options.ffmpegPath,
+      onVideoSample: options.onVideoSample,
       logger: prefixLogger(logger, 'video'),
       programInfo: info,
     },

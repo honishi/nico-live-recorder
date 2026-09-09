@@ -63,7 +63,7 @@ function restoredBounds(saved: WindowBounds | undefined): Partial<WindowBounds> 
   return visible ? saved : { width: saved.width, height: saved.height };
 }
 
-function createMainWindow(settings: SettingsStore): BrowserWindow {
+function createMainWindow(settings: SettingsStore, manager: RecordingManager): BrowserWindow {
   const bounds = restoredBounds(settings.get().window);
   const window = new BrowserWindow({
     width: bounds.width ?? WINDOW_DEFAULT_WIDTH,
@@ -84,6 +84,9 @@ function createMainWindow(settings: SettingsStore): BrowserWindow {
     },
   });
   window.on('ready-to-show', () => window.show());
+  window.on('hide', () => manager.pausePreviews());
+  window.on('minimize', () => manager.pausePreviews());
+  window.webContents.on('render-process-gone', () => manager.pausePreviews());
 
   // 位置とサイズは少し待ってから保存する (ドラッグ中の連続イベントをまとめる)
   let saveTimer: NodeJS.Timeout | undefined;
@@ -192,7 +195,7 @@ async function bootstrap(): Promise<void> {
 
   const showMainWindow = (): void => {
     if (!mainWindow || mainWindow.isDestroyed()) {
-      mainWindow = createMainWindow(settings);
+      mainWindow = createMainWindow(settings, manager);
       return;
     }
     mainWindow.show();
@@ -261,7 +264,7 @@ async function bootstrap(): Promise<void> {
   app.on('second-instance', showMainWindow);
   app.on('activate', showMainWindow);
 
-  mainWindow = createMainWindow(settings);
+  mainWindow = createMainWindow(settings, manager);
   // パッケージ版だけ自動確認する。開発時も設定画面からの手動確認は可能
   if (app.isPackaged) {
     updates.start();

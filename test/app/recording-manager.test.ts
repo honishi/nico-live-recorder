@@ -45,6 +45,9 @@ vi.mock('../../src/main/core/recorder/program-recorder', () => ({
   ),
 }));
 
+const extractPreview = vi.hoisted(() => vi.fn());
+vi.mock('../../src/main/core/nico/preview-image', () => ({ extractPreviewImage: extractPreview }));
+
 const getProgramInfo = vi.hoisted(() => vi.fn());
 vi.mock('../../src/main/vendor/nico-client/NicoClient', () => ({
   NicoClient: class {
@@ -229,6 +232,7 @@ describe('RecordingManager', () => {
     detectors.length = 0;
     pushManagers.length = 0;
     resetPush.mockReset().mockResolvedValue(undefined);
+    extractPreview.mockReset().mockResolvedValue(Buffer.from('jpeg'));
     getProgramInfo.mockReset();
     getProgramInfo.mockResolvedValue(info());
     settings = new SettingsStore(path.join(dir, 'settings.json'), path.join(dir, 'out'));
@@ -273,6 +277,37 @@ describe('RecordingManager', () => {
     await waitFor(async () => (await manager.getRecordings())[0]?.state === 'starting');
     await vi.advanceTimersByTimeAsync(ms);
   }
+
+  test.each(['live', 'timeshift'] as const)(
+    '%s のプレビューを録画と結線し、履歴へ保存せず停止時に解放する',
+    async (mode) => {
+      if (mode === 'timeshift')
+        getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+      await manager.startRecording('lv1', 'manual');
+      const call = await nextRecordCall(0);
+      const sample = { data: Buffer.from('video'), init: Buffer.from('init') };
+      // 他番組の要求ではこの番組の画像生成を有効にしない。
+      expect(manager.getRecordingPreview('lv999', true)).toBeUndefined();
+      call.options.onVideoSample?.(sample);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(extractPreview).not.toHaveBeenCalled();
+      manager.getRecordingPreview('lv1', true);
+      call.options.onVideoSample?.(sample);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(extractPreview).toHaveBeenCalledTimes(1);
+      const image = manager.getRecordingPreview('lv1', true);
+      expect(image?.dataUrl).toBe('data:image/jpeg;base64,anBlZw==');
+      expect(manager.getRecordingPreview('lv1', true, image?.capturedAt)).toBeUndefined();
+      expect(JSON.stringify(history.get('lv1'))).not.toContain('data:image');
+      manager.pausePreviews();
+      expect(manager.getRecordingPreview('lv1', true)).toBeUndefined();
+      manager.stopRecording('lv1');
+      call.options.onVideoSample?.(sample);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.getRecordingPreview('lv1', true)).toBeUndefined();
+      expect(extractPreview).toHaveBeenCalledTimes(1);
+    },
+  );
 
   test.each([
     ['live', 'complete', '録画が終了しました'],

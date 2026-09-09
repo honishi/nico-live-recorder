@@ -12,7 +12,7 @@
 
 FFmpeg **8.0.3** の公式リリースアーカイブを使います。固定 URL と SHA-256 は `scripts/ffmpeg/source.json`、configure 引数は `scripts/ffmpeg/config.mjs` が正です。バイナリの「最新版」を自動取得する処理はありません。
 
-GPL、nonfree、version3、外部ライブラリの自動検出、ネットワーク、エンコーダを無効にします。fMP4 / MPEG-TS / H.264 / AAC の解析、ファイル・パイプ入出力、MPEG-TS 出力、必要な bitstream filter を有効にします。H.264 / AAC デコーダはストリーム情報の解析と検証に使います。録画の引数は従来どおり `-c copy` です。
+GPL、nonfree、version3、外部ライブラリの自動検出、ネットワークを無効にします。fMP4 / MPEG-TS / H.264 / AAC の解析、ファイル・パイプ入出力、MPEG-TS 出力、必要な bitstream filter を有効にします。H.264 / AAC デコーダはストリーム情報の解析と検証に使います。プレビュー用に H.264 キーフレームのデコード、swscale / scale、MJPEG エンコーダと image2pipe 出力も有効にします。録画の引数は従来どおり `-c copy` です。
 
 ## 許諾条件と同梱物
 
@@ -69,6 +69,7 @@ npm run package:win  # Windows x64 上
 - 記録済みの表示だけでなく、FFmpeg / ffprobe 実体の `-L` / `-buildconf` / `-version`。GPL / nonfree / version3 が有効、または LGPL 2.1 の表示がない場合は失敗。
 - macOS の外部 dylib 依存がシステムライブラリだけであること。Windows のツールチェーン DLL が PATH にない状態でも起動できること。
 - 合成した H.264 / AAC の fMP4 を本番の `FfmpegMuxer` の fd3 / fd4 に渡して終了すること。音声分離と音声込みの両方を確認。
+- 映像のみ・音声込みの入力から、本番の画像生成処理で JPEG を出力できること。
 - 出力の MPEG-TS 同期バイト・パケット長、映像・音声のコーデック、入力に対応するパケット数とタイムスタンプ。
 
 electron-builder の `afterPack` でもこの検証を必ず行います。開発ディレクトリではなく、`.app` / `win-unpacked` の Resources にコピーされた実体を検証します。資料欠落、異なる CPU/OS、旧バイナリ混入、多重化失敗でパッケージ作成を止めます。ホストと異なる OS/CPU へのクロスパッケージングは受け付けません。`NICO_FFMPEG_PATH` でこのゲートを回避することはできません。

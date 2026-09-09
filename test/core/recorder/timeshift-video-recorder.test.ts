@@ -98,6 +98,7 @@ function media(options: { missing?: boolean; forbidden?: boolean; live?: boolean
 
 test('2トラックを並列取得・復号し、両方の保存数・FFmpeg・ファイルの成功を確認する', async () => {
   media();
+  const onVideoSample = vi.fn();
   // 接続後に時間が進む状況を固定し、実時間を待たず残り時間の通知を確認する。
   let now = 0;
   vi.spyOn(performance, 'now').mockImplementation(() => now);
@@ -109,6 +110,7 @@ test('2トラックを並列取得・復号し、両方の保存数・FFmpeg・�
     {
       outputPath,
       ffmpegPath: binary,
+      onVideoSample,
       onProgress: (value) => {
         progress.push(value);
         if (value.phase === 'downloading') now = 5000;
@@ -124,6 +126,15 @@ test('2トラックを並列取得・復号し、両方の保存数・FFmpeg・�
     video: { segments: 2, firstSeq: 11, lastSeq: 12 },
     audio: { segments: 2 },
     ffmpegExitCode: 0,
+  });
+  expect(onVideoSample).toHaveBeenCalledTimes(2);
+  expect(onVideoSample).toHaveBeenNthCalledWith(1, {
+    data: Buffer.from('video-11'),
+    init: Buffer.from('init-video'),
+  });
+  expect(onVideoSample).toHaveBeenNthCalledWith(2, {
+    data: Buffer.from('video-12'),
+    init: Buffer.from('init-video'),
   });
   expect(fs.readFileSync(outputPath, 'utf8')).toBe('init-videovideo-11video-12');
   expect(fs.readFileSync(outputPath + '.audio', 'utf8')).toBe('init-audioaudio-11audio-12');

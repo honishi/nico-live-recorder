@@ -89,6 +89,30 @@ function pickUiPatch(patch: Partial<UiState>): Partial<UiState> {
 }
 
 export function registerIpcHandlers(ctx: IpcContext): void {
+  // 画像は通常の status 配信へ混ぜず、表示中のカードから個別に要求する。
+  ipcMain.handle(
+    IPC.getRecordingPreview,
+    (event, programId: unknown, visible: unknown, after: unknown) => {
+      const window = ctx.getMainWindow();
+      if (
+        !window ||
+        event.senderFrame !== window.webContents.mainFrame ||
+        typeof programId !== 'string' ||
+        !/^lv\d+$/.test(programId)
+      )
+        return undefined;
+      const active =
+        visible === true &&
+        window.isVisible() &&
+        !window.isMinimized() &&
+        ctx.settings.get().ui.tab === 'recordings';
+      return ctx.manager.getRecordingPreview(
+        programId,
+        active,
+        typeof after === 'number' ? after : undefined,
+      );
+    },
+  );
   // フォロー状態は数分キャッシュし、ログイン状態が変わったら捨てる
   const followStatus = new FollowStatusCache({
     check: (userId, cookie) => checkFollowing(userId, cookie, ctx.logger),

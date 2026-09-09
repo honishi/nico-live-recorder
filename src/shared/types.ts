@@ -62,6 +62,12 @@ export interface TimeshiftProgress {
   comments: 'pending' | 'complete' | 'partial';
 }
 
+/** 画面だけで使う一時画像。設定・録画履歴・メタデータには保存しない。 */
+export interface RecordingPreview {
+  dataUrl: string;
+  capturedAt: number;
+}
+
 export interface RecordingInfo {
   /** 未指定の旧履歴はライブ録画として扱う */
   mode?: RecordingMode;
@@ -237,6 +243,7 @@ export const IPC = {
   logout: 'auth:logout',
   startRecording: 'recording:start',
   stopRecording: 'recording:stop',
+  getRecordingPreview: 'recording:preview',
   listHistory: 'history:list',
   removeHistory: 'history:remove',
   historyContextMenu: 'history:contextMenu',

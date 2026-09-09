@@ -9,6 +9,8 @@ import {
   selectBestVariant,
 } from '../../../src/main/core/nico/hls';
 import type { StreamCookie } from '../../../src/main/core/nico/watch-protocol';
+import { silentLogger } from '../../../src/main/core/logger';
+import type { VideoSampleListener } from '../../../src/main/core/nico/video-sample';
 
 const BASE = 'https://example.test/hls/playlists/abc/def/multivariant/variant.m3u8';
 
@@ -180,7 +182,7 @@ https://cdn.test/seg/11.cmfv
     'https://cdn.test/seg/11.cmfv': encrypt(SEG2),
   };
 
-  const makeFetch = (deny: Set<string>) => {
+  const makeFetch = (deny: Set<string>, overrides: Record<string, Buffer | string> = {}) => {
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url =
@@ -190,7 +192,7 @@ https://cdn.test/seg/11.cmfv
         deny.delete(url);
         return new Response('forbidden', { status: 403 });
       }
-      const body = responses[url];
+      const body = overrides[url] ?? responses[url];
       return body === undefined
         ? new Response('not found', { status: 404 })
         : new Response(body, { status: 200 });
@@ -222,6 +224,89 @@ https://cdn.test/seg/11.cmfv
     // 鍵は 1 回だけ取得する
     expect(calls.filter((u) => u.endsWith('.key'))).toHaveLength(1);
   });
+
+  test('プレビューへ復号済み映像と初期化情報を渡し、失敗しても録画と取得回数を維持する', async () => {
+    const { fetchImpl, calls } = makeFetch(new Set());
+    const { sink, output } = collect();
+    const onVideoSample = vi.fn(() => {
+      throw new Error('preview failed');
+    });
+    const downloader = new HlsTrackDownloader({
+      label: 'video',
+      playlistUrl: 'https://cdn.test/media.m3u8',
+      cookies: () => [],
+      fetchImpl,
+      onVideoSample,
+    });
+    expect((await downloader.run(sink)).segments).toBe(2);
+    expect(onVideoSample).toHaveBeenNthCalledWith(1, { data: SEG1, init: INIT });
+    expect(onVideoSample).toHaveBeenNthCalledWith(2, { data: SEG2, init: INIT });
+    expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
+    expect(calls.filter((url) => url.endsWith('init.cmfv'))).toHaveLength(1);
+  });
+
+  test.each([true, false])(
+    '初期化情報の上限ログはプレビュー観測先がある場合だけ1回出す（%s）',
+    async (observe) => {
+      const debug = vi.fn();
+      const oversized = Buffer.alloc(1024 * 1024 + 1);
+      const changedInitPlaylist = playlist.replace(
+        '#EXTINF:3,\nhttps://cdn.test/seg/11.cmfv',
+        '#EXT-X-MAP:URI="https://cdn.test/init2.cmfv"\n#EXTINF:3,\nhttps://cdn.test/seg/11.cmfv',
+      );
+      const { fetchImpl } = makeFetch(new Set(), {
+        'https://cdn.test/media.m3u8': changedInitPlaylist,
+        'https://cdn.test/init.cmfv': oversized,
+        'https://cdn.test/init2.cmfv': oversized,
+      });
+      const { sink, output } = collect();
+      const downloader = new HlsTrackDownloader({
+        label: 'video',
+        playlistUrl: 'https://cdn.test/media.m3u8',
+        cookies: () => [],
+        fetchImpl,
+        onVideoSample: observe ? vi.fn() : undefined,
+        logger: { ...silentLogger, debug },
+      });
+      expect((await downloader.run(sink)).segments).toBe(2);
+      // 大きなBufferは要素ごとの深い比較を避け、全バイトをまとめて比較する。
+      expect(output().equals(Buffer.concat([oversized, SEG1, oversized, SEG2]))).toBe(true);
+      const diagnostic =
+        'video: preview skipped: initialization size 1048577 exceeds 1048576 bytes';
+      expect(debug.mock.calls.filter(([message]) => message === diagnostic)).toHaveLength(
+        observe ? 1 : 0,
+      );
+    },
+  );
+
+  test.each([1024 * 1024, 1024 * 1024 + 1])(
+    '初期化情報が %i bytes のとき上限内だけプレビューへ渡し、録画は全量保存する',
+    async (size) => {
+      const init = Buffer.alloc(size);
+      const { fetchImpl } = makeFetch(new Set(), { 'https://cdn.test/init.cmfv': init });
+      const { sink, output } = collect();
+      const onVideoSample = vi.fn<VideoSampleListener>();
+      const downloader = new HlsTrackDownloader({
+        label: 'video',
+        playlistUrl: 'https://cdn.test/media.m3u8',
+        cookies: () => [],
+        fetchImpl,
+        onVideoSample,
+      });
+
+      // 上限超過で表示用の通知を省いても、録画用データや完了結果は変えない。
+      expect(await downloader.run(sink)).toMatchObject({ reason: 'endlist', segments: 2 });
+      expect(output().equals(Buffer.concat([init, SEG1, SEG2]))).toBe(true);
+      if (size === 1024 * 1024) {
+        expect(onVideoSample).toHaveBeenCalledTimes(2);
+        const samples = onVideoSample.mock.calls.map(([sample]) => sample);
+        expect(samples.map((sample) => sample.data)).toEqual([SEG1, SEG2]);
+        for (const sample of samples) expect(sample.init?.equals(init)).toBe(true);
+      } else {
+        expect(onVideoSample).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   test('ffmpeg への書き込みが詰まっていても abort で終了する', async () => {
     const { fetchImpl, calls } = makeFetch(new Set());

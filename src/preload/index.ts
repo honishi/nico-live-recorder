@@ -7,6 +7,7 @@ import {
   type HistoryPage,
   type HistoryQuery,
   type RecordingInfo,
+  type RecordingPreview,
   type TargetAddResult,
   type TargetRemovalResult,
   type TargetUser,
@@ -46,6 +47,12 @@ const api = {
     ipcRenderer.invoke(IPC.startRecording, input),
   stopRecording: (programId: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.stopRecording, programId),
+  getRecordingPreview: (
+    programId: string,
+    visible: boolean,
+    after?: number,
+  ): Promise<RecordingPreview | undefined> =>
+    ipcRenderer.invoke(IPC.getRecordingPreview, programId, visible, after),
   listHistory: (query: HistoryQuery): Promise<HistoryPage> =>
     ipcRenderer.invoke(IPC.listHistory, query),
   removeHistory: (programId: string): Promise<boolean> =>
