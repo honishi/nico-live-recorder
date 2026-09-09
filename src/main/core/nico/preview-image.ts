@@ -32,7 +32,8 @@ export function extractPreviewImage(
         '-frames:v',
         '1',
         '-vf',
-        'scale=320:180:force_original_aspect_ratio=decrease',
+        // FFmpeg 8.0系のx86で、外部ASM無効時に縮小画像が壊れるMMX経路を避ける。
+        'scale=320:180:force_original_aspect_ratio=decrease:flags=bicubic+accurate_rnd',
         '-filter_threads',
         '1',
         '-threads',

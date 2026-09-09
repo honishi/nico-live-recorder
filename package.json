@@ -49,6 +49,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.11.0",
+    "jpeg-js": "0.4.4",
     "prettier": "^3.3.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
