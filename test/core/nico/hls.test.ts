@@ -9,6 +9,7 @@ import {
   selectBestVariant,
 } from '../../../src/main/core/nico/hls';
 import type { StreamCookie } from '../../../src/main/core/nico/watch-protocol';
+import { silentLogger } from '../../../src/main/core/logger';
 
 const BASE = 'https://example.test/hls/playlists/abc/def/multivariant/variant.m3u8';
 
@@ -180,7 +181,7 @@ https://cdn.test/seg/11.cmfv
     'https://cdn.test/seg/11.cmfv': encrypt(SEG2),
   };
 
-  const makeFetch = (deny: Set<string>) => {
+  const makeFetch = (deny: Set<string>, overrides: Record<string, Buffer | string> = {}) => {
     const calls: string[] = [];
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {
       const url =
@@ -190,7 +191,7 @@ https://cdn.test/seg/11.cmfv
         deny.delete(url);
         return new Response('forbidden', { status: 403 });
       }
-      const body = responses[url];
+      const body = overrides[url] ?? responses[url];
       return body === undefined
         ? new Response('not found', { status: 404 })
         : new Response(body, { status: 200 });
@@ -242,6 +243,39 @@ https://cdn.test/seg/11.cmfv
     expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
     expect(calls.filter((url) => url.endsWith('init.cmfv'))).toHaveLength(1);
   });
+
+  test.each([true, false])(
+    '初期化情報の上限ログはプレビュー観測先がある場合だけ1回出す（%s）',
+    async (observe) => {
+      const debug = vi.fn();
+      const oversized = Buffer.alloc(1024 * 1024 + 1);
+      const changedInitPlaylist = playlist.replace(
+        '#EXTINF:3,\nhttps://cdn.test/seg/11.cmfv',
+        '#EXT-X-MAP:URI="https://cdn.test/init2.cmfv"\n#EXTINF:3,\nhttps://cdn.test/seg/11.cmfv',
+      );
+      const { fetchImpl } = makeFetch(new Set(), {
+        'https://cdn.test/media.m3u8': changedInitPlaylist,
+        'https://cdn.test/init.cmfv': oversized,
+        'https://cdn.test/init2.cmfv': oversized,
+      });
+      const { sink, output } = collect();
+      const downloader = new HlsTrackDownloader({
+        label: 'video',
+        playlistUrl: 'https://cdn.test/media.m3u8',
+        cookies: () => [],
+        fetchImpl,
+        onVideoSample: observe ? vi.fn() : undefined,
+        logger: { ...silentLogger, debug },
+      });
+      expect((await downloader.run(sink)).segments).toBe(2);
+      expect(output()).toEqual(Buffer.concat([oversized, SEG1, oversized, SEG2]));
+      const diagnostic =
+        'video: preview skipped: initialization size 1048577 exceeds 1048576 bytes';
+      expect(debug.mock.calls.filter(([message]) => message === diagnostic)).toHaveLength(
+        observe ? 1 : 0,
+      );
+    },
+  );
 
   test('ffmpeg への書き込みが詰まっていても abort で終了する', async () => {
     const { fetchImpl, calls } = makeFetch(new Set());

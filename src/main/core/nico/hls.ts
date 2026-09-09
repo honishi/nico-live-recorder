@@ -1,4 +1,4 @@
-import { offerVideoSample, type VideoSampleListener } from './video-sample';
+import { MAX_PREVIEW_INIT_BYTES, offerVideoSample, type VideoSampleListener } from './video-sample';
 import { decryptHlsSegment } from './hls-crypto';
 import { once } from 'node:events';
 import type { Writable } from 'node:stream';
@@ -310,6 +310,7 @@ export class HlsTrackDownloader {
     let lastPlaylist: { url: string; text: string } | undefined;
     let sentMapUri: string | undefined;
     let previewInit: Buffer | undefined;
+    let previewInitLimitLogged = false;
     let lastProgressAt = Date.now();
 
     const write = async (chunk: Buffer): Promise<void> => {
@@ -357,7 +358,18 @@ export class HlsTrackDownloader {
             const init = await this.fetchWithRetry(segment.mapUri, signal, playlistUrl);
             await write(init);
             // 表示用には小さな初期化情報だけを保持し、セグメントの履歴は溜めない。
-            previewInit = this.onVideoSample && init.length <= 1024 * 1024 ? init : undefined;
+            previewInit =
+              this.onVideoSample && init.length <= MAX_PREVIEW_INIT_BYTES ? init : undefined;
+            if (
+              this.onVideoSample &&
+              init.length > MAX_PREVIEW_INIT_BYTES &&
+              !previewInitLimitLogged
+            ) {
+              previewInitLimitLogged = true;
+              this.logger.debug(
+                `${this.label}: preview skipped: initialization size ${init.length} exceeds ${MAX_PREVIEW_INIT_BYTES} bytes`,
+              );
+            }
             sentMapUri = segment.mapUri;
           }
           let data: Buffer;

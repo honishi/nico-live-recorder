@@ -1,3 +1,7 @@
+/** 録画データ自体の保存は制限せず、補助画像へ渡す量だけを制限する。 */
+export const MAX_PREVIEW_SAMPLE_BYTES = 16 * 1024 * 1024;
+export const MAX_PREVIEW_INIT_BYTES = 1024 * 1024;
+
 /** 復号済みの1セグメントと、そのセグメントに対応する fMP4 初期化情報。 */
 export interface VideoSample {
   data: Buffer;

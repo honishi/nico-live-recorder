@@ -177,7 +177,11 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     after?: number,
   ): RecordingPreview | undefined {
     const recording = this.active.get(programId);
-    if (!visible || this.stopped || !recording || recording.controller.signal.aborted) {
+    if (this.stopped || !recording || recording.controller.signal.aborted) {
+      this.previews.forget(programId);
+      return undefined;
+    }
+    if (!visible) {
       this.previews.remove(programId);
       return undefined;
     }
@@ -808,7 +812,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               attempt,
               // 既存ファイルと重ならない連番を recorder が選ぶので、実際の値をここで受け取る
               onPaths: (paths) => {
-                this.previews.remove(programId);
+                this.previews.forget(programId);
                 info.attempt = paths.attempt;
                 info.videoPath = paths.videoPath;
                 if (!info.videoPaths?.includes(paths.videoPath)) {
@@ -991,7 +995,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           clearInterval(recording.sizeTimer);
         }
         info.endedAt = new Date().toISOString();
-        this.previews.remove(programId);
+        this.previews.forget(programId);
         this.active.delete(programId);
         this.history.upsert(info);
         this.historyVersionCounter += 1;
@@ -1006,7 +1010,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     if (!recording) {
       return false;
     }
-    this.previews.remove(programId);
+    this.previews.forget(programId);
     recording.info.state = 'finishing';
     if (recording.info.mode === 'timeshift') recording.info.completion = 'cancelled';
     this.manuallyStopped.add(programId);

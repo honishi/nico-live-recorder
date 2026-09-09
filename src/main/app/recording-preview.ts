@@ -1,13 +1,15 @@
 import type { RecordingPreview } from '../../shared/types';
 import type { Logger } from '../core/logger';
 import { extractPreviewImage } from '../core/nico/preview-image';
-import type { VideoSample } from '../core/nico/video-sample';
+import {
+  MAX_PREVIEW_INIT_BYTES,
+  MAX_PREVIEW_SAMPLE_BYTES,
+  type VideoSample,
+} from '../core/nico/video-sample';
 
 const INTERVAL_MS = 5_000;
 const LEASE_MS = 3_000;
 const SAMPLE_FRESH_MS = 15_000;
-const MAX_SAMPLE_BYTES = 16 * 1024 * 1024;
-const MAX_INIT_BYTES = 1024 * 1024;
 
 interface Entry {
   expiresAt: number;
@@ -19,6 +21,8 @@ interface Entry {
 /** 表示中のカードだけを対象にし、アプリ全体で画像生成を1件に制限する。 */
 export class RecordingPreviews {
   private readonly entries = new Map<string, Entry>();
+  /** タブの切替ではリセットせず、同じ録画パートの診断を繰り返さない。 */
+  private readonly sizeLimitLogged = new Set<string>();
   private running?: { programId: string; controller: AbortController };
 
   constructor(
@@ -48,8 +52,18 @@ export class RecordingPreviews {
     }
     const entry = this.entries.get(programId);
     if (!entry) return;
-    if (sample.data.length > MAX_SAMPLE_BYTES || (sample.init?.length ?? 0) > MAX_INIT_BYTES)
+    if (
+      sample.data.length > MAX_PREVIEW_SAMPLE_BYTES ||
+      (sample.init?.length ?? 0) > MAX_PREVIEW_INIT_BYTES
+    ) {
+      if (!this.sizeLimitLogged.has(programId)) {
+        this.sizeLimitLogged.add(programId);
+        this.logger.debug(
+          `[rec] preview skipped for ${programId}: size limit (segment ${sample.data.length}/${MAX_PREVIEW_SAMPLE_BYTES} bytes, init ${sample.init?.length ?? 0}/${MAX_PREVIEW_INIT_BYTES} bytes)`,
+        );
+      }
       return;
+    }
     entry.sampleAt = now;
     if (this.running || entry.nextAt > now) return;
     // 同時に届く複数番組を公平に扱う。画像化を待っている番組の次のサンプルに譲る。
@@ -91,6 +105,12 @@ export class RecordingPreviews {
   remove(programId: string): void {
     this.entries.delete(programId);
     if (this.running?.programId === programId) this.running.controller.abort();
+  }
+
+  /** 録画パートが終わったときは、画像だけでなく診断済みIDも解放する。 */
+  forget(programId: string): void {
+    this.remove(programId);
+    this.sizeLimitLogged.delete(programId);
   }
 
   clear(): void {

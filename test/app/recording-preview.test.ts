@@ -128,6 +128,44 @@ describe('録画プレビューの負荷制限', () => {
     expect(extract).not.toHaveBeenCalled();
   });
 
+  test.each(['segment', 'init'])(
+    '%s の上限ログは購読し直しても1回だけで、次パートでは再び記録する',
+    async (kind) => {
+      const debug = vi.fn();
+      const extract = vi.fn().mockResolvedValue(jpeg);
+      const previews = new RecordingPreviews({ ...silentLogger, debug }, extract);
+      const oversized =
+        kind === 'segment'
+          ? { data: Buffer.alloc(16 * 1024 * 1024 + 1) }
+          : { data: sample.data, init: Buffer.alloc(1024 * 1024 + 1) };
+      previews.offer('lv1', oversized);
+      expect(debug).not.toHaveBeenCalled();
+      previews.request('lv1');
+      previews.offer('lv1', oversized);
+      previews.offer('lv1', oversized);
+      expect(debug).toHaveBeenCalledExactlyOnceWith(
+        `[rec] preview skipped for lv1: size limit (segment ${oversized.data.length}/16777216 bytes, init ${oversized.init?.length ?? 0}/1048576 bytes)`,
+      );
+      previews.remove('lv1');
+      previews.request('lv1');
+      previews.offer('lv1', oversized);
+      previews.clear();
+      previews.request('lv1');
+      previews.offer('lv1', oversized);
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(extract).not.toHaveBeenCalled();
+
+      // 上限を下回る映像に戻れば、そのパートのプレビューも再び生成できる。
+      previews.offer('lv1', sample);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(previews.request('lv1')?.dataUrl).toContain('data:image/jpeg;base64,');
+      previews.forget('lv1');
+      previews.request('lv1');
+      previews.offer('lv1', oversized);
+      expect(debug).toHaveBeenCalledTimes(2);
+    },
+  );
+
   test('同期した3番組に順番を譲り、映像が途絶えた番組には待ち続けない', async () => {
     const extract = vi.fn().mockResolvedValue(jpeg);
     const previews = new RecordingPreviews(silentLogger, extract);
