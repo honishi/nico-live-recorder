@@ -3,6 +3,7 @@ import { resolveFfmpegPath } from './ffmpeg';
 import type { VideoSample } from './video-sample';
 
 const MAX_IMAGE_BYTES = 256 * 1024;
+const MAX_STDERR_BYTES = 2 * 1024;
 
 /** 必要なセグメントだけを別プロセスで読み、最初のキーフレーム1枚を JPEG にする。 */
 export function extractPreviewImage(
@@ -44,11 +45,12 @@ export function extractPreviewImage(
         'image2pipe',
         'pipe:1',
       ],
-      { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true },
+      { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
     );
     const chunks: Buffer[] = [];
     let bytes = 0;
     let failure: Error | undefined;
+    let stderr = Buffer.alloc(0);
     const stop = (error: Error): void => {
       failure ??= error;
       child.kill('SIGKILL');
@@ -63,15 +65,32 @@ export function extractPreviewImage(
       if (bytes > MAX_IMAGE_BYTES) stop(new Error('preview image too large'));
       else chunks.push(chunk);
     });
+    // 診断は末尾2KiBだけ保持する。大量のエラーでもメモリやログを膨らませない。
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = Buffer.concat([stderr, chunk.subarray(-MAX_STDERR_BYTES)]).subarray(
+        -MAX_STDERR_BYTES,
+      );
+    });
     child.on('error', (error) => {
       failure = error;
     });
-    child.once('close', (code) => {
+    child.once('close', (code, exitSignal) => {
       clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
       const image = Buffer.concat(chunks);
       if (failure || code !== 0 || image[0] !== 0xff || image[1] !== 0xd8) {
-        reject(failure ?? new Error('preview image unavailable'));
+        // 最後の2行と終了理由を1行にまとめ、通常のdebugログで切り分けられるようにする。
+        const detail = stderr
+          .toString('utf8')
+          .split(/[\r\n]+/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .slice(-2)
+          .join(' | ');
+        const reason =
+          failure?.message ??
+          `preview image unavailable (ffmpeg exit ${code ?? exitSignal ?? 'unknown'})`;
+        reject(new Error(detail ? `${reason}: ${detail}` : reason));
       } else resolve(image);
     });
 

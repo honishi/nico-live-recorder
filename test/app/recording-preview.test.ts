@@ -101,15 +101,15 @@ describe('録画プレビューの負荷制限', () => {
   });
 
   test('デコード失敗は録画へ伝えず、次のサンプルで回復する', async () => {
-    const extract = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('decode failed'))
-      .mockResolvedValue(jpeg);
-    const previews = new RecordingPreviews(silentLogger, extract);
+    const failure = new Error('decode failed');
+    const debug = vi.fn();
+    const extract = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(jpeg);
+    const previews = new RecordingPreviews({ ...silentLogger, debug }, extract);
     previews.request('lv1');
     expect(() => previews.offer('lv1', sample)).not.toThrow();
     await vi.advanceTimersByTimeAsync(0);
     expect(previews.request('lv1')).toBeUndefined();
+    expect(debug).toHaveBeenCalledExactlyOnceWith('[rec] preview unavailable for lv1', failure);
     await vi.advanceTimersByTimeAsync(5_000);
     previews.request('lv1');
     previews.offer('lv1', sample);

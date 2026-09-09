@@ -79,9 +79,9 @@ export class RecordingPreviews {
           capturedAt: now,
         };
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!job.controller.signal.aborted)
-          this.logger.debug(`[rec] preview unavailable for ${programId}`);
+          this.logger.debug(`[rec] preview unavailable for ${programId}`, error);
       })
       .finally(() => {
         if (this.running === job) this.running = undefined;

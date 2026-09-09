@@ -9,6 +9,7 @@ function fakeChild() {
   return Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
+    stderr: new PassThrough(),
     kill: vi.fn(),
   });
 }
@@ -82,6 +83,45 @@ describe('プレビュー画像の別プロセス生成', () => {
     child.emit('error', new Error('spawn failed'));
     child.emit('close', -1);
     await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  test('生成失敗には終了コードとstderrの末尾2行だけを含める', async () => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const task = extractPreviewImage(
+      { data: Buffer.from('segment') },
+      new AbortController().signal,
+      '/fake/ffmpeg',
+    );
+    const rejected = expect(task).rejects.toThrow(
+      'preview image unavailable (ffmpeg exit 1): Unknown encoder mjpeg | Error opening output',
+    );
+    child.stderr.write('old diagnostic\nUnknown encoder ');
+    child.stderr.write('mjpeg\r\nError opening output\n');
+    child.emit('close', 1);
+    await rejected;
+  });
+
+  test('大量のstderrも末尾2KiBに制限し、停止理由を維持する', async () => {
+    const child = fakeChild();
+    spawn.mockReturnValue(child);
+    const task = extractPreviewImage(
+      { data: Buffer.from('segment') },
+      new AbortController().signal,
+      '/fake/ffmpeg',
+    );
+    const failure = task.catch((error: unknown) => error as Error);
+    child.stderr.write('old-prefix' + 'x'.repeat(100_000));
+    child.stderr.write('latest-detail');
+    await vi.advanceTimersByTimeAsync(3_000);
+    child.emit('close', null, 'SIGKILL');
+    const error = await failure;
+    expect(error).toBeInstanceOf(Error);
+    if (!(error instanceof Error)) throw new Error('expected rejection');
+    expect(error.message).toBe(
+      'preview timed out: ' + 'x'.repeat(2048 - 'latest-detail'.length) + 'latest-detail',
+    );
     expect(vi.getTimerCount()).toBe(0);
   });
 });
