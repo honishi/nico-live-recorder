@@ -10,6 +10,7 @@ import {
 } from '../../../src/main/core/nico/hls';
 import type { StreamCookie } from '../../../src/main/core/nico/watch-protocol';
 import { silentLogger } from '../../../src/main/core/logger';
+import type { VideoSampleListener } from '../../../src/main/core/nico/video-sample';
 
 const BASE = 'https://example.test/hls/playlists/abc/def/multivariant/variant.m3u8';
 
@@ -268,7 +269,8 @@ https://cdn.test/seg/11.cmfv
         logger: { ...silentLogger, debug },
       });
       expect((await downloader.run(sink)).segments).toBe(2);
-      expect(output()).toEqual(Buffer.concat([oversized, SEG1, oversized, SEG2]));
+      // 大きなBufferは要素ごとの深い比較を避け、全バイトをまとめて比較する。
+      expect(output().equals(Buffer.concat([oversized, SEG1, oversized, SEG2]))).toBe(true);
       const diagnostic =
         'video: preview skipped: initialization size 1048577 exceeds 1048576 bytes';
       expect(debug.mock.calls.filter(([message]) => message === diagnostic)).toHaveLength(
@@ -283,7 +285,7 @@ https://cdn.test/seg/11.cmfv
       const init = Buffer.alloc(size);
       const { fetchImpl } = makeFetch(new Set(), { 'https://cdn.test/init.cmfv': init });
       const { sink, output } = collect();
-      const onVideoSample = vi.fn();
+      const onVideoSample = vi.fn<VideoSampleListener>();
       const downloader = new HlsTrackDownloader({
         label: 'video',
         playlistUrl: 'https://cdn.test/media.m3u8',
@@ -294,11 +296,12 @@ https://cdn.test/seg/11.cmfv
 
       // 上限超過で表示用の通知を省いても、録画用データや完了結果は変えない。
       expect(await downloader.run(sink)).toMatchObject({ reason: 'endlist', segments: 2 });
-      expect(output()).toEqual(Buffer.concat([init, SEG1, SEG2]));
+      expect(output().equals(Buffer.concat([init, SEG1, SEG2]))).toBe(true);
       if (size === 1024 * 1024) {
         expect(onVideoSample).toHaveBeenCalledTimes(2);
-        expect(onVideoSample).toHaveBeenNthCalledWith(1, { data: SEG1, init });
-        expect(onVideoSample).toHaveBeenNthCalledWith(2, { data: SEG2, init });
+        const samples = onVideoSample.mock.calls.map(([sample]) => sample);
+        expect(samples.map((sample) => sample.data)).toEqual([SEG1, SEG2]);
+        for (const sample of samples) expect(sample.init?.equals(init)).toBe(true);
       } else {
         expect(onVideoSample).not.toHaveBeenCalled();
       }
