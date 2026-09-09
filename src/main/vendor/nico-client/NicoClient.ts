@@ -7,7 +7,12 @@ import { DEFAULT_USER_AGENT } from './internal/userAgent';
 import { ProtobufStreamReader } from './internal/protobufStreamReader';
 import { int64ToSafeInteger } from './internal/int64';
 import { getProtoRegistry } from './internal/protoLoader';
-import { ViewUriNotReceivedError, ViewUriTimeoutError } from './errors';
+import {
+  CommentViewMarkerMissingError,
+  CommentViewStalledError,
+  ViewUriNotReceivedError,
+  ViewUriTimeoutError,
+} from './errors';
 import { isRetryableNicoError, isRetryableNicoHttpStatus } from './retryPolicy';
 import {
   CommentColor,
@@ -145,6 +150,17 @@ export class NicoClient {
   static readonly AccessDeniedErrorName = 'AccessDeniedError';
   private static readonly defaultRetryBackoffMs = [1000, 2000, 4000];
   private static readonly defaultViewUriTimeoutMs = 15000;
+  private static readonly minViewIntervalMs = 1000;
+  private static readonly minViewFailures = 10;
+  private static readonly viewRecoveryTimeoutMs = 10 * 60_000;
+  private static readonly maxViewBackoffMs = 30_000;
+
+  private static viewBackoffMs(failures: number): number {
+    return Math.min(
+      NicoClient.maxViewBackoffMs,
+      NicoClient.minViewIntervalMs * 2 ** Math.min(Math.max(failures - 1, 0), 5),
+    );
+  }
 
   constructor(
     private readonly programId: string,
@@ -184,7 +200,30 @@ export class NicoClient {
       const state = this.createStreamState(options);
       state.nextAt = options.startPosition === 'lastKnown' ? undefined : 'now';
 
+      let lastViewStartedAt = -Infinity;
+      let latestCursor: number | undefined;
+      let stalledViews = 0;
+      let stalledSince: number | undefined;
+      let missingViews = 0;
+      let missingSince: number | undefined;
+      let recoveryWarned = false;
+      // 停滞と欠落が混在しても、回復するまでは警告を一度だけ出す。
+      const warnIfRecoveryContinues = (failures: number): void => {
+        if (!recoveryWarned && failures >= NicoClient.minViewFailures) {
+          recoveryWarned = true;
+          this.logger.warn(
+            'コメントの取得位置の異常が続いています。取得間隔をあけて回復を待っています。',
+          );
+        }
+      };
+
       while (!options.signal?.aborted) {
+        // 即時応答は最低1秒、停滞中は最大30秒に間隔を延ばして回復を待つ。
+        const intervalMs = NicoClient.viewBackoffMs(stalledViews);
+        const waitMs = intervalMs - (performance.now() - lastViewStartedAt);
+        if (waitMs > 0) await this.delay(waitMs, options.signal);
+        if (options.signal?.aborted) return;
+        lastViewStartedAt = performance.now();
         this.resetStreamState(state);
 
         for await (const comment of this.processChunkEntries(viewUri, state, options)) {
@@ -214,9 +253,21 @@ export class NicoClient {
           if (options.signal?.aborted) {
             return;
           }
-          this.logger.warn(
+          // 成功HTTP応答でもnext欠落が続けば、再接続の頻度と継続時間を制限する。
+          missingViews += 1;
+          missingSince ??= performance.now();
+          if (
+            missingViews >= NicoClient.minViewFailures &&
+            performance.now() - missingSince >= NicoClient.viewRecoveryTimeoutMs
+          )
+            throw new CommentViewMarkerMissingError();
+          warnIfRecoveryContinues(missingViews);
+          this.logger.debug(
             'ChunkedEntry.next が取得できなかったため、viewUri を再取得してストリーミングを継続します。',
           );
+          // 番組ページ・WebSocketを取り直す前に待ち、待機中の停止では通信を増やさない。
+          await this.delay(NicoClient.viewBackoffMs(missingViews), options.signal);
+          if (options.signal?.aborted) return;
           try {
             programInfo = await this.fetchProgramInfo(options.signal);
             const nextWebSocketUrl = this.requireStreamableWebSocketUrl(programInfo);
@@ -236,11 +287,31 @@ export class NicoClient {
           this.logger.verbose?.(
             `Reconnected to viewUri ${viewUri} (count=${state.reconnectCount}).`,
           );
-          await this.delay(1000, options.signal);
           continue;
         }
 
-        state.nextAt = state.nextReadyAt;
+        // 投稿件数ではなく取得位置を見る。後退や循環で古い履歴を取り直し続けない。
+        const nextCursor = Number(state.nextReadyAt);
+        if (latestCursor !== undefined && nextCursor <= latestCursor) {
+          stalledViews += 1;
+          stalledSince ??= performance.now();
+          // 回数だけですぐ諦めず、10分以上回復しない場合に限って停止する。
+          if (
+            stalledViews >= NicoClient.minViewFailures &&
+            performance.now() - stalledSince >= NicoClient.viewRecoveryTimeoutMs
+          )
+            throw new CommentViewStalledError();
+          warnIfRecoveryContinues(stalledViews);
+        } else {
+          latestCursor = nextCursor;
+          stalledViews = 0;
+          stalledSince = undefined;
+          // 古いnextを一度返すだけでは回復とみなさず、前進を確認して欠落の予算を戻す。
+          missingViews = 0;
+          missingSince = undefined;
+          recoveryWarned = false;
+        }
+        state.nextAt = String(latestCursor);
       }
     } catch (error) {
       if (error instanceof Error && error.name === NicoClient.ProgramEndedErrorName) {

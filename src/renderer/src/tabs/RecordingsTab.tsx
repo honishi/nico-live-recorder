@@ -232,7 +232,7 @@ function ManualRecordForm(): ReactElement {
       <div className="field-row">
         <input
           className={`input ${error ? 'invalid' : ''}`}
-          placeholder="手動録画: lv123456789 または視聴ページの URL"
+          placeholder="番組 ID または URL（タイムシフトも録画できます）"
           value={input}
           onChange={(e) => {
             setInput(e.target.value);
@@ -244,9 +244,6 @@ function ManualRecordForm(): ReactElement {
           {pending ? '開始中…' : '録画開始'}
         </button>
       </div>
-      <span className="muted">
-        終了済みの放送は、ログイン中のアカウントで視聴できるタイムシフトを保存します。
-      </span>
       {error && <span className="field-error">{error}</span>}
     </form>
   );

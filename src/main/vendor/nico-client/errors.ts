@@ -1,5 +1,23 @@
 import type { HttpError } from './internal/httpClient';
 
+export class CommentViewStalledError extends Error {
+  public readonly code = 'COMMENT_VIEW_STALLED' as const;
+
+  constructor() {
+    super('コメントの取得位置が回復しないため、コメント取得を停止しました。');
+    this.name = 'CommentViewStalledError';
+  }
+}
+
+export class CommentViewMarkerMissingError extends Error {
+  public readonly code = 'COMMENT_VIEW_MARKER_MISSING' as const;
+
+  constructor() {
+    super('コメントの取得位置の欠落が解消しないため、コメント取得を停止しました。');
+    this.name = 'CommentViewMarkerMissingError';
+  }
+}
+
 export class ViewUriNotReceivedError extends Error {
   public readonly code = 'VIEW_URI_NOT_RECEIVED' as const;
 

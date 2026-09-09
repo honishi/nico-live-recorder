@@ -55,6 +55,8 @@
 
 ### メタデータ JSON
 
+#### ライブ録画
+
 録画パートの開始時に番組情報を書き、終了時にそのパートの結果で更新します。番組全体の累計は `recording-history.json` に記録します。
 
 - `programId` / `program`: 番組 ID と取得した番組情報 (タイトル、配信者、放送開始日時など)。
@@ -65,11 +67,23 @@
 
 `recordedAt` と `video` / `comments` の日時は UTC の ISO 8601 (`Z` 終端) です。ファイル名とコメント CSV の投稿時刻は日本時間です。
 
-タイムシフトのJSONには `mode: timeshift` を付け、番組情報はタイトル・配信者・開始/終了時刻だけを列挙します。視聴URLやCookieは保存しません。`recordedAt` は今回の取得開始、`updatedAt` は更新時刻です。`timeshift` に完了区分、進捗、各トラックの予定数・保存数・欠落数・HTTPステータス、コメントの取得範囲の状態・理由・件数・重複数・不正件数・ソート済みかを保存します。コメントの `complete` は提供されたスナップショットの読了を意味し、番組の全コメントが揃った保証ではありません。開始直後に失敗した項目は結果がない場合があります。
+#### タイムシフト録画
+
+タイムシフトのJSONには `mode: timeshift` を付け、番組情報はタイトル・配信者・開始/終了時刻だけを列挙します。視聴URLやCookieは保存しません。`recordedAt` は今回の取得開始、`updatedAt` は更新時刻です。`timeshift` に完了区分、進捗、各トラックの予定数・保存数・欠落数・HTTPステータス、コメントの取得範囲の状態・理由・件数・重複数・不正件数・ソート済みかを保存します。
+
+最上位の `video` は停止理由と映像・音声のセグメント数、`comments` は件数のみで、ライブの日時・バイト数の構造とは異なります。動画の取得開始・終了時刻は `timeshift.video`、コメントの取得開始・終了時刻は `timeshift.comments` にUTCのISO 8601で保存します。
+
+`timeshift.progress` には段階・保存済み/予定セグメント数・コメント状態が入ります。UIの進捗と同じ型ですが、JSONの書き込みは開始時と終了時だけで、取得中に逐次更新はしません。推定残り秒数は保存段階で解除され、通常の終了JSONには残りません。
+
+コメントの `complete` は提供されたスナップショットの読了を意味し、番組の全コメントが揃った保証ではありません。開始直後に失敗した項目は結果がない場合があります。
 
 `timeshift.video.playlists` には映像・音声別にタグ数、不連続境界の位置（0始まりのセグメント番号と秒数）、前後が空白か本編か、実データの連続性を確認する境界数を保存します。未対応タグで停止した場合も診断を残します。境界・未対応タグの詳細は各40件までで、URIや属性値は含めません。
 
 `timeshift.comments.viewRequests` には、コメントの入口となるView要求ごとの所要時間（`durationMs`）と受信エントリー数（`entries`）を保存します。Viewの60秒の待機上限に達した場合は `COMMENT_VIEW_TIMEOUT`、通常のコメントファイル取得の待機上限は `COMMENT_REQUEST_TIMEOUT` として区別します。
+
+タイムシフトの中断理由は `USER_CANCELLED`（停止）、`COMMENT_TOTAL_TIMEOUT`（コメント全体の30分上限）、`VIDEO_FAILED`（映像起因の中断）、接続エラーの固定コード、`OUTPUT_MISSING`（録画中の動画消失）を区別します。映像起因のコメント中断はJSONへ残し、画面の重複エラーは抑えます。不正な投稿時刻のコメントは除外・集計し、後続を保存して `INVALID_COMMENT_TIME` の一部失敗とします。部分動画でも `timeshift.video.ffmpegExitCode` にFFmpegの終了コードを残します。
+
+全セグメントの取得試行とFFmpegの正常終了後の欠落は `SEGMENTS_INCOMPLETE` とし、コメントを中断せず残りの履歴を取得します。最上位の `video` は省略されますが、部分TSと `timeshift.video` の診断は残ります。`timeshift.completion` は `partial`、アプリ履歴は `failed`（画面では「中断」）となります。
 
 ### コメント CSV
 
@@ -84,16 +98,15 @@ at,no,content,vpos,rawUserId,hashedUserId,accountStatus,position,size,color,font
 - ヘッダーは英語の列名、データの各フィールドはダブルクオートで囲みます。内部の `"` は `""` とし、本文の改行・タブはそのまま保持します。複数行の本文も1レコードです。
 - 数式に見える本文も補正せず保存します。CSV の引用符は文字列型を指定しないため、表計算ソフトの読み込み方によっては数式として扱われます。
 - レコード間の改行は LF です。引用符のエスケープは RFC 4180 に倣いますが、CRLF を使う厳密な準拠形式ではありません。
-- コメントが0件でも BOM とヘッダーを保存します。再開時は重複して書かず、既存ファイルの先頭が想定する BOM・ヘッダーと一致しなければ追記を中止します。コメント保存が失敗しても映像録画は続行します。
+- コメントの保存処理が始まれば、0件でも BOM とヘッダーを保存します。タイムシフトで接続前に失敗した場合は空の予約CSVを除去し、CSVが残らない場合があります。ライブでCSVに追記する際はBOM・ヘッダーを重複して書かず、既存ファイルの先頭が想定する BOM・ヘッダーと一致しなければ追記を中止します。コメント保存が失敗しても映像録画は続行します。
 - JSONL の新規保存や形式の選択はありません。過去の `.comments.jsonl` は変換・追記・削除しません。旧形式の履歴がある番組を録り直す場合は CSV を新規に作り、取得できる過去コメントも取得します。履歴のコメント数は新しい CSV の件数になります。
 
 ## 開発用スクリプト (手動で実行したときだけ)
 
-| スクリプト                   | 出力                                                                                                                        |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/record.ts`          | 引数の出力先 (既定 `./recordings/`) の直下に映像・コメント・メタデータ。配信者フォルダとアプリの録画履歴は作らない          |
-| `scripts/record-comments.ts` | 既定 `./recordings/<lv番号>.comments.csv`                                                                                   |
-| `scripts/push-listen.ts`     | 既定 `./recordings/push-state.json`                                                                                         |
-| `scripts/e2e-screenshots.ts` | 引数の出力先 (既定 `./recordings/screenshots/`) にスクリーンショット、`electron.log`、隔離用の `userdata/` と `recordings/` |
-
-タイムシフトの中断理由は `USER_CANCELLED`（停止）、`COMMENT_TOTAL_TIMEOUT`（コメント全体の30分上限）、`VIDEO_FAILED`（映像起因の中断）、接続エラーの固定コード、`OUTPUT_MISSING`（録画中の動画消失）を区別します。映像起因のコメント中断はJSONへ残し、画面の重複エラーは抑えます。不正な投稿時刻のコメントは除外・集計し、後続を保存して `INVALID_COMMENT_TIME` の一部失敗とします。部分動画でも `timeshift.video.ffmpegExitCode` にFFmpegの終了コードを残します。
+| スクリプト                   | 出力                                                                                                                                                        |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/timeshift-probe.ts` | 既定 `.cache/timeshift-probe/` の実行別ディレクトリに `report.json` と、モードに応じて `video.ts` / `comments.jsonl`。詳細は [検証手順](timeshift-probe.md) |
+| `scripts/record.ts`          | 引数の出力先 (既定 `./recordings/`) の直下に映像・コメント・メタデータ。配信者フォルダとアプリの録画履歴は作らない                                          |
+| `scripts/record-comments.ts` | 既定 `./recordings/<lv番号>.comments.csv`                                                                                                                   |
+| `scripts/push-listen.ts`     | 既定 `./recordings/push-state.json`                                                                                                                         |
+| `scripts/e2e-screenshots.ts` | 引数の出力先 (既定 `./recordings/screenshots/`) にスクリーンショット、`electron.log`、隔離用の `userdata/` と `recordings/`                                 |
