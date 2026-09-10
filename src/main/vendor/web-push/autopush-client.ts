@@ -116,6 +116,28 @@ export class AutoPushClient {
   // for diagnostics, but surface that user-initiated re-registration is needed.
   private subscriptionRepairRequired = false;
 
+  // 接続状態の変化はログとは独立して購読者へ伝える。
+  private readonly stateListeners = new Set<() => void>();
+  private notifiedConnected = false;
+  private notifiedRepairRequired = false;
+
+  onStateChanged(listener: () => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+
+  private notifyStateChanged(): void {
+    const connected = this.isConnectionOpen();
+    if (
+      connected === this.notifiedConnected &&
+      this.subscriptionRepairRequired === this.notifiedRepairRequired
+    )
+      return;
+    this.notifiedConnected = connected;
+    this.notifiedRepairRequired = this.subscriptionRepairRequired;
+    for (const listener of this.stateListeners) listener();
+  }
+
   // Message handlers
   private messageHandlers: Map<string, (data: unknown) => void> = new Map();
 
@@ -297,6 +319,7 @@ export class AutoPushClient {
           pushLog.debug('[AutoPush] Connected to:', this.endpoint);
           pushDiagnostics.record('ws_open');
           this.isConnected = true;
+          this.notifyStateChanged();
           this.lastConnectedAt = new Date();
           this.lastActivityAt = Date.now();
 
@@ -340,6 +363,7 @@ export class AutoPushClient {
           pushDiagnostics.record('ws_error');
           if (this.ws === socket) {
             this.isConnected = false;
+            this.notifyStateChanged();
           }
           // Always settle this connect attempt's promise
           reject(error);
@@ -368,6 +392,7 @@ export class AutoPushClient {
             intentional: this.intentionalDisconnect,
           });
           this.isConnected = false;
+          this.notifyStateChanged();
           this.handleDisconnect();
         };
       } catch (error) {
@@ -406,6 +431,7 @@ export class AutoPushClient {
     this.channelIds = [];
     this.subscriptionRepairRequired = false;
     this.pendingOperations.clear();
+    this.notifyStateChanged();
   }
 
   /**
@@ -679,6 +705,7 @@ export class AutoPushClient {
         '[AutoPush] Server reassigned the UAID; saved push endpoints require user-initiated repair',
       );
       this.subscriptionRepairRequired = true;
+      this.notifyStateChanged();
       // The saved channels belong to the old UAID. Reporting them as restored
       // would make the popup claim a healthy subscription while no endpoint
       // can deliver to this new session.
@@ -1123,6 +1150,7 @@ export class AutoPushClient {
     }
     this.ws = undefined;
     this.isConnected = false;
+    this.notifyStateChanged();
     this.handleDisconnect();
   }
 

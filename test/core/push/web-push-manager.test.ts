@@ -2,6 +2,7 @@ import {
   NotLoggedInError,
   WebPushManager,
   type PushStateStore,
+  type PushStatus,
   type PushSubscriptionState,
 } from '../../../src/main/core/push/web-push-manager';
 import { setPushLogger } from '../../../src/main/vendor/web-push/push-diagnostics';
@@ -159,6 +160,8 @@ describe('WebPushManager', () => {
       autoPushEndpoint: autopush.url,
     });
     await manager.start();
+    const receivedStatus = vi.fn<(status: PushStatus) => void>();
+    manager.on('status', receivedStatus);
     const programs: unknown[] = [];
     manager.on('program', (p) => programs.push(p));
 
@@ -184,6 +187,8 @@ describe('WebPushManager', () => {
     });
     await waitFor(() => autopush.acks.length === 1);
     expect(manager.getStatus().lastReceivedAt).toBeInstanceOf(Date);
+    expect(receivedStatus.mock.calls.at(-1)?.[0].lastReceivedAt).toBeInstanceOf(Date);
+    expect(receivedStatus.mock.calls.at(-1)?.[0].state).toBe('connected');
   });
 
   test('保存済みの購読は uaid 付きの hello で復元し、登録し直さない', async () => {
@@ -237,6 +242,8 @@ describe('WebPushManager', () => {
       const channelIds = [saved.channelId, saved.canary!.channelId];
       const registrations = fetchLog.filter((l) => l.url.includes('api.push.nicovideo.jp')).length;
       logs.length = 0;
+      const states: string[] = [];
+      manager.on('status', (status) => states.push(status.state));
 
       // HELLO 応答を保留して、以前の待機条件だけでは処理完了を保証しない順序を再現する。
       releaseHello = autopush.holdNextHello();
@@ -245,6 +252,7 @@ describe('WebPushManager', () => {
       await waitFor(() => autopush.hellos.length === 2, 5000);
       expect(autopush.hellos[1]).toMatchObject({ uaid: saved.uaid, channelIDs: channelIds });
       await waitFor(() => manager!.getStatus().state === 'connected', 5000);
+      expect(states).toEqual(['disconnected', 'connected']);
       expect(logs.some((l) => /reconnected after \d+s/.test(l.text))).toBe(false);
       expect(logs.some((l) => l.text.includes('Restored channel IDs from HELLO'))).toBe(false);
 

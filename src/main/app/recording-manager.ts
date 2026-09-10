@@ -252,6 +252,12 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     return removed;
   }
 
+  /** 外部での保存先変更を再確認し、録画一覧のファイル存在確認も促す。 */
+  refreshExternalState(): void {
+    this.outputDirCheck = undefined;
+    this.emitChange();
+  }
+
   /** ヘッダ直下のバナーに出す、解消するまで続く問題 (重い順に 1 件だけ) */
   async getAlerts(loggedIn: boolean): Promise<AppAlert[]> {
     const alerts: AppAlert[] = [];
@@ -831,13 +837,19 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
                 // クラッシュしてもこのパートのファイルが履歴から辿れるように、決まった時点で書く
                 this.history.upsert(info);
                 recording.snapshotAt = Date.now();
+                this.emitChange();
               },
               // コメントは最初のパートのファイルに追記し続ける
               commentsPath: mode === 'live' ? info.commentsPath : undefined,
               // コメントファイルを新しく作るときだけ過去分を取得する (既存ファイルへの追記では重複するため)
               prefetchBackwardComments: !info.commentsPath,
               onComment: (_comment, count) => {
-                info.commentCount = countBefore + count;
+                const total = countBefore + count;
+                if (info.commentCount !== total) {
+                  info.commentCount = total;
+                  // 画面への配信はまとめられるため、最後の1件も取りこぼさない。
+                  this.emitChange();
+                }
               },
             },
             AbortSignal.any([controller.signal, part.controller.signal]),

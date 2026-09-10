@@ -278,6 +278,44 @@ describe('RecordingManager', () => {
     await vi.advanceTimersByTimeAsync(ms);
   }
 
+  test('ログや映像の増加がなくてもファイル名と最後のコメント件数を通知する', async () => {
+    await manager.startRecording('lv1', 'manual');
+    const call = await nextRecordCall(0);
+    const changed = vi.fn();
+    manager.on('change', changed);
+    sendPaths(call, 1, path.join(dir, 'new.ts'), path.join(dir, 'new.comments.csv'));
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect((await manager.getRecordings())[0].videoPath).toBe(path.join(dir, 'new.ts'));
+    changed.mockClear();
+    call.options.onComment?.({} as never, 1);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect((await manager.getRecordings())[0].commentCount).toBe(1);
+    call.options.onComment?.({} as never, 1);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
+  test('画面からの再確認で保存先のキャッシュを更新する', async () => {
+    fs.mkdirSync(settings.get().outputDir, { recursive: true });
+    expect(await manager.getAlerts(true)).toEqual([]);
+    // OS や実行ユーザーの権限に依存せず、外部の権限変更を再現する。
+    const promises = await import('node:fs/promises');
+    const access = vi
+      .spyOn(promises.default, 'access')
+      .mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
+    try {
+      expect(await manager.getAlerts(true)).toEqual([]);
+      const changed = vi.fn();
+      manager.on('change', changed);
+      manager.refreshExternalState();
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(await manager.getAlerts(true)).toContainEqual(
+        expect.objectContaining({ kind: 'output-dir' }),
+      );
+    } finally {
+      access.mockRestore();
+    }
+  });
+
   test.each(['live', 'timeshift'] as const)(
     '%s のプレビューを録画と結線し、履歴へ保存せず停止時に解放する',
     async (mode) => {

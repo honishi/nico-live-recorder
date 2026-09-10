@@ -89,6 +89,19 @@ build/                        アプリアイコン (icns / ico と、その元�
 test/                         main・shared・vendor のテスト。偽サーバーは test/helpers/、多重化用メディアは test/fixtures/ffmpeg/
 ```
 
+### UI の更新通知
+
+アプリ状態・ログ・設定は別の IPC で配信します。`app-status.ts` が状態とログの取得を担当し、`ui-updates.ts` が変更イベントを配信へ結び付けます。
+
+- AutoPush の接続・切断・購読修復状態は `onStateChanged` → `WebPushManager` の `status` → `RecordingManager` の `change` で伝えます。最終受信時刻も `status` で通知します。接続済みの判定は従来どおり WebSocket の開通で、HELLO の完了とは区別します。
+- 録画の開始・終了・進捗・ファイル名確定・コメント件数は `change` で通知します。認証・設定・更新確認にもそれぞれ変更通知があります。ログを削除・抑制しても状態更新は届きます。
+- `app:statusChanged` はアプリ状態、`app:logsChanged` は表示対象のログ、`app:settingsChanged` は設定の再取得通知です。初期取得は `getStatus()`・`getLogs()`・`getSettings()` を使います。`AppStatus` にログは含めません。
+- ログの `entry` はログ配信だけを予約します。debug 非表示時の debug は配信せず、表示切り替え時に保持済みのログを載せ直します。ログのリングバッファ・ファイル出力・未読件数の扱いは維持します。
+- 各配信は200ms単位でまとめます。取得を並列に走らせず、取得中に変更された古い結果は送らず取り直します。Renderer は受信済みの通知を遅れた初期応答で上書きしません。設定の再取得は設定通知からだけ行います。
+- 保存先の書き込み可否と直近の録画ファイルの外部削除は、ウィンドウがフォーカスされたときと、表示中の30秒ごとの確認で反映します。履歴タブは従来どおりタブを開いたときや履歴変更時に再取得します。
+
+AutoPush の `onStateChanged` と状態変化の通知、および停止時の購読解除は流用コードへの独自追加です。上流の変更を取り込む際も、ログ出力と独立した通知を維持してください。
+
 ### 流用コードの独自変更
 
 stream-journal 由来の `vendor/nico-client/` には、このアプリで追加した独自変更があります。`NicoClient.ts` の `streamComments` にあるView要求の最小間隔、取得位置の停滞・後退・next欠落に対するバックオフと打ち切り、回復待ち中の一度だけの警告、および `errors.ts` の `CommentViewStalledError` / `CommentViewMarkerMissingError` が該当します。流用元の更新を取り込む際は、これらの保護を保持するか同等の処理へ置き換え、`test/vendor/nico-client/NicoClient.test.ts` と `test/core/recorder/comment-recorder.test.ts` で正常な受信・回復・停止・要求回数の上限を確認してください。この記載は独自変更の所在を示すもので、流用元の最新コードへの反映状況は確認していません。
