@@ -247,7 +247,11 @@ async function bootstrap(): Promise<void> {
     const window = ctx.getMainWindow();
     if (window?.isVisible() && !window.isMinimized()) manager.refreshExternalState();
   };
-  app.on('browser-window-focus', refreshVisibleState);
+  // ログイン用など、別ウィンドウのフォーカスではメイン画面の再確認を走らせない。
+  const refreshFocusedWindow = (_event: Electron.Event, window: BrowserWindow): void => {
+    if (window === ctx.getMainWindow()) refreshVisibleState();
+  };
+  app.on('browser-window-focus', refreshFocusedWindow);
   const externalStateTimer = setInterval(refreshVisibleState, 30_000);
 
   app.on('second-instance', showMainWindow);
@@ -266,7 +270,7 @@ async function bootstrap(): Promise<void> {
     updates.stop();
     uiUpdates.stop();
     clearInterval(externalStateTimer);
-    app.off('browser-window-focus', refreshVisibleState);
+    app.off('browser-window-focus', refreshFocusedWindow);
   });
   // 終了時は録画の停止処理 (ffmpeg の書き終わり、履歴の確定) とログの書き出しを待ってから抜ける
   let quitHandled = false;
