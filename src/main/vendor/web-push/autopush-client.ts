@@ -135,7 +135,18 @@ export class AutoPushClient {
       return;
     this.notifiedConnected = connected;
     this.notifiedRepairRequired = this.subscriptionRepairRequired;
-    for (const listener of this.stateListeners) listener();
+    for (const listener of this.stateListeners) {
+      try {
+        listener();
+      } catch (error) {
+        // 通知先の失敗で connect の完了や再接続、後続の購読者への通知を止めない。
+        try {
+          pushLog.error('[AutoPush] State listener failed:', error);
+        } catch {
+          // ログ出力先にも障害があっても、接続処理を継続する。
+        }
+      }
+    }
   }
 
   // Message handlers

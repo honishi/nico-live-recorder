@@ -46,6 +46,36 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+test.each([false, true])(
+  'リスナーが例外を投げても接続・再接続・停止と後続通知を続ける (ログ例外=%s)',
+  async (logThrows) => {
+    const report = vi.fn(() => {
+      if (logThrows) throw new Error('logger failed');
+    });
+    setPushLogger({ debug() {}, info() {}, warn() {}, error: report });
+    client.onStateChanged(() => {
+      throw new Error('listener failed');
+    });
+    const states: boolean[] = [];
+    client.onStateChanged(() => states.push(client.isConnectionOpen()));
+    const connecting = client.connect();
+    expect(() => FakeSocket.instances[0].open()).not.toThrow();
+    await connecting;
+    expect(states).toEqual([true]);
+    // close の通知が失敗しても、1秒後の再接続まで進む。
+    expect(() => FakeSocket.instances[0].drop()).not.toThrow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(() => FakeSocket.instances[1].open()).not.toThrow();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(() => client.disconnect()).not.toThrow();
+    expect(states).toEqual([true, false, true, false]);
+    expect(report).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+  },
+);
+
 test('ログ出力なしで切断・再接続を通知し、errorとcloseが続いても重複しない', async () => {
   const states: boolean[] = [];
   client.onStateChanged(() => states.push(client.isConnectionOpen()));
