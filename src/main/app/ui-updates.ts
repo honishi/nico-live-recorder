@@ -2,7 +2,7 @@ import type { AppStatus, LogEntry, UiState } from '../../shared/types';
 import { buildLogs, buildStatus } from './app-status';
 import type { IpcContext } from './ipc';
 
-/** 連続する更新をまとめ、取得中に新しい変更があれば古い結果を送らず取り直す。 */
+/** 連続する更新をまとめ、取得結果を順に配信してから、その間の変更を取り直す。 */
 export class LatestPublisher<T> {
   private timer?: NodeJS.Timeout;
   private running = false;
@@ -39,7 +39,8 @@ export class LatestPublisher<T> {
     const revision = this.revision;
     try {
       const value = await this.read();
-      if (!this.stopped && revision === this.revision) this.send(value);
+      // 取得は直列なので順序は逆転しない。変更が続いても配信を止めない。
+      if (!this.stopped) this.send(value);
     } catch (error) {
       if (!this.stopped) this.onError(error);
     } finally {

@@ -13,7 +13,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
-test('取得中の変更をまとめ直し、古い結果を送らず同時取得もしない', async () => {
+test('取得中の変更をまとめ直し、取得順に配信して同時取得を避ける', async () => {
   const first = deferred<number>();
   const read = vi
     .fn<() => Promise<number>>()
@@ -29,11 +29,42 @@ test('取得中の変更をまとめ直し、古い結果を送らず同時取�
   expect(read).toHaveBeenCalledTimes(1);
   first.resolve(1);
   await vi.advanceTimersByTimeAsync(0);
-  expect(send).not.toHaveBeenCalled();
+  expect(send).toHaveBeenCalledExactlyOnceWith(1);
   await vi.advanceTimersByTimeAsync(200);
   expect(read).toHaveBeenCalledTimes(2);
-  expect(send).toHaveBeenCalledExactlyOnceWith(2);
+  expect(send.mock.calls).toEqual([[1], [2]]);
   publisher.stop();
+});
+
+test('取得より短い間隔で変更が続いても配信し、変更終了後は最新値に追いつく', async () => {
+  let value = 0;
+  const sent: number[] = [];
+  const publisher = new LatestPublisher(
+    () =>
+      new Promise<number>((resolve) => {
+        const snapshot = value;
+        setTimeout(() => resolve(snapshot), 5);
+      }),
+    (snapshot) => sent.push(snapshot),
+    (error) => {
+      throw error;
+    },
+  );
+  const changes = setInterval(() => {
+    value += 1;
+    publisher.schedule();
+  }, 2);
+  try {
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(sent.length).toBeGreaterThanOrEqual(8);
+    expect(sent.every((snapshot, index) => index === 0 || snapshot > sent[index - 1])).toBe(true);
+    clearInterval(changes);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(sent.at(-1)).toBe(value);
+  } finally {
+    clearInterval(changes);
+    publisher.stop();
+  }
 });
 
 test('取得失敗後も次の変更を配信でき、停止後の取得結果は送らない', async () => {
