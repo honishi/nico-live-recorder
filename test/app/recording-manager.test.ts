@@ -278,21 +278,64 @@ describe('RecordingManager', () => {
     await vi.advanceTimersByTimeAsync(ms);
   }
 
-  test('ログや映像の増加がなくてもファイル名と最後のコメント件数を通知する', async () => {
-    await manager.startRecording('lv1', 'manual');
-    const call = await nextRecordCall(0);
-    const changed = vi.fn();
-    manager.on('change', changed);
-    sendPaths(call, 1, path.join(dir, 'new.ts'), path.join(dir, 'new.comments.csv'));
-    expect(changed).toHaveBeenCalledTimes(1);
-    expect((await manager.getRecordings())[0].videoPath).toBe(path.join(dir, 'new.ts'));
-    changed.mockClear();
-    call.options.onComment?.({} as never, 1);
-    expect(changed).toHaveBeenCalledTimes(1);
-    expect((await manager.getRecordings())[0].commentCount).toBe(1);
-    call.options.onComment?.({} as never, 1);
-    expect(changed).toHaveBeenCalledTimes(1);
-  });
+  test.each(['live', 'timeshift'] as const)(
+    '%s でコメントをまとめ、映像が増えない場合と終了直前の最後の1件も通知する',
+    async (mode) => {
+      // 自動で時計を進めず、進捗周期と終了の順序を固定する。
+      vi.useRealTimers();
+      vi.useFakeTimers();
+      if (mode === 'timeshift')
+        getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+      const recording = await manager.startRecording('lv1', 'manual');
+      const call = recordCalls[0];
+      const changed = vi.fn();
+      manager.on('change', changed);
+      const videoPath = path.join(dir, 'new.ts');
+      const commentsPath = path.join(dir, 'new.comments.csv');
+      fs.writeFileSync(videoPath, 'video');
+      fs.writeFileSync(commentsPath, 'comments');
+      sendPaths(call, 1, videoPath, commentsPath);
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect((await manager.getRecordings())[0].videoPath).toBe(videoPath);
+      // サイズの初回反映を済ませ、以後は映像もログも増やさない。
+      const sizeReady = new Promise<void>((resolve) => {
+        const onSize = (): void => {
+          if (recording.videoBytes !== 5) return;
+          manager.off('change', onSize);
+          resolve();
+        };
+        manager.on('change', onSize);
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await sizeReady;
+      changed.mockClear();
+      for (let count = 1; count <= 1_000; count += 1) call.options.onComment?.({} as never, count);
+      expect(changed).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect((await manager.getRecordings())[0].commentCount).toBe(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(changed).toHaveBeenCalledTimes(1);
+      // 次の周期より前に最後のコメントを受けて終了しても、最終通知と履歴に残る。
+      call.options.onComment?.({} as never, 1_001);
+      const finalCounts: number[] = [];
+      const completed = new Promise<void>((resolve) => {
+        manager.on('change', () => {
+          const finished = history.get('lv1');
+          if (finished?.endedAt) {
+            finalCounts.push(finished.commentCount);
+            resolve();
+          }
+        });
+      });
+      call.resolve(
+        finishedResult(call, mode === 'timeshift' ? { timeshift: { completion: 'complete' } } : {}),
+      );
+      await completed;
+      expect(finalCounts).toEqual([1_001]);
+      expect(history.get('lv1')?.commentCount).toBe(1_001);
+    },
+  );
 
   test('画面からの再確認で保存先のキャッシュを更新する', async () => {
     fs.mkdirSync(settings.get().outputDir, { recursive: true });

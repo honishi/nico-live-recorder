@@ -47,7 +47,9 @@ interface ActiveRecording {
   info: RecordingInfo;
   controller: AbortController;
   done: Promise<void>;
-  sizeTimer?: NodeJS.Timeout;
+  progressTimer?: NodeJS.Timeout;
+  /** 前回の進捗確認で通知したコメント件数 */
+  sampledCommentCount: number;
   /** 終わったパートの合計サイズ */
   finishedPartBytes: number;
   /** 履歴に途中経過を書いた時刻 (クラッシュ時の復元用) */
@@ -67,7 +69,7 @@ export interface RecordingManagerOptions {
   diskProbe?: (dir: string) => Promise<number | undefined>;
 }
 
-const SIZE_POLL_MS = 1_000;
+const PROGRESS_POLL_MS = 1_000;
 const OUTPUT_DIR_CHECK_TTL_MS = 30_000;
 /** 録画が途中で止まったときの再開の上限と待ち時間 */
 const MAX_RECORD_ATTEMPTS = 10;
@@ -754,6 +756,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
       controller,
       done: Promise.resolve(),
       finishedPartBytes: previousBytes,
+      sampledCommentCount: info.commentCount,
       snapshotAt: Date.now(),
     };
     this.active.set(programId, recording);
@@ -769,7 +772,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         this.logger.info(`[rec] start ${programId} "${info.title}" by ${providerName ?? '?'}`);
         this.notify(`${recordingLabel}を開始しました`, `${providerName ?? ''} ${info.title}`);
 
-        recording.sizeTimer = setInterval(() => void this.pollSize(recording), SIZE_POLL_MS);
+        recording.progressTimer = setInterval(
+          () => void this.pollProgress(recording),
+          PROGRESS_POLL_MS,
+        );
 
         // 映像が異常終了し、番組がまだ放送中なら、連番付きの別ファイルで録画を再開する
         let attempt = 1;
@@ -844,12 +850,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
               // コメントファイルを新しく作るときだけ過去分を取得する (既存ファイルへの追記では重複するため)
               prefetchBackwardComments: !info.commentsPath,
               onComment: (_comment, count) => {
-                const total = countBefore + count;
-                if (info.commentCount !== total) {
-                  info.commentCount = total;
-                  // 画面への配信はまとめられるため、最後の1件も取りこぼさない。
-                  this.emitChange();
-                }
+                // 大量受信中も件数は即座に更新し、通知は進捗確認と終了処理でまとめる。
+                info.commentCount = countBefore + count;
               },
             },
             AbortSignal.any([controller.signal, part.controller.signal]),
@@ -1003,8 +1005,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
           this.notify(`${recordingLabel}に失敗しました`, `${info.title}: ${info.error}`);
         }
       } finally {
-        if (recording.sizeTimer) {
-          clearInterval(recording.sizeTimer);
+        if (recording.progressTimer) {
+          clearInterval(recording.progressTimer);
         }
         info.endedAt = new Date().toISOString();
         this.previews.forget(programId);
@@ -1056,8 +1058,13 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     return writable;
   }
 
-  /** 1 秒ごとの監視: サイズを更新し、録画中の途中経過を定期的に履歴へ書く (クラッシュしても進捗が残るように) */
-  private async pollSize(recording: ActiveRecording): Promise<void> {
+  /** 1秒ごとにコメント件数とサイズを確認し、途中経過を定期的に履歴へ残す。 */
+  private async pollProgress(recording: ActiveRecording): Promise<void> {
+    // 映像が増えない期間も件数を通知する。ファイル確認を待たずに反映する。
+    if (recording.sampledCommentCount !== recording.info.commentCount) {
+      recording.sampledCommentCount = recording.info.commentCount;
+      this.emitChange();
+    }
     await this.refreshSize(recording);
     if (recording.part && Date.now() - recording.snapshotAt >= HISTORY_SNAPSHOT_MS) {
       this.history.upsert(recording.info);
