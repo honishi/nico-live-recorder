@@ -89,7 +89,8 @@ for (const name of artifacts) {
     const metadata = JSON.parse(extractFile(asar, 'package.json').toString('utf8'));
     assert.equal(metadata.name, 'nico-live-recorder-update-test');
     assert.equal(metadata.version, version);
-    const main = extractFile(asar, 'out/main/index.js').toString('utf8');
+    // asar の内部検索も OS の区切り文字でパスを分解する。
+    const main = extractFile(asar, path.join('out', 'main', 'index.js')).toString('utf8');
     assert.ok(main.includes('NicoLiveRecorderUpdateTest'));
     assert.ok(main.includes('nico-live-recorder-update-test'));
     console.log(
