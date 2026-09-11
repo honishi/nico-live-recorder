@@ -50,3 +50,16 @@ Windowsランナー上でチェックとFFmpegビルドを行い、同じコー�
 更新後に0.5.0へ戻して試す場合は、試験版だけをアンインストールし、旧版を再インストールします。ダウングレードは自動では行われません。キャッシュや設定を初期化する場合も、上表の試験用ディレクトリだけを対象にし、録画がないことを先に確認します。本番の保存先は削除しません。
 
 記録には `build-info.json`、Windowsのバージョン・ARM/x64、インストール方式、更新前後の版、設定・履歴・ログの確認結果を含めます。ビルドの成功と、VM内での実更新の成功は分けて記録します。
+
+## 2026-09-12 の配布準備結果
+
+- ソース: `fcdad1a078a80ae09278d6714638ff59f6e8d6ae` (`test-auto-updates`)
+- [GitHub Actions 実行記録](https://github.com/honishi/nico-live-recorder/actions/runs/34647779634): 成功
+- Windows CI: format・lint・typecheck、45ファイル・623テストが成功。ローカルでは追加データを使うWeb Pushテストを含む626件が成功。
+- 両バージョンのNSISを展開し、同梱FFmpegの実行、更新メタデータの版・サイズ・SHA-512・blockmap、配信先・キャッシュ名、アプリ名・版・試験用保存先を検証済み。
+- ダウンロードした成果物でもSHA-512と `build-info.json` のソースコミットを再確認済み。
+- [0.5.0](https://github.com/honishi/nico-live-recorder-update-test/releases/tag/v0.5.0) と [0.5.1](https://github.com/honishi/nico-live-recorder-update-test/releases/tag/v0.5.1) を正式版として公開済み。Latestと公開 `latest.yml` が0.5.1を返すことを確認済み。
+
+最初のActions実行では、追加したASAR検証のパス区切りがWindowsに対応せず停止しました。`path.join` に修正した `fcdad1a` で上記の再ビルド・検証を通しています。
+
+VMはWindows 11 ARM (OSビルド `10.0.26200.9445`) です。画面操作の接続が不安定だったため、この時点では試験版のインストール・0.5.0から0.5.1への実更新は未実施です。上の「最初の動作確認」を実施して結果を追記してください。
