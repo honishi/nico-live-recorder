@@ -195,6 +195,7 @@ select {
 }
 
 .update-banner {
+  flex-wrap: wrap;
   background: var(--accent-weak);
 }
 

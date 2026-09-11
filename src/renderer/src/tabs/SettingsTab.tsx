@@ -1,8 +1,9 @@
 import { useState, type ReactElement } from 'react';
-import type { AppSettings, AppStatus, UpdateStatus } from '@shared/types';
+import type { AppSettings, AppStatus } from '@shared/types';
 import { formatBytes } from '@shared/format';
 import { MIN_FREE_SPACE_GB, POLL_INTERVAL_SEC } from '@shared/limits';
 import { formatClock } from '../lib/format';
+import { updateMessage } from '../lib/update-status';
 
 interface Props {
   settings: AppSettings;
@@ -246,12 +247,18 @@ export function SettingsTab({
               <div className="sub">
                 {updateCoolingDown
                   ? `${Math.ceil((status.update.nextCheckAt - now) / 1000)} 秒後に再確認できます`
-                  : '新しいバージョンがあれば、リリースページからダウンロードできます'}
+                  : '更新は自動でダウンロードします。録画・取得の完了後に「再起動して更新」で適用できます'}
               </div>
             </span>
             <button
               className="btn btn-secondary sm"
-              disabled={updateBusy || updateCoolingDown}
+              disabled={
+                updateBusy ||
+                updateCoolingDown ||
+                ['disabled', 'downloading', 'downloaded', 'installing'].includes(
+                  status.update.result,
+                )
+              }
               onClick={() => void checkForUpdates()}
             >
               更新を確認
@@ -261,21 +268,4 @@ export function SettingsTab({
       </section>
     </div>
   );
-}
-
-function updateMessage(update: UpdateStatus): string {
-  switch (update.result) {
-    case 'unchecked':
-      return '更新はまだ確認していません';
-    case 'current':
-      return '新しいバージョンはありません';
-    case 'available':
-      return `新しいバージョン v${update.release?.version ?? ''} があります`;
-    case 'unavailable':
-      return '公開された更新情報を取得できません';
-    case 'rate-limited':
-      return '更新の確認が一時的に制限されています';
-    case 'error':
-      return '更新を確認できませんでした。時間をおいて再確認してください';
-  }
 }

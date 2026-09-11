@@ -43,3 +43,9 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+# ビルド時に更新メタデータを生成し、検証後に release.yml から下書きへ添付する。
+publish:
+  provider: github
+  owner: honishi
+  repo: nico-live-recorder
+  releaseType: release

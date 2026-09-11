@@ -223,6 +223,37 @@ describe('RecordingManager', () => {
   let manager: RecordingManager;
   let auth: NicoAuth;
 
+  test('更新準備後は手動録画と自動検知の開始を受け付けない', async () => {
+    expect(manager.prepareForUpdate()).toBe(true);
+    await expect(manager.startRecording('lv1', 'manual')).rejects.toThrow('終了・更新処理中');
+    await expect(manager.startRecording('lv2', 'push')).rejects.toThrow('終了・更新処理中');
+    expect(getProgramInfo).not.toHaveBeenCalled();
+    expect(recordCalls).toHaveLength(0);
+  });
+
+  test('番組情報の取得中も更新を保留し、失敗して空いた後は準備できる', async () => {
+    let fail!: (error: Error) => void;
+    getProgramInfo.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    const pending = manager.startRecording('lv1', 'manual');
+    expect(manager.getActiveRecordingCount()).toBe(1);
+    expect(manager.prepareForUpdate()).toBe(false);
+    await vi.waitFor(() => expect(getProgramInfo).toHaveBeenCalled());
+    fail(new Error('unavailable'));
+    await expect(pending).rejects.toThrow();
+    expect(manager.prepareForUpdate()).toBe(true);
+  });
+
+  test('録画本体が残る間は更新を保留する', async () => {
+    await manager.startRecording('lv1', 'manual');
+    expect(manager.prepareForUpdate()).toBe(false);
+    expect(recordCalls[0].signal?.aborted).toBe(false);
+  });
+
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nlr-manager-'));

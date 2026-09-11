@@ -421,3 +421,23 @@ describe('録画対象の一括操作と並び替え', () => {
     expect((await remove({}, ['1'], false))?.removed).toEqual([original[0]]);
   });
 });
+
+test('更新の適用はメイン画面だけから受け付ける', () => {
+  handle.mockClear();
+  const frame = {};
+  const install = vi.fn(() => 'busy');
+  const ctx = {
+    auth: new EventEmitter(),
+    updates: { install },
+    getMainWindow: () => ({ webContents: { mainFrame: frame } }),
+  } as unknown as IpcContext;
+  registerIpcHandlers(ctx);
+  const handler = handle.mock.calls.find(
+    ([channel]) => channel === IPC.installUpdate,
+  )![1] as unknown as (event: { senderFrame?: object }) => string;
+  expect(handler({ senderFrame: {} })).toBe('not-ready');
+  expect(handler({})).toBe('not-ready');
+  expect(install).not.toHaveBeenCalled();
+  expect(handler({ senderFrame: frame })).toBe('busy');
+  expect(install).toHaveBeenCalledOnce();
+});

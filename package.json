@@ -26,8 +26,8 @@
   },
   "dependencies": {
     "cheerio": "^1.0.0",
+    "electron-updater": "6.8.9",
     "protobufjs": "^8.8.0",
-    "semver": "^7.8.5",
     "set-cookie-parser": "^3.1.2",
     "undici": "^8.10.0",
     "ws": "^8.18.0"
@@ -38,7 +38,6 @@
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
-    "@types/semver": "^7.8.0",
     "@types/set-cookie-parser": "^2.4.10",
     "@types/ws": "^8.5.0",
     "@vitejs/plugin-react": "^5.0.0",
@@ -50,6 +49,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^17.11.0",
     "jpeg-js": "0.4.4",
+    "js-yaml": "4.3.2",
     "prettier": "^3.3.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

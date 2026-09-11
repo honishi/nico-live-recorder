@@ -11,6 +11,7 @@ import type {
 } from '@shared/types';
 import { AlertBanner, InfoBar, StatusBand, TabBar, type TabBadges } from './components/Shell';
 import { Toast, type ToastMessage } from './components/Toast';
+import { UpdateBanner } from './components/UpdateBanner';
 import { HistoryTab } from './tabs/HistoryTab';
 import { LogTab } from './tabs/LogTab';
 import { RecordingsTab } from './tabs/RecordingsTab';
@@ -250,21 +251,7 @@ export function App(): ReactElement {
         enabledTargets={settings.targets.filter((t) => t.enabled).length}
       />
       <AlertBanner alert={status.alerts[0]} onAction={onAlertAction} />
-      {status.update.release && (
-        <div className="update-banner" role="status">
-          <span>新しいバージョン v{status.update.release.version} があります</span>
-          <button
-            className="btn btn-secondary sm"
-            onClick={() => {
-              void window.api.openReleasePage().catch(() => {
-                showToast('リリースページを開けませんでした');
-              });
-            }}
-          >
-            リリースページを開く
-          </button>
-        </div>
-      )}
+      <UpdateBanner update={status.update} showToast={showToast} />
       <TabBar active={tab} badges={badges} onSelect={selectTab} />
       <main className={`content ${tab === 'settings' ? 'scroll' : ''}`}>
         {tab === 'recordings' && (
