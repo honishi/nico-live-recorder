@@ -3,6 +3,7 @@ import {
   IPC,
   type AppSettings,
   type AppStatus,
+  type LogEntry,
   type FollowStatus,
   type HistoryPage,
   type HistoryQuery,
@@ -17,6 +18,7 @@ import {
 
 const api = {
   getStatus: (): Promise<AppStatus> => ipcRenderer.invoke(IPC.getStatus),
+  getLogs: (): Promise<LogEntry[]> => ipcRenderer.invoke(IPC.getLogs),
   checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.checkForUpdates),
   openReleasePage: (): Promise<void> => ipcRenderer.invoke(IPC.openReleasePage),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
@@ -63,6 +65,15 @@ const api = {
     commentsPath?: string,
   ): Promise<void> =>
     ipcRenderer.invoke(IPC.historyContextMenu, programId, videoPath, commentsPath),
+  onLogsChanged: (listener: (logs: LogEntry[]) => void): (() => void) => {
+    const handler = (_event: unknown, logs: LogEntry[]): void => listener(logs);
+    ipcRenderer.on(IPC.logsChanged, handler);
+    return () => ipcRenderer.off(IPC.logsChanged, handler);
+  },
+  onSettingsChanged: (listener: () => void): (() => void) => {
+    ipcRenderer.on(IPC.settingsChanged, listener);
+    return () => ipcRenderer.off(IPC.settingsChanged, listener);
+  },
   onStatusChanged: (listener: (status: AppStatus) => void): (() => void) => {
     const handler = (_event: unknown, status: AppStatus): void => listener(status);
     ipcRenderer.on(IPC.statusChanged, handler);

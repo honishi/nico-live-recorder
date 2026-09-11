@@ -113,6 +113,7 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
   private repairTimer?: NodeJS.Timeout;
   private lifecycle: Promise<unknown> = Promise.resolve();
   private repairing = false;
+  private unsubscribeClientState?: () => void;
 
   constructor(options: WebPushManagerOptions) {
     super();
@@ -152,8 +153,7 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
   stop(): Promise<void> {
     return this.runExclusive(async () => {
       this.stopRepairTimer();
-      this.client?.disconnect();
-      this.client = undefined;
+      this.disconnectClient();
       this.setStatus({ state: 'stopped' });
     });
   }
@@ -190,8 +190,7 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
           }
         }
       }
-      this.client?.disconnect();
-      this.client = undefined;
+      this.disconnectClient();
       this.state = undefined;
       this.cryptoKeys = undefined;
       await this.store.clear();
@@ -242,8 +241,7 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
       this.logger.info('push: started');
     } catch (error) {
       this.setStatus({ state: 'error', lastError: (error as Error).message });
-      this.client?.disconnect();
-      this.client = undefined;
+      this.disconnectClient();
       throw error;
     }
   }
@@ -317,17 +315,29 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
   }
 
   private async discardSubscription(): Promise<void> {
-    this.client?.disconnect();
-    this.client = undefined;
+    this.disconnectClient();
     this.state = undefined;
     this.cryptoKeys = undefined;
     await this.store.clear();
   }
 
+  /** 購読解除を先に行い、停止中や交換済みの接続からの通知を遮断する。 */
+  private disconnectClient(): void {
+    this.unsubscribeClientState?.();
+    this.unsubscribeClientState = undefined;
+    const client = this.client;
+    this.client = undefined;
+    client?.disconnect();
+  }
+
   private async connectAutoPush(uaid: string | undefined, channelIds: string[]): Promise<string> {
-    this.client?.disconnect();
+    this.disconnectClient();
     const client = new AutoPushClient(this.autoPushEndpoint);
     this.client = client;
+    // 交換済みのクライアントの遅延通知では現在の状態を更新しない。
+    this.unsubscribeClientState = client.onStateChanged(() => {
+      if (this.client === client) this.emit('status', this.getStatus());
+    });
     client.onMessage('notification', (message) => {
       void this.handleNotification(message as { data?: string; channelID?: string });
     });
@@ -339,9 +349,10 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
       }
       return hello.uaid;
     } catch (error) {
-      client.disconnect();
       if (this.client === client) {
-        this.client = undefined;
+        this.disconnectClient();
+      } else {
+        client.disconnect();
       }
       throw error;
     }
@@ -553,7 +564,7 @@ export class WebPushManager extends EventEmitter<WebPushManagerEvents> {
         onClick,
         receivedAt: new Date(),
       };
-      this.status.lastReceivedAt = program.receivedAt;
+      this.setStatus({ lastReceivedAt: program.receivedAt });
       this.logger.info(`push: received "${program.title}" ${program.programId ?? '(non-live)'}`);
       this.emit('program', program);
     } catch (error) {

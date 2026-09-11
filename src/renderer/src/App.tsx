@@ -3,6 +3,7 @@ import type {
   AppAlert,
   AppSettings,
   AppStatus,
+  LogEntry,
   RecordingInfo,
   TabId,
   TargetRemovalResult,
@@ -19,6 +20,7 @@ import { pruneRecordingPreviewImages } from './lib/recording-preview-cache';
 
 export function App(): ReactElement {
   const [status, setStatus] = useState<AppStatus>();
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [settings, setSettings] = useState<AppSettings>();
   const [now, setNow] = useState(() => Date.now());
   const [logFilter, setLogFilter] = useState<string>();
@@ -58,18 +60,30 @@ export function App(): ReactElement {
         };
       });
     };
-    void Promise.all([window.api.getStatus(), refreshSettings()]).then(([nextStatus]) => {
-      if (!cancelled) {
-        setStatus(nextStatus);
-      }
-    });
-    const unsubscribe = window.api.onStatusChanged((next) => {
+    // 購読を先に開始し、初期取得が遅れても受信済みの通知を巻き戻さない。
+    let statusReceived = false;
+    let logsReceived = false;
+    const unsubscribeStatus = window.api.onStatusChanged((next) => {
+      statusReceived = true;
       setStatus(next);
-      void refreshSettings();
     });
+    const unsubscribeLogs = window.api.onLogsChanged((next) => {
+      logsReceived = true;
+      setLogs(next);
+    });
+    const unsubscribeSettings = window.api.onSettingsChanged(() => void refreshSettings());
+    void window.api.getStatus().then((next) => {
+      if (!cancelled && !statusReceived) setStatus(next);
+    });
+    void window.api.getLogs().then((next) => {
+      if (!cancelled && !logsReceived) setLogs(next);
+    });
+    void refreshSettings();
     return () => {
       cancelled = true;
-      unsubscribe();
+      unsubscribeStatus();
+      unsubscribeLogs();
+      unsubscribeSettings();
     };
   }, []);
 
@@ -216,7 +230,7 @@ export function App(): ReactElement {
 
   const tab = settings.ui.tab;
   const seenAt = settings.ui.logSeenAt ? new Date(settings.ui.logSeenAt).getTime() : 0;
-  const unread = status.logs.filter(
+  const unread = logs.filter(
     (e) => (e.level === 'warn' || e.level === 'error') && new Date(e.ts).getTime() > seenAt,
   );
   const badges: TabBadges | undefined = status.auth.loggedIn
@@ -288,7 +302,7 @@ export function App(): ReactElement {
         )}
         {tab === 'log' && (
           <LogTab
-            logs={status.logs}
+            logs={logs}
             ui={settings.ui}
             filter={logFilter}
             onClearFilter={() => setLogFilter(undefined)}

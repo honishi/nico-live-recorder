@@ -3,7 +3,8 @@ import { app, BrowserWindow, powerSaveBlocker, screen, shell } from 'electron';
 import { IPC, type WindowBounds } from '../shared/types';
 import { AppLogger } from './app/app-logger';
 import { NicoAuth } from './app/auth';
-import { buildStatus, registerIpcHandlers } from './app/ipc';
+import { registerIpcHandlers } from './app/ipc';
+import { UiUpdates } from './app/ui-updates';
 import { HistoryStore } from './app/history-store';
 import { FilePushStateStore } from './app/push-state-store';
 import { RecordingManager } from './app/recording-manager';
@@ -147,15 +148,7 @@ async function bootstrap(): Promise<void> {
     logger.setOutputLevel(!app.isPackaged || settings.get().ui.showDebug ? 'debug' : 'info');
   };
   applyLogLevel();
-  let showDebug = settings.get().ui.showDebug;
-  settings.on('ui', (ui) => {
-    applyLogLevel();
-    // debug の表示を切り替えたら、debug 込み/抜きのログを載せ直すために status を送り直す
-    if (ui.showDebug !== showDebug) {
-      showDebug = ui.showDebug;
-      scheduleBroadcast();
-    }
-  });
+  settings.on('ui', applyLogLevel);
   const auth = new NicoAuth(logger);
   const pushStore = new FilePushStateStore(path.join(userData, 'push-subscription.json'));
 
@@ -225,41 +218,41 @@ async function bootstrap(): Promise<void> {
     quit: () => app.quit(),
   });
 
-  const broadcast = async (): Promise<void> => {
-    const status = await buildStatus(ctx);
-    const active = status.recordings.filter((r) => r.state === 'recording').length;
-    const trayState: TrayState = !status.auth.loggedIn
-      ? 'logged-out'
-      : active > 0
-        ? 'recording'
-        : 'idle';
-    const summary = !status.auth.loggedIn
-      ? '未ログイン'
-      : active > 0
-        ? `${active} 件録画中`
-        : status.detectorRunning
-          ? `監視中 (push: ${status.push.state})`
-          : '監視停止 (対象なし)';
-    tray?.update(status.recordings, summary, trayState);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC.statusChanged, status);
-    }
+  const uiUpdates = new UiUpdates(ctx, {
+    status: (status) => {
+      const active = status.recordings.filter((r) => r.state === 'recording').length;
+      const trayState: TrayState = !status.auth.loggedIn
+        ? 'logged-out'
+        : active > 0
+          ? 'recording'
+          : 'idle';
+      const summary = !status.auth.loggedIn
+        ? '未ログイン'
+        : active > 0
+          ? `${active} 件録画中`
+          : status.detectorRunning
+            ? `監視中 (push: ${status.push.state})`
+            : '監視停止 (対象なし)';
+      tray?.update(status.recordings, summary, trayState);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.statusChanged, status);
+      }
+    },
+    logs: (logs) => ctx.getMainWindow()?.webContents.send(IPC.logsChanged, logs),
+    settings: () => ctx.getMainWindow()?.webContents.send(IPC.settingsChanged),
+  });
+
+  // 保存先や録画ファイルの外部変更はログ量に関係なく確認する。非表示中は休止する。
+  const refreshVisibleState = (): void => {
+    const window = ctx.getMainWindow();
+    if (window?.isVisible() && !window.isMinimized()) manager.refreshExternalState();
   };
-  let broadcastTimer: NodeJS.Timeout | undefined;
-  const scheduleBroadcast = (): void => {
-    if (broadcastTimer) {
-      return;
-    }
-    broadcastTimer = setTimeout(() => {
-      broadcastTimer = undefined;
-      void broadcast();
-    }, 200);
+  // ログイン用など、別ウィンドウのフォーカスではメイン画面の再確認を走らせない。
+  const refreshFocusedWindow = (_event: Electron.Event, window: BrowserWindow): void => {
+    if (window === ctx.getMainWindow()) refreshVisibleState();
   };
-  manager.on('change', scheduleBroadcast);
-  auth.on('change', scheduleBroadcast);
-  settings.on('change', scheduleBroadcast);
-  logger.on('entry', scheduleBroadcast);
-  updates.on('change', scheduleBroadcast);
+  app.on('browser-window-focus', refreshFocusedWindow);
+  const externalStateTimer = setInterval(refreshVisibleState, 30_000);
 
   app.on('second-instance', showMainWindow);
   app.on('activate', showMainWindow);
@@ -270,11 +263,14 @@ async function bootstrap(): Promise<void> {
     updates.start();
   }
   await manager.start();
-  scheduleBroadcast();
+  uiUpdates.refreshStatus();
 
   app.on('before-quit', () => {
     quitting = true;
     updates.stop();
+    uiUpdates.stop();
+    clearInterval(externalStateTimer);
+    app.off('browser-window-focus', refreshFocusedWindow);
   });
   // 終了時は録画の停止処理 (ffmpeg の書き終わり、履歴の確定) とログの書き出しを待ってから抜ける
   let quitHandled = false;

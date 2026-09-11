@@ -167,7 +167,6 @@ export interface AppStatus {
   recordings: RecordingInfo[];
   /** 履歴が更新されるたびに増える (履歴タブの再取得のきっかけ) */
   historyVersion: number;
-  logs: LogEntry[];
   alerts: AppAlert[];
   logFilePath: string;
   /** 保存先の空き容量 (バイト)。取得できないときは undefined */
@@ -222,6 +221,7 @@ export function parseErrorCode(message: string): ErrorCode | undefined {
 
 export const IPC = {
   getStatus: 'app:getStatus',
+  getLogs: 'app:getLogs',
   getSettings: 'app:getSettings',
   updateSettings: 'app:updateSettings',
   updateUi: 'app:updateUi',
@@ -248,4 +248,6 @@ export const IPC = {
   removeHistory: 'history:remove',
   historyContextMenu: 'history:contextMenu',
   statusChanged: 'app:statusChanged',
+  logsChanged: 'app:logsChanged',
+  settingsChanged: 'app:settingsChanged',
 } as const;

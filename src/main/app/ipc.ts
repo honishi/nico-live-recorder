@@ -1,11 +1,11 @@
 import path from 'node:path';
+import { buildLogs, buildStatus } from './app-status';
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import {
   codedError,
   ERROR_CODES,
   IPC,
   type AppSettings,
-  type AppStatus,
   type FollowStatus,
   type HistoryQuery,
   type TargetAddResult,
@@ -30,26 +30,6 @@ export interface IpcContext {
   manager: RecordingManager;
   logger: AppLogger;
   getMainWindow: () => BrowserWindow | undefined;
-}
-
-const LOG_ENTRIES_FOR_UI = 1000;
-
-export async function buildStatus(ctx: IpcContext): Promise<AppStatus> {
-  const loggedIn = await ctx.auth.isLoggedIn();
-  return {
-    version: ctx.version,
-    update: ctx.updates.getStatus(),
-    auth: { loggedIn, revision: ctx.auth.revision },
-    push: ctx.manager.getPushStatus(),
-    detectorRunning: ctx.manager.detectorRunning,
-    recordings: await ctx.manager.getRecordings(),
-    historyVersion: ctx.manager.historyVersion,
-    // debug は「debug を表示」のときだけ渡す (量が多いので、毎回の status に載せない)
-    logs: ctx.logger.recent(LOG_ENTRIES_FOR_UI, ctx.settings.get().ui.showDebug),
-    alerts: await ctx.manager.getAlerts(loggedIn),
-    logFilePath: ctx.logger.logFilePath,
-    diskFreeBytes: ctx.manager.diskFreeBytes,
-  };
 }
 
 function pickSettingsPatch(patch: Partial<AppSettings>): Partial<AppSettings> {
@@ -131,6 +111,7 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   }
 
   ipcMain.handle(IPC.getStatus, () => buildStatus(ctx));
+  ipcMain.handle(IPC.getLogs, () => buildLogs(ctx));
   ipcMain.handle(IPC.checkForUpdates, () => ctx.updates.check());
   ipcMain.handle(IPC.openReleasePage, async () => {
     const release = ctx.updates.getStatus().release;
