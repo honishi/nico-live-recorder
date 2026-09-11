@@ -11,7 +11,7 @@ import { FilePushStateStore } from './app/push-state-store';
 import { RecordingManager } from './app/recording-manager';
 import { SettingsStore } from './app/settings-store';
 import { AppTray, type TrayState } from './app/tray';
-import { UpdateChecker } from './app/update-checker';
+import { UpdateChecker, flushUpdateState } from './app/update-checker';
 import { resolveFfmpegPath } from './core/nico/ffmpeg';
 import { configureProtoRootDir } from './vendor/nico-client/internal/protoLoader';
 
@@ -207,11 +207,7 @@ async function bootstrap(): Promise<void> {
         quitting = true;
         return true;
       },
-      flush: async () => {
-        history.flush();
-        // 更新適用のログまで保存する。失敗時のログも残せるようファイルは閉じない。
-        await logger.flush();
-      },
+      flush: () => flushUpdateState(history, logger),
       recover: () => {
         app.relaunch();
         app.quit();

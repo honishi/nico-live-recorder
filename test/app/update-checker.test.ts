@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
 import type { CancellationToken, UpdateCheckResult } from 'electron-updater';
-import { UpdateChecker, type UpdateDriver } from '../../src/main/app/update-checker';
+import {
+  UpdateChecker,
+  flushUpdateState,
+  type UpdateDriver,
+} from '../../src/main/app/update-checker';
 import { silentLogger } from '../../src/main/core/logger';
 
 // Electron とネットワークに依存せず、イベントの順序と失敗を再現する。
@@ -31,6 +35,9 @@ describe('UpdateChecker', () => {
   let busy: boolean;
   let prepare: ReturnType<typeof vi.fn<() => boolean>>;
   let flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  let flushHistory: ReturnType<typeof vi.fn<() => void>>;
+  let flushLog: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  let warn: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
   let recover: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
@@ -38,7 +45,10 @@ describe('UpdateChecker', () => {
     busy = false;
     updater = new FakeUpdater();
     prepare = vi.fn(() => !busy);
-    flush = vi.fn(async () => {});
+    flushHistory = vi.fn();
+    flushLog = vi.fn(async () => {});
+    warn = vi.fn();
+    flush = vi.fn(() => flushUpdateState({ flush: flushHistory }, { flush: flushLog, warn }));
     recover = vi.fn();
     checker = new UpdateChecker(updater as unknown as UpdateDriver, silentLogger, {
       hasRecordings: () => busy,
@@ -234,7 +244,7 @@ describe('UpdateChecker', () => {
 
   test('録画受付を止めて保存を完了するまで、インストーラーを起動しない', async () => {
     let saved!: () => void;
-    flush.mockImplementation(
+    flushLog.mockImplementation(
       () =>
         new Promise((resolve) => {
           saved = resolve;
@@ -244,6 +254,8 @@ describe('UpdateChecker', () => {
     expect(checker.install()).toBe('started');
     expect(prepare).toHaveBeenCalledOnce();
     expect(flush).toHaveBeenCalledOnce();
+    expect(flushHistory).toHaveBeenCalledOnce();
+    expect(flushLog).toHaveBeenCalledOnce();
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
     expect(checker.install()).toBe('started');
     expect(flush).toHaveBeenCalledOnce();
@@ -252,17 +264,37 @@ describe('UpdateChecker', () => {
     expect(updater.quitAndInstall).toHaveBeenCalledExactlyOnceWith(true, true);
   });
 
-  test.each(['throw', 'reject'])('保存失敗 (%s) は適用せず、旧版の再起動へ進む', async (mode) => {
-    flush.mockImplementation(() => {
-      const error = new Error('save failed');
-      if (mode === 'throw') throw error;
-      return Promise.reject(error);
+  test('履歴の保存失敗は適用せず、旧版の再起動へ進む', async () => {
+    flushHistory.mockImplementation(() => {
+      throw new Error('history save failed');
     });
     updater.emit('update-downloaded', { version: '0.5.0' });
     checker.install();
     await vi.advanceTimersByTimeAsync(120_000);
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
     expect(recover).toHaveBeenCalledOnce();
+    expect(flushLog).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  test.each(['throw', 'reject'])('ログ保存失敗 (%s) は警告して更新を続行する', async (mode) => {
+    const error = new Error('log save failed');
+    flushLog.mockImplementation(() => {
+      if (mode === 'throw') throw error;
+      return Promise.reject(error);
+    });
+    updater.emit('update-downloaded', { version: '0.5.0' });
+    expect(checker.install()).toBe('started');
+    expect(checker.install()).toBe('started');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(flushHistory).toHaveBeenCalledOnce();
+    expect(flushLog).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      '更新前のログを保存できませんでした。更新は続行します',
+      error,
+    );
+    expect(updater.quitAndInstall).toHaveBeenCalledExactlyOnceWith(true, true);
+    expect(recover).not.toHaveBeenCalled();
   });
 
   test.each(['stop', 'timeout', 'error'])(

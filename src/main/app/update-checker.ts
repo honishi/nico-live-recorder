@@ -8,6 +8,20 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CHECK_COOLDOWN_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 120_000;
 
+/** 履歴の保存は必須とし、診断用ログの保存失敗だけでは更新を妨げない。 */
+export async function flushUpdateState(
+  history: { flush(): void },
+  logger: Pick<Logger, 'warn'> & { flush(): Promise<void> },
+): Promise<void> {
+  history.flush();
+  try {
+    // 適用失敗も追記できるようファイルは閉じず、既存の行の書き出しを待つ。
+    await logger.flush();
+  } catch (error) {
+    logger.warn('更新前のログを保存できませんでした。更新は続行します', error);
+  }
+}
+
 /** 数字だけの一致は避け、ドライバーのコードと HTTP 応答の形式で分類する。 */
 function classifyUpdateError(error: unknown): 'error' | 'rate-limited' | 'unavailable' {
   if (typeof error !== 'object' || error === null) return 'error';
@@ -66,7 +80,7 @@ export interface UpdateInstallation {
   hasRecordings(): boolean;
   /** 録画の有無の再確認と、新規受付の停止を同期的に行う。 */
   prepare(): boolean;
-  /** インストーラーがプロセスを終了させる前に、履歴・ログを書き出す。 */
+  /** 履歴を書き出し、ログも保存を試みる。履歴の失敗は適用を中止する。 */
   flush(): Promise<void>;
   /** 適用失敗時も録画受付を閉じたまま通常の再起動へ進む。 */
   recover(): void;
