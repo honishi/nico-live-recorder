@@ -120,12 +120,96 @@ describe('UpdateChecker', () => {
   });
 
   test.each([
-    ['404 latest-mac.yml', 'unavailable', 60_000],
-    ['403 forbidden', 'rate-limited', 3_600_000],
-    ['429 too many requests', 'rate-limited', 3_600_000],
-    ['offline', 'error', 60_000],
+    [
+      Object.assign(new Error('404 Not Found'), { statusCode: 404, code: 'HTTP_ERROR_404' }),
+      'unavailable',
+      60_000,
+    ],
+    [
+      Object.assign(new Error('403 Forbidden'), { statusCode: 403, code: 'HTTP_ERROR_403' }),
+      'rate-limited',
+      3_600_000,
+    ],
+    [
+      Object.assign(new Error('429 Too Many Requests'), {
+        statusCode: 429,
+        code: 'HTTP_ERROR_429',
+      }),
+      'rate-limited',
+      3_600_000,
+    ],
+    [
+      Object.assign(new Error('HTTP failure'), { code: 'HTTP_ERROR_429' }),
+      'rate-limited',
+      3_600_000,
+    ],
+    [
+      Object.assign(new Error('No published versions on GitHub'), {
+        code: 'ERR_UPDATER_NO_PUBLISHED_VERSIONS',
+      }),
+      'unavailable',
+      60_000,
+    ],
+    [
+      Object.assign(new Error('Cannot find latest.yml'), {
+        code: 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND',
+      }),
+      'unavailable',
+      60_000,
+    ],
+    [
+      Object.assign(
+        new Error('Unable to find latest version: HttpError: 429 Too Many Requests\nHeaders: {}'),
+        { code: 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND' },
+      ),
+      'rate-limited',
+      3_600_000,
+    ],
+    [
+      Object.assign(
+        new Error('Cannot parse releases feed: HttpError: 403 Forbidden\nHeaders: {}'),
+        { code: 'ERR_UPDATER_INVALID_RELEASE_FEED' },
+      ),
+      'rate-limited',
+      3_600_000,
+    ],
+    [
+      Object.assign(
+        new Error(
+          'Unable to find latest version: Error: connection reset\n    at request (/app/provider.js:429:403)',
+        ),
+        { code: 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND' },
+      ),
+      'unavailable',
+      60_000,
+    ],
+    [
+      Object.assign(
+        new Error(
+          'Cannot parse releases feed: Error: bad XML\n    at parse (/app/provider.js:404:429)',
+        ),
+        { code: 'ERR_UPDATER_INVALID_RELEASE_FEED' },
+      ),
+      'error',
+      60_000,
+    ],
+    [
+      new Error('Cannot download "https://example.invalid/update.exe", status 403: Forbidden'),
+      'rate-limited',
+      3_600_000,
+    ],
+    [
+      new Error(
+        'Cannot download "https://example.invalid/429/update.exe", status 500: Internal Server Error',
+      ),
+      'error',
+      60_000,
+    ],
+    [new Error('connection reset\n    at request (/app/provider.js:429:403)'), 'error', 60_000],
+    [new Error('offline'), 'error', 60_000],
+    ['429', 'error', 60_000],
   ])('%s の失敗で録画を停止せず再確認を待つ', async (error, result, delay) => {
-    updater.checkForUpdates.mockRejectedValue(new Error(error));
+    updater.checkForUpdates.mockRejectedValue(error);
     const now = Date.now();
     await expect(checker.check()).resolves.toMatchObject({ result, nextCheckAt: now + delay });
     expect(prepare).not.toHaveBeenCalled();

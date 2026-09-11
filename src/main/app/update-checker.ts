@@ -8,6 +8,46 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CHECK_COOLDOWN_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 120_000;
 
+/** 数字だけの一致は避け、ドライバーのコードと HTTP 応答の形式で分類する。 */
+function classifyUpdateError(error: unknown): 'error' | 'rate-limited' | 'unavailable' {
+  if (typeof error !== 'object' || error === null) return 'error';
+  const { code, statusCode, message } = error as {
+    code?: unknown;
+    statusCode?: unknown;
+    message?: unknown;
+  };
+  let httpStatus = typeof statusCode === 'number' ? statusCode : undefined;
+  if (httpStatus === undefined && typeof code === 'string' && /^HTTP_ERROR_\d{3}$/.test(code)) {
+    httpStatus = Number(code.slice('HTTP_ERROR_'.length));
+  }
+  // GitHubProvider は cause を保持せず、元の HttpError.stack をメッセージに埋め込む。
+  // この既知のラッパーだけを扱い、スタックの行番号や URL 中の数字を拾わない。
+  if (httpStatus === undefined && typeof message === 'string') {
+    let match: RegExpMatchArray | null = null;
+    if (
+      code === 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND' ||
+      code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' ||
+      code === 'ERR_UPDATER_INVALID_RELEASE_FEED'
+    ) {
+      match = message.match(/(?:^|: )HttpError: (403|404|429)(?:\s|$)/);
+    } else if (code === undefined) {
+      // HttpExecutor.download の失敗は code を持たない Error として返る。
+      match = message.match(/^Cannot download "[^"\r\n]+", status (403|404|429):/);
+    }
+    if (match) httpStatus = Number(match[1]);
+  }
+  if (httpStatus === 403 || httpStatus === 429) return 'rate-limited';
+  if (
+    httpStatus === 404 ||
+    code === 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND' ||
+    code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' ||
+    code === 'ERR_UPDATER_NO_PUBLISHED_VERSIONS'
+  ) {
+    return 'unavailable';
+  }
+  return 'error';
+}
+
 /** Electron の実体は起動側で渡し、通信と更新イベントはテストで差し替える。 */
 export type UpdateDriver = Pick<
   AppUpdater,
@@ -202,19 +242,8 @@ export class UpdateChecker extends EventEmitter {
       this.installFailed(error);
       return;
     }
-    const message = String(error);
-    let result: UpdateStatus['result'] = 'error';
-    let delay = CHECK_COOLDOWN_MS;
-    if (/\b(403|429)\b/.test(message)) {
-      result = 'rate-limited';
-      delay = 60 * 60 * 1000;
-    } else if (
-      /\b404\b|ERR_UPDATER_(LATEST_VERSION_NOT_FOUND|CHANNEL_FILE_NOT_FOUND|NO_PUBLISHED_VERSIONS)/.test(
-        message,
-      )
-    ) {
-      result = 'unavailable';
-    }
+    const result = classifyUpdateError(error);
+    const delay = result === 'rate-limited' ? 60 * 60 * 1000 : CHECK_COOLDOWN_MS;
     this.logger.warn('更新を取得できませんでした。録画・監視は継続します', error);
     this.publish({ result, progress: undefined, nextCheckAt: Date.now() + delay });
   }
