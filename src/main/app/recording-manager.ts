@@ -575,8 +575,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   }
 
   private async handleDetected(program: DetectedProgram): Promise<void> {
-    // 停止前から解決中だった古い通知にも、停止の意思を適用する
-    if (this.manuallyStopped.has(program.programId)) {
+    // 更新・終了待ちの通知は、録画失敗や再試行として扱わず静かに捨てる。
+    if (this.updating || this.stopped || this.manuallyStopped.has(program.programId)) {
       return;
     }
     const settings = this.settings.get();
@@ -602,7 +602,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     const detector = this.detector;
     for (let attempt = 1; attempt <= DETECT_START_ATTEMPTS; attempt += 1) {
       if (attempt > 1) {
-        if (this.stopped || this.detector !== detector) {
+        if (this.updating || this.stopped || this.detector !== detector) {
           this.logger.info(
             `[rec] detection changed while waiting, dropping retry of ${program.programId}`,
           );
@@ -624,6 +624,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         });
         return;
       } catch (error) {
+        // 開始の失敗と更新受付が続けて起きた場合も、警告や再試行を増やさない。
+        if (this.updating || this.stopped) return;
         const message = (error as Error).message;
         if (message.endsWith(NicoLiveProgramStatus.ended)) {
           this.logger.info(`[rec] ${program.programId} already ended, not recording`);
