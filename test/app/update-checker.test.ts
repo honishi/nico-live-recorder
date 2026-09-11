@@ -30,6 +30,7 @@ describe('UpdateChecker', () => {
   let checker: UpdateChecker;
   let busy: boolean;
   let prepare: ReturnType<typeof vi.fn<() => boolean>>;
+  let flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
   let recover: ReturnType<typeof vi.fn<() => void>>;
 
   beforeEach(() => {
@@ -37,10 +38,12 @@ describe('UpdateChecker', () => {
     busy = false;
     updater = new FakeUpdater();
     prepare = vi.fn(() => !busy);
+    flush = vi.fn(async () => {});
     recover = vi.fn();
     checker = new UpdateChecker(updater as unknown as UpdateDriver, silentLogger, {
       hasRecordings: () => busy,
       prepare,
+      flush,
       recover,
     });
     updater.checkForUpdates.mockResolvedValue(release(false));
@@ -131,7 +134,7 @@ describe('UpdateChecker', () => {
     expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 
-  test('録画が開始した場合は main 側で再確認し、完了後の操作で一度だけ適用する', () => {
+  test('録画が開始した場合は main 側で再確認し、完了後の操作で一度だけ適用する', async () => {
     updater.emit('update-downloaded', { version: '0.5.0' });
     expect(checker.getStatus().installBlocked).toBe(false);
     busy = true;
@@ -141,8 +144,64 @@ describe('UpdateChecker', () => {
     busy = false;
     expect(checker.install()).toBe('started');
     expect(checker.install()).toBe('started');
+    await vi.advanceTimersByTimeAsync(0);
     expect(updater.quitAndInstall).toHaveBeenCalledExactlyOnceWith(true, true);
   });
+
+  test('録画受付を止めて保存を完了するまで、インストーラーを起動しない', async () => {
+    let saved!: () => void;
+    flush.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          saved = resolve;
+        }),
+    );
+    updater.emit('update-downloaded', { version: '0.5.0' });
+    expect(checker.install()).toBe('started');
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(flush).toHaveBeenCalledOnce();
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+    expect(checker.install()).toBe('started');
+    expect(flush).toHaveBeenCalledOnce();
+    saved();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(updater.quitAndInstall).toHaveBeenCalledExactlyOnceWith(true, true);
+  });
+
+  test.each(['throw', 'reject'])('保存失敗 (%s) は適用せず、旧版の再起動へ進む', async (mode) => {
+    flush.mockImplementation(() => {
+      const error = new Error('save failed');
+      if (mode === 'throw') throw error;
+      return Promise.reject(error);
+    });
+    updater.emit('update-downloaded', { version: '0.5.0' });
+    checker.install();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(updater.quitAndInstall).not.toHaveBeenCalled();
+    expect(recover).toHaveBeenCalledOnce();
+  });
+
+  test.each(['stop', 'timeout', 'error'])(
+    '保存待ちに %s へ移ったら、遅れて適用しない',
+    async (mode) => {
+      let saved!: () => void;
+      flush.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            saved = resolve;
+          }),
+      );
+      updater.emit('update-downloaded', { version: '0.5.0' });
+      checker.install();
+      if (mode === 'stop') checker.stop();
+      else if (mode === 'error') updater.emit('error', new Error('failed'));
+      else await vi.advanceTimersByTimeAsync(120_000);
+      saved();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(updater.quitAndInstall).not.toHaveBeenCalled();
+      expect(recover).toHaveBeenCalledTimes(mode === 'stop' ? 0 : 1);
+    },
+  );
 
   test.each(['throw', 'event', 'timeout'])(
     '適用失敗 (%s) は録画受付を再開せず通常再起動へ進む',
@@ -189,6 +248,7 @@ describe('UpdateChecker', () => {
     checker = new UpdateChecker(undefined, silentLogger, {
       hasRecordings: () => false,
       prepare,
+      flush,
       recover,
     });
     checker.start();

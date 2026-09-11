@@ -26,6 +26,8 @@ export interface UpdateInstallation {
   hasRecordings(): boolean;
   /** 録画の有無の再確認と、新規受付の停止を同期的に行う。 */
   prepare(): boolean;
+  /** インストーラーがプロセスを終了させる前に、履歴・ログを書き出す。 */
+  flush(): Promise<void>;
   /** 適用失敗時も録画受付を閉じたまま通常の再起動へ進む。 */
   recover(): void;
 }
@@ -169,13 +171,20 @@ export class UpdateChecker extends EventEmitter {
       INSTALL_TIMEOUT_MS,
     );
     this.installTimer.unref();
+    void this.installAfterFlush();
+    return 'started';
+  }
+
+  private async installAfterFlush(): Promise<void> {
     try {
-      // Windows はウィザードを挟まず置き換え、終了後に必ず新しいアプリを起動する。
-      this.updater.quitAndInstall(true, true);
+      await this.installation.flush();
+      // 保存待ちに通常終了・復旧へ移った場合、遅れてインストーラーを起動しない。
+      if (this.stopped || this.recovering) return;
+      // NSIS は起動後にアプリを強制終了し得るため、保存完了後にだけ引き渡す。
+      this.updater!.quitAndInstall(true, true);
     } catch (error) {
       this.installFailed(error);
     }
-    return 'started';
   }
 
   private installFailed(error: unknown): void {

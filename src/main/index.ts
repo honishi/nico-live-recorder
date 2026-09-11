@@ -207,6 +207,11 @@ async function bootstrap(): Promise<void> {
         quitting = true;
         return true;
       },
+      flush: async () => {
+        history.flush();
+        // 更新適用のログまで保存する。失敗時のログも残せるようファイルは閉じない。
+        await logger.flush();
+      },
       recover: () => {
         app.relaunch();
         app.quit();

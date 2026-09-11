@@ -148,6 +148,18 @@ export class AppLogger extends EventEmitter<{ entry: [entry: LogEntry] }> implem
     this.write('error', args);
   }
 
+  /** それまでの行の書き込みを待ち、以後もログを追記できる状態を保つ。 */
+  async flush(): Promise<void> {
+    // 退避中に溜めた行も対象に含め、切り替え後のストリームで待つ。
+    while (this.rotating) await this.rotating;
+    if (this.fileFailed) throw new Error('ログファイルに書き込めません');
+    const stream = this.stream;
+    if (!stream) return;
+    await new Promise<void>((resolve, reject) => {
+      stream.write('', (error) => (error ? reject(error) : resolve()));
+    });
+  }
+
   /** ファイルへの書き込みを終えるまで待つ */
   async close(): Promise<void> {
     // 退避の途中なら、溜めた行を書き終えてから閉じる
