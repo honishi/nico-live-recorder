@@ -1,5 +1,5 @@
-appId: com.honishi.nico-live-recorder
-productName: NicoLiveRecorder
+appId: com.honishi.nico-live-recorder.update-test
+productName: NicoLiveRecorderUpdateTest
 directories:
   buildResources: build
   output: release
@@ -37,6 +37,7 @@ mac:
   category: public.app-category.utilities
 win:
   icon: build/icon.ico
+  artifactName: NicoLiveRecorderUpdateTest-${version}-${arch}.${ext}
   target:
     - target: nsis
       arch: [x64]
@@ -47,5 +48,5 @@ nsis:
 publish:
   provider: github
   owner: honishi
-  repo: nico-live-recorder
+  repo: nico-live-recorder-update-test
   releaseType: release

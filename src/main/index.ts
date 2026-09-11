@@ -27,6 +27,9 @@ let mainWindow: BrowserWindow | undefined;
 let tray: AppTray | undefined;
 let quitting = false;
 
+// 試験用ブランチでは、インストーラーからの再起動後も本番の設定を使わない。
+app.setPath('userData', path.join(app.getPath('appData'), 'nico-live-recorder-update-test'));
+
 // 開発時に別の userData で 2 つ目のインスタンスを立てられるようにする (E2E 確認用)
 if (process.env['NLR_USER_DATA']) {
   app.setPath('userData', process.env['NLR_USER_DATA']);
@@ -74,7 +77,7 @@ function createMainWindow(settings: SettingsStore, manager: RecordingManager): B
     y: bounds.y,
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: 'Nico Live Recorder',
+    title: 'NicoLiveRecorder — Windows Update Test',
     icon: devWindowIcon(),
     show: false,
     autoHideMenuBar: true,
@@ -142,7 +145,7 @@ async function bootstrap(): Promise<void> {
 
   // 保存先の既定値。検証用のインスタンスが本番の保存先に書かないよう、NLR_OUTPUT_DIR で差し替えられる
   const defaultOutputDir =
-    process.env['NLR_OUTPUT_DIR'] ?? path.join(app.getPath('videos'), 'NicoLiveRecorder');
+    process.env['NLR_OUTPUT_DIR'] ?? path.join(app.getPath('videos'), 'NicoLiveRecorderUpdateTest');
   const settings = new SettingsStore(path.join(userData, 'settings.json'), defaultOutputDir);
   // ファイル出力のレベルは「debug を表示」に連動させる (開発時は常に debug)
   const applyLogLevel = (): void => {

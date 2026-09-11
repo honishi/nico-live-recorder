@@ -56,12 +56,16 @@ test('アプリ内の配信元が意図した公開リポジトリと異なる�
   const config = {
     provider: 'github',
     owner: 'honishi',
-    repo: 'nico-live-recorder',
-    updaterCacheDirName: 'nlr-test',
+    repo: 'nico-live-recorder-update-test',
+    updaterCacheDirName: 'nico-live-recorder-update-test-updater',
   };
   const file = path.join(directory, 'app-update.yml');
   writeFileSync(file, dump(config));
   await verifyUpdateConfig(directory);
   writeFileSync(file, dump({ ...config, owner: 'other' }));
+  await expect(verifyUpdateConfig(directory)).rejects.toThrow();
+  writeFileSync(file, dump({ ...config, repo: 'nico-live-recorder' }));
+  await expect(verifyUpdateConfig(directory)).rejects.toThrow();
+  writeFileSync(file, dump({ ...config, updaterCacheDirName: 'nico-live-recorder-updater' }));
   await expect(verifyUpdateConfig(directory)).rejects.toThrow();
 });

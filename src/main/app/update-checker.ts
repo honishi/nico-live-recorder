@@ -3,7 +3,7 @@ import type { AppUpdater, CancellationToken, ProgressInfo, UpdateInfo } from 'el
 import type { UpdateStatus, UpdateInstallResult } from '../../shared/types';
 import type { Logger } from '../core/logger';
 
-const RELEASES_URL = 'https://github.com/honishi/nico-live-recorder/releases';
+const RELEASES_URL = 'https://github.com/honishi/nico-live-recorder-update-test/releases';
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CHECK_COOLDOWN_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 120_000;

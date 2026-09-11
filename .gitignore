@@ -9,3 +9,4 @@ release/
 *.tsbuildinfo
 .cache/
 resources/ffmpeg/
+test-artifacts/

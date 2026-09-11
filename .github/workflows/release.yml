@@ -1,91 +1,70 @@
-name: Release
+name: Windows Update Test
 
+# main に存在する Release の手動実行入口から、この試験ブランチを選ぶ。
+# タグを push しても本番 Release を作らない。
 on:
-  push:
-    tags: ['v*']
-  # タグを作らず、同じ署名・公証・成果物検証を手動で確認できるようにする。
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   package:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            args: --mac --arm64
-          - os: windows-latest
-            args: --win --x64
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     timeout-minutes: 60
-    permissions:
-      contents: write
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: false
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version-file: .node-version
           cache: npm
-      - name: Verify release version
-        if: github.event_name == 'push'
-        run: node -e "const expected = 'v' + require('./package.json').version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag must be ' + expected)"
       - run: npm ci
-      - uses: ./.github/actions/build-ffmpeg
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
       - run: npm test
+      # 同じ FFmpeg と同じコードを使い、バージョンだけ変えて2つ作る。
+      - uses: ./.github/actions/build-ffmpeg
       - run: npm run build
-      # 本家の macOS 配布だけに認証情報を渡す。不足時は未署名のまま配布しない。
-      - name: Sign and notarize macOS
-        if: runner.os == 'macOS' && github.repository == 'honishi/nico-live-recorder'
-        shell: bash
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Package and verify both test versions
+        shell: pwsh
         run: |
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing required secret: $name"
-              exit 1
-            fi
-          done
-          npx electron-builder --mac --arm64 --publish never -c.forceCodeSigning=true
-      - name: Verify notarized macOS artifacts
-        if: runner.os == 'macOS' && github.repository == 'honishi/nico-live-recorder'
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run ffmpeg:verify-artifacts -- --require-notarization
-      - name: Package without signing (Windows / forks)
-        if: runner.os != 'macOS' || github.repository != 'honishi/nico-live-recorder'
-        env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npx electron-builder ${{ matrix.args }} --publish never
-      - name: Verify unsigned artifacts
-        if: runner.os != 'macOS' || github.repository != 'honishi/nico-live-recorder'
-        run: npm run ffmpeg:verify-artifacts
-      - name: Upload validation artifacts
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v7
+          foreach ($testVersion in @('0.5.0', '0.5.1')) {
+            npm version $testVersion --no-git-tag-version --ignore-scripts --allow-same-version
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            npx electron-builder --win --x64 --publish never
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            npm run ffmpeg:verify-artifacts
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $artifactDir = "test-artifacts/$testVersion"
+            New-Item -ItemType Directory -Force $artifactDir | Out-Null
+            Get-ChildItem release -File | Where-Object {
+              $_.Extension -in @('.exe', '.blockmap') -or $_.Name -eq 'latest.yml'
+            } | Copy-Item -Destination $artifactDir
+            @{
+              sourceCommit = $env:GITHUB_SHA
+              sourceRef = $env:GITHUB_REF
+              runId = $env:GITHUB_RUN_ID
+              version = $testVersion
+              appId = 'com.honishi.nico-live-recorder.update-test'
+              updateRepository = 'honishi/nico-live-recorder-update-test'
+            } | ConvertTo-Json | Set-Content "$artifactDir/build-info.json" -Encoding utf8
+            # このジョブが生成したパッケージだけを除去し、次の版に混ぜない。
+            Remove-Item release -Recurse -Force
+          }
+      - uses: actions/upload-artifact@v7
         with:
-          name: packages-${{ runner.os }}
-          retention-days: 7
+          name: windows-update-test-0.5.0
+          path: test-artifacts/0.5.0/
+          retention-days: 14
           compression-level: 0
           if-no-files-found: error
-          path: |
-            release/*.dmg
-            release/*.zip
-            release/*.exe
-            release/latest*.yml
-            release/*.blockmap
-      - name: Upload to the GitHub release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
+      - uses: actions/upload-artifact@v7
         with:
-          draft: true
-          files: |
-            release/*.dmg
-            release/*.zip
-            release/*.exe
-            release/latest*.yml
-            release/*.blockmap
+          name: windows-update-test-0.5.1
+          path: test-artifacts/0.5.1/
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error

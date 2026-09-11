@@ -35,6 +35,6 @@ export async function verifyUpdateConfig(resources) {
   const config = load(await readFile(path.join(resources, 'app-update.yml'), 'utf8'));
   assert.equal(config.provider, 'github');
   assert.equal(config.owner, 'honishi');
-  assert.equal(config.repo, 'nico-live-recorder');
-  assert.ok(config.updaterCacheDirName);
+  assert.equal(config.repo, 'nico-live-recorder-update-test');
+  assert.equal(config.updaterCacheDirName, 'nico-live-recorder-update-test-updater');
 }

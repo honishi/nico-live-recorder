@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { extractFile } from '@electron/asar';
 import { verifyNotarizedApp } from '../mac/verify.mjs';
 import { verifyUpdateArtifacts, verifyUpdateConfig } from '../updates/verify.mjs';
 
@@ -19,7 +20,7 @@ if (requireNotarization) {
 }
 const artifacts = readdirSync(release).filter(
   (name) =>
-    name.startsWith('NicoLiveRecorder') &&
+    name.startsWith('NicoLiveRecorderUpdateTest') &&
     name.includes(version) &&
     extensions.includes(path.extname(name)),
 );
@@ -68,7 +69,7 @@ for (const name of artifacts) {
       } else {
         run('/usr/bin/ditto', ['-x', '-k', artifact, unpacked]);
       }
-      const app = path.join(unpacked, 'NicoLiveRecorder.app');
+      const app = path.join(unpacked, 'NicoLiveRecorderUpdateTest.app');
       // 圧縮・展開を経た最終成果物で、署名と公証チケットが残っていることを確かめる。
       if (requireNotarization) verifyNotarizedApp(app, process.env.APPLE_TEAM_ID);
       resources = path.join(app, 'Contents', 'Resources');
@@ -83,6 +84,14 @@ for (const name of artifacts) {
       resources = path.join(unpacked, 'resources');
     }
     await verifyUpdateConfig(resources);
+    // 展開後の実体でも、版と保存先が試験用になっていることを確かめる。
+    const asar = path.join(resources, 'app.asar');
+    const metadata = JSON.parse(extractFile(asar, 'package.json').toString('utf8'));
+    assert.equal(metadata.name, 'nico-live-recorder-update-test');
+    assert.equal(metadata.version, version);
+    const main = extractFile(asar, 'out/main/index.js').toString('utf8');
+    assert.ok(main.includes('NicoLiveRecorderUpdateTest'));
+    assert.ok(main.includes('nico-live-recorder-update-test'));
     console.log(
       run(process.execPath, [
         '--import',

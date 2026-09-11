@@ -2,10 +2,15 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
+const assert = require('node:assert/strict');
 
 // extraResources のコピーが完了した時点で、配布する実体を検証する。
 module.exports = async function afterPack(context) {
   const platform = context.electronPlatformName;
+  // 試験版を本番と同じアプリとしてインストールしない。
+  assert.equal(context.packager.appInfo.id, 'com.honishi.nico-live-recorder.update-test');
+  assert.equal(context.packager.appInfo.name, 'nico-live-recorder-update-test');
+  assert.equal(context.packager.appInfo.productFilename, 'NicoLiveRecorderUpdateTest');
   const arch = { 1: 'x64', 3: 'arm64' }[context.arch];
   if (platform !== process.platform || arch !== process.arch) {
     throw new Error('FFmpeg の実行検証のため、配布対象と同じ OS/CPU 上でパッケージしてください');
