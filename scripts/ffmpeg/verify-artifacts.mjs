@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyNotarizedApp } from '../mac/verify.mjs';
+import { verifyUpdateArtifacts, verifyUpdateConfig } from '../updates/verify.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -40,6 +41,9 @@ function run(command, args) {
   assert.equal(result.status, 0, `${command}\n${result.stdout}\n${result.stderr}`);
   return result.stdout;
 }
+
+// 公開前に更新情報のバージョン・サイズ・ハッシュと差分更新ファイルも検証する。
+await verifyUpdateArtifacts(release, version, process.platform);
 
 // インストーラは実行せず、一時領域に展開する。設定・録画・インストール先には触らない。
 for (const name of artifacts) {
@@ -78,6 +82,7 @@ for (const name of artifacts) {
       run(sevenZip, ['x', '-y', `-o${unpacked}`, payload]);
       resources = path.join(unpacked, 'resources');
     }
+    await verifyUpdateConfig(resources);
     console.log(
       run(process.execPath, [
         '--import',

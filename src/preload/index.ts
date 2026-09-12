@@ -14,12 +14,14 @@ import {
   type TargetUser,
   type UiState,
   type UpdateStatus,
+  type UpdateInstallResult,
 } from '../shared/types';
 
 const api = {
   getStatus: (): Promise<AppStatus> => ipcRenderer.invoke(IPC.getStatus),
   getLogs: (): Promise<LogEntry[]> => ipcRenderer.invoke(IPC.getLogs),
   checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.checkForUpdates),
+  installUpdate: (): Promise<UpdateInstallResult> => ipcRenderer.invoke(IPC.installUpdate),
   openReleasePage: (): Promise<void> => ipcRenderer.invoke(IPC.openReleasePage),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
   updateSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>

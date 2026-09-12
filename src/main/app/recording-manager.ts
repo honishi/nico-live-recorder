@@ -125,6 +125,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   /** 再起動の実行中に別の変更が来た (終わってから最新の設定でもう一度回す) */
   private restartAgain = false;
   private stopped = false;
+  /** 更新の適用を受け付けてからプロセスが終了するまで、新規録画を開始しない。 */
+  private updating = false;
   /** ログイン cookie はあるのに API が認証エラーを返した (セッション切れ) */
   private authExpired = false;
   private outputDirCheck?: { dir: string; writable: boolean; checkedAt: number };
@@ -230,6 +232,15 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   /** 確認ダイアログ用。番組情報の取得中と録画中を重複なく数える */
   getActiveRecordingCount(): number {
     return new Set([...this.starting.keys(), ...this.active.keys()]).size;
+  }
+
+  /** 未完了ジョブの確認と受付停止を同じ同期処理で行い、更新との競合を防ぐ。 */
+  prepareForUpdate(): boolean {
+    if (this.stopped || this.loggingOut || this.updating || this.getActiveRecordingCount() > 0) {
+      return false;
+    }
+    this.updating = true;
+    return true;
   }
 
   /** 合計サイズから削除済みを除くため、条件に合う全件でファイルの有無を確認する */
@@ -564,8 +575,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
   }
 
   private async handleDetected(program: DetectedProgram): Promise<void> {
-    // 停止前から解決中だった古い通知にも、停止の意思を適用する
-    if (this.manuallyStopped.has(program.programId)) {
+    // 更新・終了待ちの通知は、録画失敗や再試行として扱わず静かに捨てる。
+    if (this.updating || this.stopped || this.manuallyStopped.has(program.programId)) {
       return;
     }
     const settings = this.settings.get();
@@ -591,7 +602,7 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     const detector = this.detector;
     for (let attempt = 1; attempt <= DETECT_START_ATTEMPTS; attempt += 1) {
       if (attempt > 1) {
-        if (this.stopped || this.detector !== detector) {
+        if (this.updating || this.stopped || this.detector !== detector) {
           this.logger.info(
             `[rec] detection changed while waiting, dropping retry of ${program.programId}`,
           );
@@ -613,6 +624,8 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
         });
         return;
       } catch (error) {
+        // 開始の失敗と更新受付が続けて起きた場合も、警告や再試行を増やさない。
+        if (this.updating || this.stopped) return;
         const message = (error as Error).message;
         if (message.endsWith(NicoLiveProgramStatus.ended)) {
           this.logger.info(`[rec] ${program.programId} already ended, not recording`);
@@ -639,6 +652,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     source: RecordingSource,
     meta: { title?: string; providerId?: string; providerName?: string } = {},
   ): Promise<RecordingInfo> {
+    // 適用を受け付けた直後の検知や、遅れて届く手動 IPC も録画を開始しない。
+    if (this.updating || this.stopped) {
+      return Promise.reject(new Error('終了・更新処理中のため録画を開始できません'));
+    }
     // 確認後は、別ウィンドウや遅れて届いた要求から新しい録画を始めない
     if (this.loggingOut) {
       return Promise.reject(new Error('ログアウト処理中のため録画を開始できません'));
@@ -657,8 +674,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     }
     const promise = this.doStartRecording(programId, source, meta).finally(() => {
       this.starting.delete(programId);
+      this.emitChange();
     });
     this.starting.set(programId, promise);
+    this.emitChange();
     return promise;
   }
 

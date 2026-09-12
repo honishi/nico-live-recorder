@@ -148,14 +148,27 @@ export interface HistoryPage {
   providers: string[];
 }
 
-/** 更新確認だけを行う。取得できなかった状態と「更新なし」を区別する */
+/** 更新の取得・適用状況。録画中は再起動を保留する。 */
 export interface UpdateStatus {
   checking: boolean;
-  result: 'unchecked' | 'current' | 'available' | 'unavailable' | 'error' | 'rate-limited';
+  result:
+    | 'unchecked'
+    | 'current'
+    | 'downloading'
+    | 'downloaded'
+    | 'installing'
+    | 'disabled'
+    | 'unavailable'
+    | 'error'
+    | 'rate-limited';
+  progress?: number;
+  installBlocked: boolean;
   release?: { version: string; url: string };
   checkedAt?: string;
   nextCheckAt: number;
 }
+
+export type UpdateInstallResult = 'started' | 'busy' | 'not-ready';
 
 export interface AppStatus {
   version: string;
@@ -231,6 +244,7 @@ export const IPC = {
   openLogFile: 'app:openLogFile',
   openFfmpegLicenses: 'app:openFfmpegLicenses',
   checkForUpdates: 'app:checkForUpdates',
+  installUpdate: 'app:installUpdate',
   openReleasePage: 'app:openReleasePage',
   reconnectPush: 'app:reconnectPush',
   addTarget: 'targets:add',

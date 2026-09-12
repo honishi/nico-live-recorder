@@ -70,12 +70,42 @@ describe('AppLogger', () => {
       logger.info('before failure');
       await warned;
       logger.info('after failure');
+      await expect(logger.flush()).rejects.toThrow('ログファイルに書き込めません');
       await logger.close();
       expect(logger.recent().filter((entry) => entry.level === 'warn')).toHaveLength(1);
       expect(logger.recent().at(-1)?.message).toBe('after failure');
       expect(stdout).toHaveBeenCalledTimes(3);
     },
   );
+
+  test('flush は既存の行を書き出し、その後の適用失敗も記録できる', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const logger = new AppLogger(dir);
+    try {
+      logger.info('再起動して更新を適用します');
+      await logger.flush();
+      expect(fs.readFileSync(logger.logFilePath, 'utf8')).toContain('再起動して更新を適用します');
+      logger.error('更新を適用できませんでした');
+      await logger.flush();
+      expect(fs.readFileSync(logger.logFilePath, 'utf8')).toContain('更新を適用できませんでした');
+    } finally {
+      await logger.close();
+    }
+  });
+
+  test('flush は退避中に溜まった行も書き出す', async () => {
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const logger = new AppLogger(dir, 'info', 100);
+    try {
+      logger.info('x'.repeat(150));
+      logger.info('退避中の更新適用ログ');
+      await logger.flush();
+      expect(fs.readFileSync(logger.logFilePath, 'utf8')).toContain('退避中の更新適用ログ');
+    } finally {
+      await logger.close();
+    }
+  });
 
   test('debug が大量に出ても info 以上は押し出されず、debug 抜きでも取り出せる', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);

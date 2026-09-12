@@ -1,37 +1,154 @@
 import { EventEmitter } from 'node:events';
-import { gt, prerelease, valid } from 'semver';
-import type { UpdateStatus } from '../../shared/types';
+import type { AppUpdater, CancellationToken, ProgressInfo, UpdateInfo } from 'electron-updater';
+import type { UpdateStatus, UpdateInstallResult } from '../../shared/types';
 import type { Logger } from '../core/logger';
 
 const RELEASES_URL = 'https://github.com/honishi/nico-live-recorder/releases';
-const RELEASE_API_URL = 'https://api.github.com/repos/honishi/nico-live-recorder/releases/latest';
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const CHECK_COOLDOWN_MS = 60_000;
-const REQUEST_TIMEOUT_MS = 10_000;
+const INSTALL_TIMEOUT_MS = 120_000;
 
-/** 公開リリースを読むだけにとどめ、録画のライフサイクルには関与しない */
+/** 履歴の保存は必須とし、診断用ログの保存失敗だけでは更新を妨げない。 */
+export async function flushUpdateState(
+  history: { flush(): void },
+  logger: Pick<Logger, 'warn'> & { flush(): Promise<void> },
+): Promise<void> {
+  history.flush();
+  try {
+    // 適用失敗も追記できるようファイルは閉じず、既存の行の書き出しを待つ。
+    await logger.flush();
+  } catch (error) {
+    logger.warn('更新前のログを保存できませんでした。更新は続行します', error);
+  }
+}
+
+/** 数字だけの一致は避け、ドライバーのコードと HTTP 応答の形式で分類する。 */
+function classifyUpdateError(error: unknown): 'error' | 'rate-limited' | 'unavailable' {
+  if (typeof error !== 'object' || error === null) return 'error';
+  const { code, statusCode, message } = error as {
+    code?: unknown;
+    statusCode?: unknown;
+    message?: unknown;
+  };
+  let httpStatus = typeof statusCode === 'number' ? statusCode : undefined;
+  if (httpStatus === undefined && typeof code === 'string' && /^HTTP_ERROR_\d{3}$/.test(code)) {
+    httpStatus = Number(code.slice('HTTP_ERROR_'.length));
+  }
+  // GitHubProvider は cause を保持せず、元の HttpError.stack をメッセージに埋め込む。
+  // この既知のラッパーだけを扱い、スタックの行番号や URL 中の数字を拾わない。
+  if (httpStatus === undefined && typeof message === 'string') {
+    let match: RegExpMatchArray | null = null;
+    if (
+      code === 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND' ||
+      code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' ||
+      code === 'ERR_UPDATER_INVALID_RELEASE_FEED'
+    ) {
+      match = message.match(/(?:^|: )HttpError: (403|404|429)(?:\s|$)/);
+    } else if (code === undefined) {
+      // HttpExecutor.download の失敗は code を持たない Error として返る。
+      match = message.match(/^Cannot download "[^"\r\n]+", status (403|404|429):/);
+    }
+    if (match) httpStatus = Number(match[1]);
+  }
+  if (httpStatus === 403 || httpStatus === 429) return 'rate-limited';
+  if (
+    httpStatus === 404 ||
+    code === 'ERR_UPDATER_LATEST_VERSION_NOT_FOUND' ||
+    code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND' ||
+    code === 'ERR_UPDATER_NO_PUBLISHED_VERSIONS'
+  ) {
+    return 'unavailable';
+  }
+  return 'error';
+}
+
+/** Electron の実体は起動側で渡し、通信と更新イベントはテストで差し替える。 */
+export type UpdateDriver = Pick<
+  AppUpdater,
+  | 'autoDownload'
+  | 'autoInstallOnAppQuit'
+  | 'autoRunAppAfterInstall'
+  | 'allowPrerelease'
+  | 'allowDowngrade'
+  | 'logger'
+  | 'on'
+  | 'checkForUpdates'
+  | 'quitAndInstall'
+>;
+
+export interface UpdateInstallation {
+  hasRecordings(): boolean;
+  /** 録画の有無の再確認と、新規受付の停止を同期的に行う。 */
+  prepare(): boolean;
+  /** 履歴を書き出し、ログも保存を試みる。履歴の失敗は適用を中止する。 */
+  flush(): Promise<void>;
+  /** 適用失敗時も録画受付を閉じたまま通常の再起動へ進む。 */
+  recover(): void;
+}
+
+/** 更新の失敗を録画から切り離し、ユーザーが操作したときだけ適用する。 */
 export class UpdateChecker extends EventEmitter {
-  private status: UpdateStatus = { checking: false, result: 'unchecked', nextCheckAt: 0 };
+  private status: UpdateStatus = {
+    checking: false,
+    result: 'unchecked',
+    nextCheckAt: 0,
+    installBlocked: false,
+  };
   private inFlight?: Promise<UpdateStatus>;
   private interval?: NodeJS.Timeout;
-  private controller?: AbortController;
+  private installTimer?: NodeJS.Timeout;
+  private downloadToken?: CancellationToken;
   private stopped = false;
+  private recovering = false;
 
   constructor(
-    private readonly currentVersion: string,
+    private readonly updater: UpdateDriver | undefined,
     private readonly logger: Logger,
+    private readonly installation: UpdateInstallation,
   ) {
     super();
+    if (!updater) {
+      this.status.result = 'disabled';
+      return;
+    }
+    // 通常終了時には適用しない。macOS でも明示操作までは Squirrel へ渡さない。
+    updater.autoDownload = true;
+    updater.autoInstallOnAppQuit = false;
+    updater.autoRunAppAfterInstall = true;
+    updater.allowPrerelease = false;
+    updater.allowDowngrade = false;
+    updater.logger = {
+      debug: (message) => logger.debug('[update]', message),
+      info: (message: unknown) => logger.debug('[update]', message),
+      warn: (message: unknown) => logger.debug('[update]', message),
+      error: (message: unknown) => logger.debug('[update]', message),
+    };
+    updater.on('download-progress', (progress: ProgressInfo) => {
+      if (this.status.result === 'installing') return;
+      this.publish({ result: 'downloading', progress: Math.floor(progress.percent) });
+    });
+    updater.on('update-downloaded', (info: UpdateInfo) => {
+      if (this.stopped || this.status.result === 'installing') return;
+      this.downloadToken = undefined;
+      this.logger.info(`v${info.version} の更新をダウンロードしました`);
+      this.publish({ result: 'downloaded', release: this.release(info.version), progress: 100 });
+    });
+    // EventEmitter の error は常に受ける。確認・DL の失敗は Promise 側で一度だけ通知する。
+    updater.on('error', (error: Error) => {
+      if (this.status.result === 'installing') this.installFailed(error);
+      else this.logger.debug('[update]', error);
+    });
   }
 
   getStatus(): UpdateStatus {
-    return structuredClone(this.status);
+    return structuredClone({
+      ...this.status,
+      installBlocked: this.installation.hasRecordings(),
+    });
   }
 
   start(): void {
-    if (this.interval || this.stopped) {
-      return;
-    }
+    if (!this.updater || this.interval || this.stopped) return;
     void this.check();
     this.interval = setInterval(() => void this.check(), CHECK_INTERVAL_MS);
     this.interval.unref();
@@ -40,119 +157,118 @@ export class UpdateChecker extends EventEmitter {
   stop(): void {
     this.stopped = true;
     clearInterval(this.interval);
-    this.controller?.abort();
+    clearTimeout(this.installTimer);
+    this.downloadToken?.cancel();
   }
 
   check(): Promise<UpdateStatus> {
-    // 手動確認と定期確認をまとめ、連打でも GitHub へのアクセスを増やさない
-    if (this.inFlight) {
-      return this.inFlight;
-    }
-    if (this.stopped || Date.now() < this.status.nextCheckAt) {
+    if (this.inFlight) return this.inFlight;
+    // DL 完了後の別バージョンへの切替や、適用中の二重操作を防ぐ。
+    if (
+      !this.updater ||
+      this.stopped ||
+      Date.now() < this.status.nextCheckAt ||
+      ['downloading', 'downloaded', 'installing'].includes(this.status.result)
+    ) {
       return Promise.resolve(this.getStatus());
     }
-    this.inFlight = this.fetchRelease().finally(() => {
+    this.inFlight = this.checkRelease().finally(() => {
       this.inFlight = undefined;
     });
     return this.inFlight;
   }
 
-  private async fetchRelease(): Promise<UpdateStatus> {
-    this.status = { ...this.status, checking: true };
-    this.emit('change');
-    const controller = new AbortController();
-    this.controller = controller;
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    let next: UpdateStatus = {
-      ...this.status,
-      checking: false,
-      result: 'error',
-      nextCheckAt: 0,
-    };
-
+  private async checkRelease(): Promise<UpdateStatus> {
+    this.publish({ checking: true, progress: undefined });
     try {
-      // GitHub のトークンやニコニコの Cookie は送らず、公開 API だけを利用する
-      const response = await fetch(RELEASE_API_URL, {
-        headers: {
-          Accept: 'application/vnd.github+json',
-          'User-Agent': 'nico-live-recorder',
-          'X-GitHub-Api-Version': '2026-03-10',
-        },
-        credentials: 'omit',
-        signal: controller.signal,
-      });
-      // 成功以外の応答も本文を解放して接続を残さない
-      if (!response.ok) {
-        await response.body?.cancel();
+      const result = await this.updater!.checkForUpdates();
+      if (this.stopped) {
+        result?.cancellationToken?.cancel();
+        // 終了中に返った自動 DL の reject も未処理にしない。
+        void result?.downloadPromise?.catch(() => undefined);
+        return this.getStatus();
       }
-      if (response.status === 404) {
-        // 非公開リポジトリとリリース未公開は区別できない。「最新版」とは判定しない
-        next.result = 'unavailable';
-      } else if (response.status === 403 || response.status === 429) {
-        next.result = 'rate-limited';
-        // 制限解除時刻が得られない場合も 1 時間待ち、手動確認にも同じ待機を適用する
-        const retryAfter = Number(response.headers.get('retry-after')) * 1000;
-        const resetAt = Number(response.headers.get('x-ratelimit-reset')) * 1000;
-        next.nextCheckAt = Math.max(
-          Date.now() + 60 * 60 * 1000,
-          Number.isFinite(retryAfter) ? Date.now() + retryAfter : 0,
-          Number.isFinite(resetAt) ? resetAt : 0,
-        );
-      } else if (!response.ok) {
-        throw new Error(`GitHub release check: HTTP ${response.status}`);
+      if (!result) {
+        this.publish({ result: 'unavailable' });
+      } else if (!result.isUpdateAvailable) {
+        this.publish({ result: 'current', release: undefined });
       } else {
-        const release: unknown = await response.json();
-        next = { ...next, ...this.compareRelease(release) };
-      }
-      if (next.release && next.release.version !== this.status.release?.version) {
-        this.logger.info(`新しいバージョン v${next.release.version} があります`);
+        this.logger.info(`新しいバージョン v${result.updateInfo.version} があります`);
+        this.downloadToken = result.cancellationToken;
+        // キャッシュからの完了イベントが先に来ても、DL 中に巻き戻さない。
+        if (this.status.result !== 'downloaded') {
+          this.publish({ result: 'downloading', release: this.release(result.updateInfo.version) });
+        }
+        void result.downloadPromise?.catch((error: unknown) => this.failed(error));
       }
     } catch (error) {
-      this.logger.debug('update check failed', error);
+      this.failed(error);
     } finally {
-      clearTimeout(timeout);
-      this.controller = undefined;
-    }
-
-    // 終了後には状態の配信を行わない。失敗時も前回見つけた更新の案内は残す
-    if (!this.stopped) {
-      this.status = {
-        ...next,
+      this.publish({
+        checking: false,
         checkedAt: new Date().toISOString(),
-        nextCheckAt: Math.max(next.nextCheckAt, Date.now() + CHECK_COOLDOWN_MS),
-      };
-      this.emit('change');
+        nextCheckAt: Math.max(this.status.nextCheckAt, Date.now() + CHECK_COOLDOWN_MS),
+      });
     }
     return this.getStatus();
   }
 
-  private compareRelease(value: unknown): Pick<UpdateStatus, 'result' | 'release'> {
-    if (
-      !value ||
-      typeof value !== 'object' ||
-      !('tag_name' in value) ||
-      typeof value.tag_name !== 'string'
-    ) {
-      throw new Error('invalid GitHub release response');
+  install(): UpdateInstallResult {
+    if (this.status.result === 'installing') return 'started';
+    if (!this.updater || this.stopped || this.status.result !== 'downloaded') return 'not-ready';
+    if (!this.installation.prepare()) return 'busy';
+    this.publish({ result: 'installing' });
+    this.logger.info('再起動して更新を適用します');
+    // ネイティブ更新機構が応答しない場合も、受付を閉じた状態で放置しない。
+    this.installTimer = setTimeout(
+      () => this.installFailed(new Error('update install timed out')),
+      INSTALL_TIMEOUT_MS,
+    );
+    this.installTimer.unref();
+    void this.installAfterFlush();
+    return 'started';
+  }
+
+  private async installAfterFlush(): Promise<void> {
+    try {
+      await this.installation.flush();
+      // 保存待ちに通常終了・復旧へ移った場合、遅れてインストーラーを起動しない。
+      if (this.stopped || this.recovering) return;
+      // NSIS は起動後にアプリを強制終了し得るため、保存完了後にだけ引き渡す。
+      this.updater!.quitAndInstall(true, true);
+    } catch (error) {
+      this.installFailed(error);
     }
-    const tag = value.tag_name;
-    const version = valid(tag);
-    if (!version || !valid(this.currentVersion)) {
-      throw new Error('invalid release or app version');
+  }
+
+  private installFailed(error: unknown): void {
+    if (this.stopped || this.recovering) return;
+    this.recovering = true;
+    clearTimeout(this.installTimer);
+    this.logger.error('更新を適用できませんでした。現在のバージョンで再起動します', error);
+    // macOS の遅延した更新イベントと録画開始が競合しないよう、同じプロセスでは受付を再開しない。
+    this.installation.recover();
+  }
+
+  private failed(error: unknown): void {
+    if (this.stopped) return;
+    if (this.status.result === 'installing') {
+      this.installFailed(error);
+      return;
     }
-    if (!('draft' in value) || !('prerelease' in value)) {
-      throw new Error('missing release visibility');
-    }
-    if (value.draft !== false || value.prerelease !== false || prerelease(version)) {
-      return { result: 'unavailable', release: undefined };
-    }
-    if (!gt(version, this.currentVersion)) {
-      return { result: 'current', release: undefined };
-    }
-    // API の html_url をそのまま開かず、このリポジトリのリリース URL を組み立てる
-    return {
-      result: 'available',
-      release: { version, url: `${RELEASES_URL}/tag/${encodeURIComponent(tag)}` },
-    };
+    const result = classifyUpdateError(error);
+    const delay = result === 'rate-limited' ? 60 * 60 * 1000 : CHECK_COOLDOWN_MS;
+    this.logger.warn('更新を取得できませんでした。録画・監視は継続します', error);
+    this.publish({ result, progress: undefined, nextCheckAt: Date.now() + delay });
+  }
+
+  private release(version: string): NonNullable<UpdateStatus['release']> {
+    return { version, url: `${RELEASES_URL}/tag/v${encodeURIComponent(version)}` };
+  }
+
+  private publish(patch: Partial<UpdateStatus>): void {
+    if (this.stopped) return;
+    this.status = { ...this.status, ...patch };
+    this.emit('change');
   }
 }

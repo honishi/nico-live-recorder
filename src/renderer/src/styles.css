@@ -195,7 +195,17 @@ select {
 }
 
 .update-banner {
+  flex-wrap: wrap;
   background: var(--accent-weak);
+}
+
+.update-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  margin-left: auto;
 }
 
 .update-banner .btn {

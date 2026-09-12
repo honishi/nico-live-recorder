@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, powerSaveBlocker, screen, shell } from 'electron';
 import { IPC, type WindowBounds } from '../shared/types';
 import { AppLogger } from './app/app-logger';
@@ -10,7 +11,7 @@ import { FilePushStateStore } from './app/push-state-store';
 import { RecordingManager } from './app/recording-manager';
 import { SettingsStore } from './app/settings-store';
 import { AppTray, type TrayState } from './app/tray';
-import { UpdateChecker } from './app/update-checker';
+import { UpdateChecker, flushUpdateState } from './app/update-checker';
 import { resolveFfmpegPath } from './core/nico/ffmpeg';
 import { configureProtoRootDir } from './vendor/nico-client/internal/protoLoader';
 
@@ -195,7 +196,24 @@ async function bootstrap(): Promise<void> {
     mainWindow.focus();
   };
 
-  const updates = new UpdateChecker(app.getVersion(), logger);
+  const updates = new UpdateChecker(
+    app.isPackaged && ['darwin', 'win32'].includes(process.platform) ? autoUpdater : undefined,
+    logger,
+    {
+      hasRecordings: () => manager.getActiveRecordingCount() > 0,
+      prepare: () => {
+        if (quitting || !manager.prepareForUpdate()) return false;
+        // Squirrel は before-quit より前にウィンドウを閉じるため、先にトレイ常駐を解除する。
+        quitting = true;
+        return true;
+      },
+      flush: () => flushUpdateState(history, logger),
+      recover: () => {
+        app.relaunch();
+        app.quit();
+      },
+    },
+  );
   const ctx = {
     version: app.getVersion(),
     updates,
@@ -258,7 +276,7 @@ async function bootstrap(): Promise<void> {
   app.on('activate', showMainWindow);
 
   mainWindow = createMainWindow(settings, manager);
-  // パッケージ版だけ自動確認する。開発時も設定画面からの手動確認は可能
+  // パッケージ版だけ更新を確認する。開発時は確認・ダウンロード・適用を無効にする。
   if (app.isPackaged) {
     updates.start();
   }
@@ -273,17 +291,15 @@ async function bootstrap(): Promise<void> {
     app.off('browser-window-focus', refreshFocusedWindow);
   });
   // 終了時は録画の停止処理 (ffmpeg の書き終わり、履歴の確定) とログの書き出しを待ってから抜ける
-  let quitHandled = false;
+  let quitInProgress = false;
   app.on('will-quit', (event) => {
-    if (quitHandled) {
-      return;
-    }
-    quitHandled = true;
     event.preventDefault();
+    if (quitInProgress) return;
+    quitInProgress = true;
     if (manager.hasActiveRecordings()) {
       logger.info('stopping recordings before quit');
     }
-    // どこかで失敗しても、上限時間を過ぎても、必ず app.exit に到達させる
+    // どこかで失敗しても、上限時間を過ぎても、終了イベントへ進める。
     const withTimeout = (task: Promise<unknown>, ms: number): Promise<void> =>
       Promise.race([
         task.then(() => undefined),
@@ -305,6 +321,7 @@ async function bootstrap(): Promise<void> {
       } catch {
         // ログが閉じられなくても終了は続ける
       }
+      // 更新時は quitAndInstall で開始済み。保存後は元の終了経路で確実にプロセスを抜ける。
       app.exit(0);
     })();
   });

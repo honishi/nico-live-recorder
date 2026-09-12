@@ -113,6 +113,12 @@ export function registerIpcHandlers(ctx: IpcContext): void {
   ipcMain.handle(IPC.getStatus, () => buildStatus(ctx));
   ipcMain.handle(IPC.getLogs, () => buildLogs(ctx));
   ipcMain.handle(IPC.checkForUpdates, () => ctx.updates.check());
+  ipcMain.handle(IPC.installUpdate, (event) => {
+    // ログイン画面などからは適用できない。録画状態は main 側で再確認する。
+    const mainFrame = ctx.getMainWindow()?.webContents.mainFrame;
+    if (!mainFrame || event.senderFrame !== mainFrame) return 'not-ready';
+    return ctx.updates.install();
+  });
   ipcMain.handle(IPC.openReleasePage, async () => {
     const release = ctx.updates.getStatus().release;
     if (release) {
