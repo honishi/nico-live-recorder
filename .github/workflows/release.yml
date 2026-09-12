@@ -31,7 +31,7 @@ jobs:
       - name: Package and verify both test versions
         shell: pwsh
         run: |
-          foreach ($testVersion in @('0.5.2', '0.5.3')) {
+          foreach ($testVersion in @('0.5.4', '0.5.5')) {
             npm version $testVersion --no-git-tag-version --ignore-scripts --allow-same-version
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             npx electron-builder --win --x64 --publish never
@@ -56,15 +56,15 @@ jobs:
           }
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-update-test-0.5.2
-          path: test-artifacts/0.5.2/
+          name: windows-update-test-0.5.4
+          path: test-artifacts/0.5.4/
           retention-days: 14
           compression-level: 0
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-update-test-0.5.3
-          path: test-artifacts/0.5.3/
+          name: windows-update-test-0.5.5
+          path: test-artifacts/0.5.5/
           retention-days: 14
           compression-level: 0
           if-no-files-found: error
