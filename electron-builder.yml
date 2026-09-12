@@ -41,6 +41,8 @@ win:
     - target: nsis
       arch: [x64]
 nsis:
+  # 実ファイル名と GitHub 向け更新メタデータの名前を一致させる。
+  artifactName: NicoLiveRecorder-Setup-${version}.${ext}
   oneClick: false
   allowToChangeInstallationDirectory: true
 # ビルド時に更新メタデータを生成し、検証後に release.yml から下書きへ添付する。
