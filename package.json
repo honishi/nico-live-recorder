@@ -1,6 +1,6 @@
 {
   "name": "nico-live-recorder",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "ニコニコ生放送の放送開始を検知して自動録画するデスクトップアプリ",
   "main": "./out/main/index.js",
   "author": "honishi",
