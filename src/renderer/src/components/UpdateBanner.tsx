@@ -28,25 +28,28 @@ export function UpdateBanner({ update, showToast }: Props): ReactElement | null 
   return (
     <div className="update-banner" role="status">
       <span>{updateMessage(update)}</span>
-      {update.result === 'downloaded' && (
+      {/* 更新操作は右側にまとめ、再起動ボタンをリリースページの左隣に置く。 */}
+      <div className="update-banner-actions">
+        {update.result === 'downloaded' && (
+          <button
+            className="btn btn-primary sm"
+            disabled={pending || update.installBlocked}
+            onClick={() => void install()}
+          >
+            再起動して更新
+          </button>
+        )}
         <button
-          className="btn btn-primary sm"
-          disabled={pending || update.installBlocked}
-          onClick={() => void install()}
+          className="btn btn-secondary sm"
+          onClick={() => {
+            void window.api
+              .openReleasePage()
+              .catch(() => showToast('リリースページを開けませんでした'));
+          }}
         >
-          再起動して更新
+          リリースページを開く
         </button>
-      )}
-      <button
-        className="btn btn-secondary sm"
-        onClick={() => {
-          void window.api
-            .openReleasePage()
-            .catch(() => showToast('リリースページを開けませんでした'));
-        }}
-      >
-        リリースページを開く
-      </button>
+      </div>
     </div>
   );
 }
