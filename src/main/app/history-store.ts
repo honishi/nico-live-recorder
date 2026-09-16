@@ -89,19 +89,9 @@ export class HistoryStore {
     return false;
   }
 
-  /** 当日に終わった録画 (録画タブの「直近の録画」用) */
-  finishedToday(now = new Date()): RecordingInfo[] {
-    return this.entries.filter((e) => {
-      if (IN_PROGRESS.has(e.state) || !e.endedAt) {
-        return false;
-      }
-      const d = new Date(e.endedAt);
-      return (
-        d.getFullYear() === now.getFullYear() &&
-        d.getMonth() === now.getMonth() &&
-        d.getDate() === now.getDate()
-      );
-    });
+  /** 録画タブ用に、終了済みの録画を日付に関係なく新しい順で最大 20 件返す */
+  recentFinished(): RecordingInfo[] {
+    return this.match().slice(0, 20);
   }
 
   /** 絞り込み用の配信者名の一覧 */

@@ -793,10 +793,6 @@ select {
   visibility: hidden;
 }
 
-.cols-recent {
-  grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px 68px 62px 52px;
-}
-
 .cols-targets {
   grid-template-columns: 20px 32px minmax(0, 1.6fr) 104px 44px 96px 52px;
 }
@@ -850,10 +846,6 @@ select {
     display: none;
   }
 
-  .cols-recent {
-    grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px 68px 52px;
-  }
-
   .cols-history {
     grid-template-columns: 96px 66px minmax(80px, 1fr) minmax(160px, 2.2fr) 58px 64px 52px;
   }
@@ -862,10 +854,6 @@ select {
 @media (max-width: 800px) {
   .col-size {
     display: none;
-  }
-
-  .cols-recent {
-    grid-template-columns: 78px minmax(88px, 1fr) minmax(160px, 2.4fr) 62px 52px;
   }
 
   .cols-history {
