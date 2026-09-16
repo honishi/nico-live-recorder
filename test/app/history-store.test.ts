@@ -122,15 +122,41 @@ describe('HistoryStore', () => {
     expect(store.query({ offset: 1, limit: 1 }).items.map((e) => e.programId)).toEqual(['lv1']);
   });
 
-  test('finishedToday は当日に終わったものだけを返す', () => {
+  test('recentFinished は日付をまたいで新しい順に最大 50 件を返す', () => {
     const store = new HistoryStore(filePath);
-    const now = new Date(2026, 8, 4, 12, 0, 0);
-    const today = new Date(2026, 8, 4, 1, 0, 0).toISOString();
-    const yesterday = new Date(2026, 8, 3, 23, 0, 0).toISOString();
-    store.upsert(entry({ programId: 'lv1', endedAt: today }));
-    store.upsert(entry({ programId: 'lv2', endedAt: yesterday }));
-    store.upsert(entry({ programId: 'lv3', state: 'recording', endedAt: undefined }));
-    expect(store.finishedToday(now).map((e) => e.programId)).toEqual(['lv1']);
+    expect(store.recentFinished()).toEqual([]);
+    // 挿入順と終了順を変え、今日より前の履歴だけでも 50 件取得できることを確認する。
+    for (let i = 55; i >= 1; i -= 1) {
+      store.upsert(
+        entry({
+          programId: `lv${i}`,
+          endedAt: new Date(Date.UTC(2026, 6, i)).toISOString(),
+          state: i === 54 ? 'failed' : 'done',
+          completion: i === 53 ? 'cancelled' : undefined,
+        }),
+      );
+    }
+    for (const state of ['starting', 'recording', 'finishing'] as const) {
+      store.upsert(entry({ programId: state, state, endedAt: undefined }));
+    }
+    expect(store.recentFinished().map((e) => e.programId)).toEqual(
+      Array.from({ length: 50 }, (_, i) => `lv${55 - i}`),
+    );
+    expect(store.recentFinished()).toEqual(store.query({ limit: 50 }).items);
+  });
+
+  test('recentFinished は 50 件未満なら全件返し、終了日時がなければ開始日時で並べる', () => {
+    const store = new HistoryStore(filePath);
+    store.upsert(entry({ programId: 'lv1' }));
+    store.upsert(
+      entry({
+        programId: 'lv2',
+        state: 'failed',
+        startedAt: '2026-09-05T00:00:00.000Z',
+        endedAt: undefined,
+      }),
+    );
+    expect(store.recentFinished().map((e) => e.programId)).toEqual(['lv2', 'lv1']);
   });
 
   test('remove と flush', () => {

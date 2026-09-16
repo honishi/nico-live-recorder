@@ -218,10 +218,10 @@ export class RecordingManager extends EventEmitter<{ change: [] }> {
     return this.historyVersionCounter;
   }
 
-  /** 録画中のものと、当日に終わったもの (ファイルの有無を確認して返す) */
+  /** 録画中のものと、直近 50 件の終了済み録画 (ファイルの有無を確認して返す) */
   async getRecordings(): Promise<RecordingInfo[]> {
     const active = [...this.active.values()].map((a) => a.info);
-    return [...active, ...(await HistoryStore.checkExistence(this.history.finishedToday()))];
+    return [...active, ...(await HistoryStore.checkExistence(this.history.recentFinished()))];
   }
 
   /** 停止処理中 (finishing) も含めて、まだ終わっていない録画があるか */

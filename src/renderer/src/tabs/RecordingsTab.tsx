@@ -2,16 +2,11 @@ import { useState, type FormEvent, type ReactElement } from 'react';
 import type { RecordingInfo } from '@shared/types';
 import { EmptyState } from '../components/Shell';
 import { ShowRecordingButton } from '../components/ShowRecordingButton';
+import { RecordingHistoryTable } from '../components/RecordingHistoryTable';
 import { RecordingPreview } from '../components/RecordingPreview';
 import { recordingPreviewKey } from '../lib/recording-preview-cache';
 import { describeError } from '../lib/errors';
-import {
-  formatBytes,
-  formatCount,
-  formatDuration,
-  formatRemainingTime,
-  isToday,
-} from '../lib/format';
+import { formatBytes, formatCount, formatDuration, formatRemainingTime } from '../lib/format';
 
 interface Props {
   recordings: RecordingInfo[];
@@ -33,9 +28,7 @@ export function RecordingsTab(props: Props): ReactElement {
     return <Onboarding {...props} />;
   }
   const active = props.recordings.filter((r) => ACTIVE_STATES.has(r.state));
-  const recent = props.recordings.filter(
-    (r) => !ACTIVE_STATES.has(r.state) && r.endedAt && isToday(r.endedAt, props.now),
-  );
+  const recent = props.recordings.filter((r) => !ACTIVE_STATES.has(r.state));
   return (
     <>
       <section className="section">
@@ -61,79 +54,23 @@ export function RecordingsTab(props: Props): ReactElement {
       <section className="section grow">
         <div className="section-head">
           <span className="title">
-            直近の録画<span className="count">今日 {recent.length} 件</span>
+            直近の録画<span className="count">{recent.length} 件</span>
           </span>
           <button className="link" onClick={props.onShowHistory}>
             すべての履歴
           </button>
         </div>
-        <div className="table grow">
-          <div className="table-row head cols-recent">
-            <span>状態</span>
-            <span>配信者</span>
-            <span>タイトル</span>
-            <span className="num">時間</span>
-            <span className="num col-size">サイズ</span>
-            <span className="num col-comments">コメント</span>
-            <span aria-hidden="true" />
-          </div>
-          <div className="table-scroll">
-            {recent.length === 0 ? (
-              <div className="table-row">
-                <span className="muted">今日の録画はまだありません</span>
-              </div>
-            ) : (
-              recent.map((r) => (
-                <div
-                  key={r.programId}
-                  className={`table-row cols-recent ${r.videoExists === false ? 'dim' : ''}`}
-                  onDoubleClick={() => r.videoPath && props.onShowFile(r.videoPath)}
-                >
-                  <span>
-                    <StateBadge recording={r} />
-                  </span>
-                  <span className="ellipsis">{r.providerName ?? r.providerId ?? '—'}</span>
-                  <span className="cell-title">
-                    <span className="ellipsis">
-                      {r.mode === 'timeshift' ? '[タイムシフト] ' : ''}
-                      {r.error ?? r.title}
-                    </span>
-                    {(r.state === 'failed' || r.error) && (
-                      <button className="link" onClick={() => props.onShowLog(r.programId)}>
-                        詳細
-                      </button>
-                    )}
-                  </span>
-                  <span className="num">{formatDuration(r.startedAt, r.endedAt, props.now)}</span>
-                  <span className="num col-size">
-                    {r.videoExists === false ? '—' : formatBytes(r.videoBytes)}
-                  </span>
-                  <span className="num col-comments">{formatCount(r.commentCount)}</span>
-                  <ShowRecordingButton recording={r} onShowFile={props.onShowFile} />
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+        <RecordingHistoryTable
+          items={recent}
+          now={props.now}
+          emptyMessage="録画履歴はまだありません"
+          onShowFile={props.onShowFile}
+          onShowLog={props.onShowLog}
+        />
         <ManualRecordForm />
       </section>
     </>
   );
-}
-
-export function StateBadge({ recording }: { recording: RecordingInfo }): ReactElement {
-  if (recording.completion === 'cancelled')
-    return <span className="badge badge-neutral">停止</span>;
-  if (recording.state === 'failed') {
-    return <span className="badge badge-warn">中断</span>;
-  }
-  if (recording.error || recording.completion === 'partial') {
-    return <span className="badge badge-warn">一部失敗</span>;
-  }
-  if (recording.videoExists === false) {
-    return <span className="badge badge-neutral">削除済</span>;
-  }
-  return <span className="badge badge-ok">完了</span>;
 }
 
 function RecordingCard({

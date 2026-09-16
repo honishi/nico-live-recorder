@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import type { HistoryPage, RecordingInfo } from '@shared/types';
 import { EmptyState } from '../components/Shell';
-import { ShowRecordingButton } from '../components/ShowRecordingButton';
-import { formatBytes, formatCount, formatDateTime, formatDuration } from '../lib/format';
-import { StateBadge } from './RecordingsTab';
+import { RecordingHistoryTable } from '../components/RecordingHistoryTable';
+import { formatBytes } from '../lib/format';
 
 interface Props {
   /** main の履歴が変わるたびに増える。再取得のきっかけ */
@@ -107,61 +106,14 @@ export function HistoryTab({ historyVersion, now, onShowFile, onShowLog }: Props
         />
       ) : (
         <>
-          <div className="table grow">
-            <div className="table-row head cols-history">
-              <span>日時</span>
-              <span>状態</span>
-              <span>配信者</span>
-              <span>タイトル</span>
-              <span className="num">時間</span>
-              <span className="num col-size">サイズ</span>
-              <span className="num col-comments">コメント</span>
-              <span aria-hidden="true" />
-            </div>
-            <div className="table-scroll">
-              {items.length === 0 && (
-                <div className="table-row">
-                  <span className="muted">条件に合う録画はありません</span>
-                </div>
-              )}
-              {items.map((r) => (
-                <div
-                  key={r.programId}
-                  className={`table-row cols-history ${r.videoExists === false ? 'dim' : ''}`}
-                  onDoubleClick={() => r.videoPath && onShowFile(r.videoPath)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    contextMenu(r);
-                  }}
-                >
-                  <span style={{ fontSize: 'var(--fs-sub)', color: 'var(--text-2)' }}>
-                    {formatDateTime(r.endedAt ?? r.startedAt, now)}
-                  </span>
-                  <span>
-                    <StateBadge recording={r} />
-                  </span>
-                  <span className="ellipsis">{r.providerName ?? r.providerId ?? '—'}</span>
-                  <span className="cell-title">
-                    <span className="ellipsis" title={r.title}>
-                      {r.mode === 'timeshift' ? '[タイムシフト] ' : ''}
-                      {r.error ?? r.title}
-                    </span>
-                    {(r.state === 'failed' || r.error) && (
-                      <button className="link" onClick={() => onShowLog(r.programId)}>
-                        詳細
-                      </button>
-                    )}
-                  </span>
-                  <span className="num">{formatDuration(r.startedAt, r.endedAt, now)}</span>
-                  <span className="num col-size">
-                    {r.videoExists === false ? '—' : formatBytes(r.videoBytes)}
-                  </span>
-                  <span className="num col-comments">{formatCount(r.commentCount)}</span>
-                  <ShowRecordingButton recording={r} onShowFile={onShowFile} />
-                </div>
-              ))}
-            </div>
-          </div>
+          <RecordingHistoryTable
+            items={items}
+            now={now}
+            emptyMessage="条件に合う録画はありません"
+            onShowFile={onShowFile}
+            onShowLog={onShowLog}
+            onContextMenu={contextMenu}
+          />
           <div className="table-foot">
             <span>
               {items.length} / {page.total} 件 · 合計 {formatBytes(page.totalBytes)}
