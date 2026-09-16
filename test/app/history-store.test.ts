@@ -122,17 +122,17 @@ describe('HistoryStore', () => {
     expect(store.query({ offset: 1, limit: 1 }).items.map((e) => e.programId)).toEqual(['lv1']);
   });
 
-  test('recentFinished は日付をまたいで新しい順に最大 20 件を返す', () => {
+  test('recentFinished は日付をまたいで新しい順に最大 50 件を返す', () => {
     const store = new HistoryStore(filePath);
     expect(store.recentFinished()).toEqual([]);
-    // 挿入順と終了順を変え、今日より前の履歴だけでも 20 件取得できることを確認する。
-    for (let i = 25; i >= 1; i -= 1) {
+    // 挿入順と終了順を変え、今日より前の履歴だけでも 50 件取得できることを確認する。
+    for (let i = 55; i >= 1; i -= 1) {
       store.upsert(
         entry({
           programId: `lv${i}`,
-          endedAt: new Date(Date.UTC(2026, 7, i)).toISOString(),
-          state: i === 24 ? 'failed' : 'done',
-          completion: i === 23 ? 'cancelled' : undefined,
+          endedAt: new Date(Date.UTC(2026, 6, i)).toISOString(),
+          state: i === 54 ? 'failed' : 'done',
+          completion: i === 53 ? 'cancelled' : undefined,
         }),
       );
     }
@@ -140,12 +140,12 @@ describe('HistoryStore', () => {
       store.upsert(entry({ programId: state, state, endedAt: undefined }));
     }
     expect(store.recentFinished().map((e) => e.programId)).toEqual(
-      Array.from({ length: 20 }, (_, i) => `lv${25 - i}`),
+      Array.from({ length: 50 }, (_, i) => `lv${55 - i}`),
     );
-    expect(store.recentFinished()).toEqual(store.query({ limit: 20 }).items);
+    expect(store.recentFinished()).toEqual(store.query({ limit: 50 }).items);
   });
 
-  test('recentFinished は 20 件未満なら全件返し、終了日時がなければ開始日時で並べる', () => {
+  test('recentFinished は 50 件未満なら全件返し、終了日時がなければ開始日時で並べる', () => {
     const store = new HistoryStore(filePath);
     store.upsert(entry({ programId: 'lv1' }));
     store.upsert(

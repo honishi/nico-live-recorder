@@ -89,9 +89,9 @@ export class HistoryStore {
     return false;
   }
 
-  /** 録画タブ用に、終了済みの録画を日付に関係なく新しい順で最大 20 件返す */
+  /** 録画タブ用に、終了済みの録画を日付に関係なく新しい順で最大 50 件返す */
   recentFinished(): RecordingInfo[] {
-    return this.match().slice(0, 20);
+    return this.match().slice(0, 50);
   }
 
   /** 絞り込み用の配信者名の一覧 */
