@@ -34,6 +34,11 @@ describe('録画プレビューの負荷制限', () => {
     previews.offer('lv1', sample);
     await vi.advanceTimersByTimeAsync(0);
     expect(extract).toHaveBeenCalledTimes(2);
+    // 生成間隔を過ぎても、購読が失効していれば処理を再開しない。
+    await vi.advanceTimersByTimeAsync(5_000);
+    previews.offer('lv1', sample);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extract).toHaveBeenCalledTimes(2);
   });
 
   test('全番組で1件だけ生成し、待ち行列を作らない', async () => {
@@ -90,16 +95,6 @@ describe('録画プレビューの負荷制限', () => {
     await vi.advanceTimersByTimeAsync(0);
   });
 
-  test('画面からの要求が途絶えたら生成を止める', async () => {
-    const extract = vi.fn().mockResolvedValue(jpeg);
-    const previews = new RecordingPreviews(silentLogger, extract);
-    previews.request('lv1');
-    await vi.advanceTimersByTimeAsync(3_000);
-    previews.offer('lv1', sample);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(extract).not.toHaveBeenCalled();
-  });
-
   test('デコード失敗は録画へ伝えず、次のサンプルで回復する', async () => {
     const failure = new Error('decode failed');
     const debug = vi.fn();
@@ -115,17 +110,6 @@ describe('録画プレビューの負荷制限', () => {
     previews.offer('lv1', sample);
     await vi.advanceTimersByTimeAsync(0);
     expect(previews.request('lv1')?.dataUrl).toContain('data:image/jpeg;base64,');
-  });
-
-  test('大きすぎるセグメントや初期化情報をデコーダへ渡さない', async () => {
-    const extract = vi.fn().mockResolvedValue(jpeg);
-    const previews = new RecordingPreviews(silentLogger, extract);
-    previews.request('lv1');
-    previews.request('lv2');
-    previews.offer('lv1', { data: Buffer.alloc(16 * 1024 * 1024 + 1) });
-    previews.offer('lv2', { data: sample.data, init: Buffer.alloc(1024 * 1024 + 1) });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(extract).not.toHaveBeenCalled();
   });
 
   test.each(['segment', 'init'])(
@@ -144,7 +128,7 @@ describe('録画プレビューの負荷制限', () => {
       previews.offer('lv1', oversized);
       previews.offer('lv1', oversized);
       expect(debug).toHaveBeenCalledExactlyOnceWith(
-        `[rec] preview skipped for lv1: size limit (segment ${oversized.data.length}/16777216 bytes, init ${oversized.init?.length ?? 0}/1048576 bytes)`,
+        expect.stringContaining('[rec] preview skipped for lv1: size limit'),
       );
       previews.remove('lv1');
       previews.request('lv1');

@@ -31,18 +31,26 @@ describe('AppLogger', () => {
   test('リングバッファは debug も保持し、ファイルと標準出力は出力レベル以上だけ', async () => {
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const logger = new AppLogger(dir, 'info');
+    const listener = vi.fn();
+    logger.on('entry', listener);
     logger.debug('[detector] quiet');
     logger.info('[rec] start lv1');
+    logger.setOutputLevel('debug');
+    logger.debug('[detector] verbose');
     await logger.close();
 
     expect(logger.recent().map((e) => [e.level, e.category])).toEqual([
       ['debug', 'poll'],
       ['info', 'rec'],
+      ['debug', 'poll'],
     ]);
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener.mock.calls[1][0]).toMatchObject({ level: 'info', message: '[rec] start lv1' });
     const file = fs.readFileSync(path.join(dir, 'app.log'), 'utf8');
     expect(file).toContain('[rec] start lv1');
     expect(file).not.toContain('quiet');
-    expect(stdout).toHaveBeenCalledTimes(1);
+    expect(file).toContain('verbose');
+    expect(stdout).toHaveBeenCalledTimes(2);
   });
 
   test.each(['open', 'write'])(
@@ -96,15 +104,23 @@ describe('AppLogger', () => {
 
   test('flush は退避中に溜まった行も書き出す', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const logger = new AppLogger(dir, 'info', 100);
+    const logger = new AppLogger(dir, 'info', 1000);
     try {
-      logger.info('x'.repeat(150));
-      logger.info('退避中の更新適用ログ');
+      // 一度の退避中に溜まった行が、flush 後にすべて読み出せることを確かめる。
+      for (let i = 0; i < 20; i += 1) {
+        logger.info('[rec] line ' + String(i).padStart(2, '0') + ' ' + 'x'.repeat(40));
+      }
       await logger.flush();
-      expect(fs.readFileSync(logger.logFilePath, 'utf8')).toContain('退避中の更新適用ログ');
+      const rotated = fs.readFileSync(path.join(dir, 'app.log.1'), 'utf8');
+      const current = fs.readFileSync(logger.logFilePath, 'utf8');
+      expect((rotated + current).match(/line \d\d/g)).toEqual(
+        Array.from({ length: 20 }, (_, i) => 'line ' + String(i).padStart(2, '0')),
+      );
+      logger.info('flush 後も続ける');
     } finally {
       await logger.close();
     }
+    expect(fs.readFileSync(logger.logFilePath, 'utf8')).toContain('flush 後も続ける');
   });
 
   test('debug が大量に出ても info 以上は押し出されず、debug 抜きでも取り出せる', async () => {
@@ -153,43 +169,6 @@ describe('AppLogger', () => {
     const current = fs.readFileSync(path.join(dir, 'app.log'), 'utf8');
     expect(current.match(/line \d/g)).toEqual(['line 9']);
     expect(Buffer.byteLength(current)).toBeLessThan(200);
-  });
-
-  test('退避の途中に書かれた行も失わない', async () => {
-    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    // 1 行 70 バイト前後 × 20 行で、途中で 1 回だけ退避が起きる
-    const logger = new AppLogger(dir, 'info', 1000);
-    for (let i = 0; i < 20; i += 1) {
-      logger.info(`[rec] line ${String(i).padStart(2, '0')} ${'x'.repeat(40)}`);
-    }
-    await logger.close();
-
-    const rotated = fs.readFileSync(path.join(dir, 'app.log.1'), 'utf8');
-    const current = fs.readFileSync(path.join(dir, 'app.log'), 'utf8');
-    const lines = (rotated + current).match(/line \d\d/g) ?? [];
-    expect(lines).toEqual(
-      Array.from({ length: 20 }, (_, i) => `line ${String(i).padStart(2, '0')}`),
-    );
-  });
-
-  test('出力レベルを debug に下げるとファイルにも debug が書かれる', async () => {
-    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const logger = new AppLogger(dir, 'info');
-    logger.setOutputLevel('debug');
-    logger.debug('[detector] verbose');
-    await logger.close();
-    expect(fs.readFileSync(path.join(dir, 'app.log'), 'utf8')).toContain('verbose');
-  });
-
-  test('entry イベントで 1 件ずつ通知する', async () => {
-    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const logger = new AppLogger(dir, 'info');
-    const listener = vi.fn();
-    logger.on('entry', listener);
-    logger.warn('something');
-    await logger.close();
-    expect(listener).toHaveBeenCalledTimes(1);
-    expect(listener.mock.calls[0][0]).toMatchObject({ level: 'warn', message: 'something' });
   });
 });
 

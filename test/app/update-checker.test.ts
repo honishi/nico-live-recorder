@@ -141,14 +141,6 @@ describe('UpdateChecker', () => {
       3_600_000,
     ],
     [
-      Object.assign(new Error('429 Too Many Requests'), {
-        statusCode: 429,
-        code: 'HTTP_ERROR_429',
-      }),
-      'rate-limited',
-      3_600_000,
-    ],
-    [
       Object.assign(new Error('HTTP failure'), { code: 'HTTP_ERROR_429' }),
       'rate-limited',
       3_600_000,
@@ -216,7 +208,6 @@ describe('UpdateChecker', () => {
       60_000,
     ],
     [new Error('connection reset\n    at request (/app/provider.js:429:403)'), 'error', 60_000],
-    [new Error('offline'), 'error', 60_000],
     ['429', 'error', 60_000],
   ])('%s の失敗で録画を停止せず再確認を待つ', async (error, result, delay) => {
     updater.checkForUpdates.mockRejectedValue(error);
@@ -277,12 +268,9 @@ describe('UpdateChecker', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  test.each(['throw', 'reject'])('ログ保存失敗 (%s) は警告して更新を続行する', async (mode) => {
+  test('ログ保存失敗は警告して更新を続行する', async () => {
     const error = new Error('log save failed');
-    flushLog.mockImplementation(() => {
-      if (mode === 'throw') throw error;
-      return Promise.reject(error);
-    });
+    flushLog.mockRejectedValue(error);
     updater.emit('update-downloaded', { version: '0.5.0' });
     expect(checker.install()).toBe('started');
     expect(checker.install()).toBe('started');

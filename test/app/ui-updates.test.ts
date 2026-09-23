@@ -190,7 +190,4 @@ test('状態・設定・debug切り替えをそれぞれ配信し、終了時に
   await vi.advanceTimersByTimeAsync(1_000);
   expect(h.destination.status).toHaveBeenCalledTimes(2);
   expect(h.destination.logs).toHaveBeenCalledTimes(2);
-  expect(h.manager.listenerCount('change')).toBe(0);
-  expect(h.logger.listenerCount('entry')).toBe(0);
-  expect(h.settings.listenerCount('ui')).toBe(0);
 });

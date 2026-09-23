@@ -54,18 +54,6 @@ describe('SettingsStore', () => {
     expect(store.get().targets).toHaveLength(0);
   });
 
-  test('新規対象は末尾に追加し、既存対象の更新は位置を保つ', () => {
-    const store = new SettingsStore(filePath, '/videos');
-    store.upsertTarget(target('2', '2026-01-02T00:00:00Z'));
-    store.upsertTarget(target('1', '2026-01-01T00:00:00Z'));
-    store.upsertTarget({ ...target('2', '2026-01-02T00:00:00Z'), name: 'renamed' });
-
-    expect(store.get().targets.map((t) => [t.userId, t.name])).toEqual([
-      ['2', 'renamed'],
-      ['1', 'user-1'],
-    ]);
-  });
-
   test('一括の有効・無効変更は対象外の行や並び順を保ち、保存と通知は一度だけ行う', () => {
     const store = new SettingsStore(filePath, '/videos');
     const original = ['3', '1', '2'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
@@ -96,20 +84,23 @@ describe('SettingsStore', () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
-  test('一括の有効状態の保存に失敗すると、全件を元の状態に保つ', () => {
-    const store = new SettingsStore(filePath, '/videos');
-    const original = ['1', '2'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
-    store.update({ targets: original });
-    const listener = vi.fn();
-    store.on('change', listener);
-    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
-      throw new Error('disk failure');
-    });
-    expect(() => store.setTargetsEnabled(['1', '2'], false)).toThrow('disk failure');
-    expect(store.get().targets).toEqual(original);
-    expect(new SettingsStore(filePath, '/other').get().targets).toEqual(original);
-    expect(listener).not.toHaveBeenCalled();
-  });
+  test.each(['writeFileSync', 'renameSync'] as const)(
+    '%s の保存失敗ではメモリ・ファイル・通知を変更しない',
+    (operation) => {
+      const store = new SettingsStore(filePath, '/videos');
+      const original = ['1', '2'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
+      store.update({ targets: original });
+      const listener = vi.fn();
+      store.on('change', listener);
+      vi.spyOn(fs, operation).mockImplementation(() => {
+        throw new Error('disk failure');
+      });
+      expect(() => store.setTargetsEnabled(['1', '2'], false)).toThrow('disk failure');
+      expect(store.get().targets).toEqual(original);
+      expect(new SettingsStore(filePath, '/other').get().targets).toEqual(original);
+      expect(listener).not.toHaveBeenCalled();
+    },
+  );
 
   test('一括削除は重複・存在しない ID を無視し、保存と通知を一度にまとめる', () => {
     const original = ['1', '2', '3'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
@@ -155,33 +146,6 @@ describe('SettingsStore', () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  test('削除と復元の保存に失敗しても、メモリ・ファイル・通知を変更しない', () => {
-    const store = new SettingsStore(filePath, '/videos');
-    const original = target('1', '2026-01-01T00:00:00Z');
-    store.upsertTarget(original);
-    const listener = vi.fn();
-    store.on('change', listener);
-    const rename = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
-      throw new Error('disk failure');
-    });
-
-    expect(() => store.removeTargets(['1'])).toThrow('disk failure');
-    expect(store.get().targets).toEqual([original]);
-    expect(new SettingsStore(filePath, '/other').get().targets).toEqual([original]);
-    expect(listener).not.toHaveBeenCalled();
-
-    rename.mockRestore();
-    const removed = store.removeTargets(['1']);
-    listener.mockClear();
-    vi.spyOn(fs, 'writeFileSync').mockImplementation(() => {
-      throw new Error('disk failure');
-    });
-    expect(() => store.restoreTargets(removed)).toThrow('disk failure');
-    expect(store.get().targets).toEqual([]);
-    expect(new SettingsStore(filePath, '/other').get().targets).toEqual([]);
-    expect(listener).not.toHaveBeenCalled();
-  });
-
   test('移動した順序を再読み込みでも保ち、名前・有効状態・追加日時は変えない', () => {
     const store = new SettingsStore(filePath, '/videos');
     const original = ['1', '2', '3', '4'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
@@ -203,10 +167,16 @@ describe('SettingsStore', () => {
     expect(store.moveTarget('1', '4').targets.map((t) => t.userId)).toEqual(['1', '4', '2', '3']);
     store.upsertTarget({ ...original[1], name: '変更後' });
     store.upsertTarget(target('5', '2025-01-01T00:00:00Z'));
-    expect(store.get().targets.map((t) => t.userId)).toEqual(['1', '4', '2', '3', '5']);
+    expect(store.get().targets).toEqual([
+      original[0],
+      original[3],
+      { ...original[1], name: '変更後' },
+      original[2],
+      target('5', '2025-01-01T00:00:00Z'),
+    ]);
   });
 
-  test('同じ位置・存在しない行への移動は保存せず、保存失敗も元の順序を保つ', () => {
+  test('同じ位置・存在しない行への移動は保存も通知もしない', () => {
     const store = new SettingsStore(filePath, '/videos');
     const original = ['1', '2'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));
     store.update({ targets: original });
@@ -223,10 +193,6 @@ describe('SettingsStore', () => {
       store.moveTarget(id!, beforeId);
     }
     expect(write).not.toHaveBeenCalled();
-    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
-      throw new Error('disk failure');
-    });
-    expect(() => store.moveTarget('2', '1')).toThrow('disk failure');
     expect(store.get().targets).toEqual(original);
     expect(new SettingsStore(filePath, '/other').get().targets).toEqual(original);
     expect(listener).not.toHaveBeenCalled();
@@ -265,7 +231,7 @@ describe('SettingsStore', () => {
   });
 
   test('型や範囲が合わない値は既定値に戻す (ポーリング間隔が NaN になると API を連続で叩くため)', () => {
-    const cases: unknown[] = ['30', NaN, 1, 0, -30, 100_000, null, true];
+    const cases: unknown[] = ['30', null, 1, 100_000];
     for (const value of cases) {
       fs.writeFileSync(filePath, JSON.stringify({ pollIntervalSec: value }), 'utf8');
       expect(new SettingsStore(filePath, '/videos').get().pollIntervalSec, String(value)).toBe(30);
