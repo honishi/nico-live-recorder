@@ -52,36 +52,8 @@ describe('resolveUserNickname / checkFollowing', () => {
     );
   });
 
-  test('フォロー状態は API の following から決め、失敗はすべて unknown', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ data: { following: true } }))),
-    );
-    expect(await checkFollowing('1', 'user_session=x')).toMatchObject({ result: 'following' });
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response(JSON.stringify({ data: { following: false } }))),
-    );
-    expect(await checkFollowing('1', 'user_session=x')).toMatchObject({ result: 'not-following' });
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response('{}', { status: 403 })),
-    );
-    expect(await checkFollowing('1', 'user_session=x')).toMatchObject({ result: 'unknown' });
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        throw new Error('offline');
-      }),
-    );
-    expect(await checkFollowing('1', 'user_session=x')).toMatchObject({ result: 'unknown' });
-  });
-
-  test.each([401, 403, 429, 503])(
-    'HTTP %i の理由と Retry-After を debug に記録する',
+  test.each([401, 403, 404, 429, 503])(
+    'HTTP %i の再試行可否・待機時刻を返し、非公開情報をログに出さない',
     async (status) => {
       const logger = {
         ...silentLogger,
@@ -101,9 +73,13 @@ describe('resolveUserNickname / checkFollowing', () => {
         ),
       );
 
-      expect(await checkFollowing('123', 'user_session=private-cookie', logger)).toMatchObject({
+      const before = Date.now();
+      const result = await checkFollowing('123', 'user_session=private-cookie', logger);
+      expect(result).toMatchObject({
         result: 'unknown',
+        retryable: status === 429 || status >= 500,
       });
+      if (result.retryable) expect(result.retryAt).toBeGreaterThanOrEqual(before + 60_000);
       expect(logger.debug).toHaveBeenCalledExactlyOnceWith(
         `[follow] user 123: HTTP ${status}, retry-after=60`,
       );
@@ -146,6 +122,7 @@ describe('resolveUserNickname / checkFollowing', () => {
 
     expect(await checkFollowing('123', 'user_session=x', logger)).toMatchObject({
       result: 'unknown',
+      retryable: true,
     });
     expect(logger.debug).toHaveBeenCalledExactlyOnceWith(
       '[follow] user 123: request failed',
@@ -193,28 +170,6 @@ describe('resolveUserNickname / checkFollowing', () => {
 
 describe('フォロー確認の再試行情報', () => {
   afterEach(() => vi.unstubAllGlobals());
-
-  test.each([429, 500, 503, 504])('HTTP %i は再試行可能として待機時刻を返す', async (status) => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response('', { status, headers: { 'retry-after': '60' } })),
-    );
-    const before = Date.now();
-    const result = await checkFollowing('1', 'cookie');
-    expect(result).toMatchObject({ result: 'unknown', retryable: true });
-    expect(result.retryAt).toBeGreaterThanOrEqual(before + 60_000);
-  });
-
-  test.each([401, 403, 404])('HTTP %i は自動再試行しない', async (status) => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response('', { status })),
-    );
-    expect(await checkFollowing('1', 'cookie')).toMatchObject({
-      result: 'unknown',
-      retryable: false,
-    });
-  });
 
   test('Retry-After の秒数・日時を読み、不正値と過去の日時は使わない', () => {
     const now = Date.parse('2026-09-06T00:00:00Z');

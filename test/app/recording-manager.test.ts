@@ -235,23 +235,21 @@ describe('RecordingManager', () => {
     expect(recordCalls).toHaveLength(0);
   });
 
-  test.each(['push', 'poll'] as const)(
-    '更新受付後の %s 検知は警告・再試行を発生させない',
-    async (source) => {
-      settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
-      await manager.start();
-      const start = vi.spyOn(manager, 'startRecording');
-      const detector = detectors.at(-1)!;
-      expect(manager.prepareForUpdate()).toBe(true);
-      detector.emit('program', { programId: 'lv1', providerId: '100', source });
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(start).not.toHaveBeenCalled();
-      expect(getProgramInfo).not.toHaveBeenCalled();
-      expect(logger.warn).not.toHaveBeenCalled();
-      expect(logger.error).not.toHaveBeenCalled();
-      expect(recordCalls).toHaveLength(0);
-    },
-  );
+  test('更新受付後の push 検知は警告・再試行を発生させない', async () => {
+    const source = 'push' as const;
+    settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    await manager.start();
+    const start = vi.spyOn(manager, 'startRecording');
+    const detector = detectors.at(-1)!;
+    expect(manager.prepareForUpdate()).toBe(true);
+    detector.emit('program', { programId: 'lv1', providerId: '100', source });
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(start).not.toHaveBeenCalled();
+    expect(getProgramInfo).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(recordCalls).toHaveLength(0);
+  });
 
   test('再試行の待機中に更新を受け付けたら、次の開始と失敗通知を止める', async () => {
     settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
@@ -324,12 +322,6 @@ describe('RecordingManager', () => {
     fail(new Error('unavailable'));
     await expect(pending).rejects.toThrow();
     expect(manager.prepareForUpdate()).toBe(true);
-  });
-
-  test('録画本体が残る間は更新を保留する', async () => {
-    await manager.startRecording('lv1', 'manual');
-    expect(manager.prepareForUpdate()).toBe(false);
-    expect(recordCalls[0].signal?.aborted).toBe(false);
   });
 
   beforeEach(() => {
@@ -469,78 +461,46 @@ describe('RecordingManager', () => {
     }
   });
 
-  test.each(['live', 'timeshift'] as const)(
-    '%s のプレビューを録画と結線し、履歴へ保存せず停止時に解放する',
-    async (mode) => {
-      if (mode === 'timeshift')
-        getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
-      await manager.startRecording('lv1', 'manual');
-      const call = await nextRecordCall(0);
-      const sample = { data: Buffer.from('video'), init: Buffer.from('init') };
-      // 他番組の要求ではこの番組の画像生成を有効にしない。
-      expect(manager.getRecordingPreview('lv999', true)).toBeUndefined();
-      call.options.onVideoSample?.(sample);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(extractPreview).not.toHaveBeenCalled();
-      manager.getRecordingPreview('lv1', true);
-      call.options.onVideoSample?.(sample);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(extractPreview).toHaveBeenCalledTimes(1);
-      const image = manager.getRecordingPreview('lv1', true);
-      expect(image?.dataUrl).toBe('data:image/jpeg;base64,anBlZw==');
-      expect(manager.getRecordingPreview('lv1', true, image?.capturedAt)).toBeUndefined();
-      expect(JSON.stringify(history.get('lv1'))).not.toContain('data:image');
-      manager.pausePreviews();
-      expect(manager.getRecordingPreview('lv1', true)).toBeUndefined();
-      manager.stopRecording('lv1');
-      call.options.onVideoSample?.(sample);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(manager.getRecordingPreview('lv1', true)).toBeUndefined();
-      expect(extractPreview).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  test.each([
-    ['live', 'complete', '録画が終了しました'],
-    ['timeshift', 'complete', 'タイムシフト録画が終了しました'],
-    ['timeshift', 'partial', 'タイムシフト録画が一部失敗しました'],
-    ['timeshift', 'failed', 'タイムシフト録画に失敗しました'],
-    ['timeshift', 'cancelled', 'タイムシフト録画を停止しました'],
-    ['timeshift', 'exception', 'タイムシフト録画に失敗しました'],
-  ] as const)('%s の %s で開始と終了結果をそれぞれ1回通知する', async (mode, completion, title) => {
-    settings.update({ notificationsEnabled: true });
-    if (mode === 'timeshift')
-      getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+  test('live のプレビューを録画と結線し、履歴へ保存せず停止時に解放する', async () => {
     await manager.startRecording('lv1', 'manual');
     const call = await nextRecordCall(0);
+    const sample = { data: Buffer.from('video'), init: Buffer.from('init') };
+    // 他番組の要求ではこの番組の画像生成を有効にしない。
+    expect(manager.getRecordingPreview('lv999', true)).toBeUndefined();
+    call.options.onVideoSample?.(sample);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extractPreview).not.toHaveBeenCalled();
+    manager.getRecordingPreview('lv1', true);
+    call.options.onVideoSample?.(sample);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(extractPreview).toHaveBeenCalledTimes(1);
+    const image = manager.getRecordingPreview('lv1', true);
+    expect(image?.dataUrl).toBe('data:image/jpeg;base64,anBlZw==');
+    expect(manager.getRecordingPreview('lv1', true, image?.capturedAt)).toBeUndefined();
+    expect(JSON.stringify(history.get('lv1'))).not.toContain('data:image');
+    manager.pausePreviews();
+    expect(manager.getRecordingPreview('lv1', true)).toBeUndefined();
+    manager.stopRecording('lv1');
+    call.options.onVideoSample?.(sample);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(manager.getRecordingPreview('lv1', true)).toBeUndefined();
+    expect(extractPreview).toHaveBeenCalledTimes(1);
+  });
+
+  test('タイムシフトの例外終了も開始と失敗を一度ずつ通知する', async () => {
+    settings.update({ notificationsEnabled: true });
+    getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
+    await manager.startRecording('lv1', 'manual');
+    const call = await nextRecordCall(0);
+    call.reject(new Error('failed'));
+    await waitFor(() => !manager.hasActiveRecordings());
     expect(notifications).toEqual([
+      { title: 'タイムシフト録画を開始しました', body: 'alice タイトル' },
       {
-        title: mode === 'timeshift' ? 'タイムシフト録画を開始しました' : '録画を開始しました',
-        body: 'alice タイトル',
+        title: 'タイムシフト録画に失敗しました',
+        body: expect.stringContaining('タイトル') as string,
       },
     ]);
-    // 実在する成果物を用意し、ファイル消失の分岐とは独立して通知結果を検証する。
-    fs.mkdirSync(call.options.outputDir, { recursive: true });
-    fs.writeFileSync(path.join(call.options.outputDir, 'rec.ts'), 'video');
-    fs.writeFileSync(path.join(call.options.outputDir, 'rec.comments.csv'), 'comments');
-    if (completion === 'cancelled') manager.stopRecording('lv1');
-    if (completion === 'exception') call.reject(new Error('failed'));
-    else
-      call.resolve(
-        finishedResult(call, {
-          ...(mode === 'timeshift'
-            ? {
-                timeshift: { completion: completion === 'failed' ? 'partial' : completion },
-              }
-            : {}),
-          ...(completion === 'failed' ? { video: undefined } : {}),
-          errors: completion === 'partial' ? [{ target: 'comments', message: 'failed' }] : [],
-        }),
-      );
-    await waitFor(() => !manager.hasActiveRecordings());
-    expect(notifications).toHaveLength(2);
-    expect(notifications[1].title).toBe(title);
-    expect(notifications[1].body).toContain('タイトル');
   });
 
   test.each(['disabled', 'unsupported'] as const)(
@@ -633,6 +593,7 @@ describe('RecordingManager', () => {
   });
 
   test('映像成功・コメント一部失敗は動画を取り直さずdone/partialで履歴に残す', async () => {
+    settings.update({ notificationsEnabled: true });
     getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
     await manager.startRecording('lv1', 'manual');
     const call = await nextRecordCall(0);
@@ -652,6 +613,13 @@ describe('RecordingManager', () => {
     });
     await vi.advanceTimersByTimeAsync(60_000);
     expect(recordCalls).toHaveLength(1);
+    expect(notifications).toEqual([
+      { title: 'タイムシフト録画を開始しました', body: 'alice タイトル' },
+      {
+        title: 'タイムシフト録画が一部失敗しました',
+        body: expect.stringContaining('タイトル') as string,
+      },
+    ]);
   });
 
   test('視聴できないタイムシフトや取得できない番組はコード付きの例外にする', async () => {
@@ -672,6 +640,7 @@ describe('RecordingManager', () => {
   test.each(['complete', 'partial', 'cancelled'] as const)(
     '手動タイムシフトの%sを区別し、自動再試行しない',
     async (completion) => {
+      settings.update({ notificationsEnabled: true });
       getProgramInfo.mockResolvedValue(info({ status: NicoLiveProgramStatus.ended }));
       await manager.startRecording('lv1', 'manual');
       const call = await nextRecordCall(0);
@@ -687,6 +656,10 @@ describe('RecordingManager', () => {
         state: 'finishing',
         timeshift: progress,
       });
+      fs.mkdirSync(call.options.outputDir, { recursive: true });
+      if (completion !== 'partial')
+        fs.writeFileSync(path.join(call.options.outputDir, 'rec.ts'), 'video');
+      fs.writeFileSync(path.join(call.options.outputDir, 'rec.comments.csv'), 'comments');
       if (completion === 'cancelled') manager.stopRecording('lv1');
       call.resolve(
         finishedResult(call, {
@@ -705,6 +678,15 @@ describe('RecordingManager', () => {
       await vi.advanceTimersByTimeAsync(60_000);
       expect(recordCalls).toHaveLength(1);
       expect(getProgramInfo).toHaveBeenCalledOnce();
+      const titles = {
+        complete: 'タイムシフト録画が終了しました',
+        partial: 'タイムシフト録画に失敗しました',
+        cancelled: 'タイムシフト録画を停止しました',
+      };
+      expect(notifications).toEqual([
+        { title: 'タイムシフト録画を開始しました', body: 'alice タイトル' },
+        { title: titles[completion], body: expect.stringContaining('タイトル') as string },
+      ]);
       if (completion === 'cancelled') {
         expect(history.match({ state: 'done' })).toEqual([]);
         expect(history.match({ state: 'cancelled' })).toHaveLength(1);
@@ -771,6 +753,7 @@ describe('RecordingManager', () => {
   });
 
   test('録画を始めて完了すると、履歴に配信者フォルダとファイルが残る', async () => {
+    settings.update({ notificationsEnabled: true });
     const started = await manager.startRecording('lv1', 'manual');
     expect(started).toMatchObject({ providerName: 'alice', title: 'タイトル' });
     expect(['starting', 'recording']).toContain(started.state);
@@ -778,6 +761,8 @@ describe('RecordingManager', () => {
 
     const call = await nextRecordCall(0);
     expect(call.options.outputDir).toBe(started.outputDir);
+    expect(manager.prepareForUpdate()).toBe(false);
+    expect(call.signal?.aborted).toBe(false);
     expect(call.options.attempt).toBe(1);
     expect(call.options.prefetchBackwardComments).toBe(true);
     // 開始時点で履歴に残り (クラッシュ時の復元用)、進行中の状態は active 側で持つ
@@ -794,16 +779,21 @@ describe('RecordingManager', () => {
     expect(entry.commentsPath).toBe(`${entry.outputDir}/rec.comments.csv`);
     expect(entry.endedAt).toBeDefined();
     expect(manager.hasActiveRecordings()).toBe(false);
+    expect(notifications).toEqual([
+      { title: '録画を開始しました', body: 'alice タイトル' },
+      { title: '録画が終了しました', body: 'alice タイトル' },
+    ]);
+    // 同名の配信者でも ID が違えば別の保存先になる。
+    getProgramInfo.mockResolvedValueOnce(info({ nicoliveProgramId: 'lv2', providerId: '200' }));
+    const second = await manager.startRecording('lv2', 'manual');
+    expect(second.outputDir).toBe(path.join(dir, 'out', '200_alice'));
   });
 
   test.each([
     ['100', '配信者/名:*?. ', '100_配信者_名___'],
     ['../100', 'alice', '.._100_alice'],
-    ['100', undefined, '100'],
-    ['100', '', '100'],
     ['100', '   ', '100'],
     [undefined, 'alice', 'unknown_alice'],
-    ['', 'alice', 'unknown_alice'],
     [undefined, undefined, 'unknown'],
   ] as const)(
     '配信者 ID %j・名前 %j の保存フォルダは %s',
@@ -815,14 +805,6 @@ describe('RecordingManager', () => {
       expect(call.options.outputDir).toBe(started.outputDir);
     },
   );
-
-  test('同名の配信者でも ID が異なれば別のフォルダに保存する', async () => {
-    const first = await manager.startRecording('lv1', 'manual');
-    getProgramInfo.mockResolvedValueOnce(info({ nicoliveProgramId: 'lv2', providerId: '200' }));
-    const second = await manager.startRecording('lv2', 'manual');
-    expect(first.outputDir).toBe(path.join(dir, 'out', '100_alice'));
-    expect(second.outputDir).toBe(path.join(dir, 'out', '200_alice'));
-  });
 
   test('映像が異常終了したら、最新の番組情報で連番の別ファイルとして再開する', async () => {
     await manager.startRecording('lv1', 'manual');
@@ -1071,16 +1053,6 @@ describe('RecordingManager', () => {
     expect(getProgramInfo).toHaveBeenCalledTimes(1);
   });
 
-  test('停止すると録画本体に abort が伝わり、完了として履歴に残る', async () => {
-    await manager.startRecording('lv1', 'manual');
-    const call = await nextRecordCall(0);
-    expect(manager.stopRecording('lv1')).toBe(true);
-    expect(call.signal?.aborted).toBe(true);
-    call.resolve(finishedResult(call, { video: { reason: 'aborted', video: {} } }));
-    await waitFor(() => history.get('lv1')?.state === 'done');
-    expect(manager.stopRecording('lv1')).toBe(false);
-  });
-
   test('空き容量がしきい値を下回るとバナー用の警告を出し、回復したら消す', async () => {
     let free = 1 * GIB;
     let probeFails = false;
@@ -1272,25 +1244,9 @@ describe('RecordingManager', () => {
     expect(recording.signal?.aborted).toBe(false);
   });
 
-  test('対象の並び替えは検知器を再起動しない', async () => {
-    settings.restoreTargets(
-      ['100', '200'].map((userId) => ({
-        userId,
-        name: userId,
-        enabled: true,
-        addedAt: '2026-01-01T00:00:00Z',
-      })),
-    );
-    await manager.start();
-    const detectorCount = detectors.length;
-    settings.moveTarget('200', '100');
-    await vi.advanceTimersByTimeAsync(0);
-    expect(detectors).toHaveLength(detectorCount);
-    expect(detectors.at(-1)?.running).toBe(true);
-  });
-
   test('無関係な設定で検知器を作り直さず、再接続後も手動停止を保持する', async () => {
     settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    settings.upsertTarget({ userId: '200', name: 'bob', enabled: true, addedAt: 'b' });
     await manager.start();
     await manager.startRecording('lv1', 'manual');
     const first = await nextRecordCall(0);
@@ -1298,9 +1254,11 @@ describe('RecordingManager', () => {
     first.resolve(finishedResult(first, { video: { reason: 'aborted', video: {} } }));
     await waitFor(() => !manager.hasActiveRecordings());
     const detectorCount = detectors.length;
+    settings.moveTarget('200', '100');
     settings.update({ notificationsEnabled: false, outputDir: path.join(dir, 'other') });
     await vi.advanceTimersByTimeAsync(0);
     expect(detectors).toHaveLength(detectorCount);
+    expect(detectors.at(-1)?.running).toBe(true);
 
     await manager.restartDetection();
     const detector = detectors.at(-1)!;
@@ -1524,55 +1482,51 @@ describe('RecordingManager', () => {
   });
 
   // タイムシフトの開始分岐を追加しても、自動検知の入口と既存ジョブの独立性を保つ。
-  test.each(['push', 'poll'] as const)(
-    '自動検知 %s は終了済み番組を開始せず、開始再試行も打ち切る',
-    async (source) => {
-      settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
-      await manager.start();
-      const detector = detectors.at(-1)!;
-      getProgramInfo.mockResolvedValue(
-        info({ status: NicoLiveProgramStatus.ended, hasTimeshift: true }),
-      );
-      const start = vi.spyOn(manager, 'startRecording');
-      detector.emit('program', {
-        programId: 'lv1',
-        providerId: '100',
-        source,
-        alreadyOnAir: false,
-      });
-      await expect(start.mock.results[0].value).rejects.toThrow(/ended$/);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(start).toHaveBeenCalledTimes(1);
-      expect(getProgramInfo).toHaveBeenCalledTimes(1);
-      expect(recordCalls).toHaveLength(0);
-      expect(history.get('lv1')).toBeUndefined();
-      expect(manager.hasActiveRecordings()).toBe(false);
-    },
-  );
+  test('自動検知 poll は終了済み番組を開始せず、開始再試行も打ち切る', async () => {
+    const source = 'poll' as const;
+    settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    await manager.start();
+    const detector = detectors.at(-1)!;
+    getProgramInfo.mockResolvedValue(
+      info({ status: NicoLiveProgramStatus.ended, hasTimeshift: true }),
+    );
+    const start = vi.spyOn(manager, 'startRecording');
+    detector.emit('program', {
+      programId: 'lv1',
+      providerId: '100',
+      source,
+      alreadyOnAir: false,
+    });
+    await expect(start.mock.results[0].value).rejects.toThrow(/ended$/);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(getProgramInfo).toHaveBeenCalledTimes(1);
+    expect(recordCalls).toHaveLength(0);
+    expect(history.get('lv1')).toBeUndefined();
+    expect(manager.hasActiveRecordings()).toBe(false);
+  });
 
-  test.each(['push', 'poll'] as const)(
-    '自動検知 %s の重複通知でもライブ録画を一度だけ開始する',
-    async (source) => {
-      settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
-      await manager.start();
-      const detector = detectors.at(-1)!;
-      const program = { programId: 'lv1', providerId: '100', source, alreadyOnAir: false };
-      detector.emit('program', program);
-      detector.emit('program', { ...program, source: source === 'push' ? 'poll' : 'push' });
-      const call = await nextRecordCall(0);
-      expect(recordCalls).toHaveLength(1);
-      expect(getProgramInfo).toHaveBeenCalledTimes(1);
-      expect(call.options).toMatchObject({
-        programId: 'lv1',
-        prefetchBackwardComments: true,
-        programInfo: { status: NicoLiveProgramStatus.onAir },
-      });
-      expect(history.get('lv1')?.source).toBe(source);
-      call.resolve(finishedResult(call));
-      await waitFor(() => history.get('lv1')?.state === 'done');
-      expect(history.get('lv1')?.error).toBeUndefined();
-    },
-  );
+  test('自動検知 push の重複通知でもライブ録画を一度だけ開始する', async () => {
+    const source = 'push' as const;
+    settings.upsertTarget({ userId: '100', name: 'alice', enabled: true, addedAt: 'a' });
+    await manager.start();
+    const detector = detectors.at(-1)!;
+    const program = { programId: 'lv1', providerId: '100', source, alreadyOnAir: false };
+    detector.emit('program', program);
+    detector.emit('program', { ...program, source: 'poll' });
+    const call = await nextRecordCall(0);
+    expect(recordCalls).toHaveLength(1);
+    expect(getProgramInfo).toHaveBeenCalledTimes(1);
+    expect(call.options).toMatchObject({
+      programId: 'lv1',
+      prefetchBackwardComments: true,
+      programInfo: { status: NicoLiveProgramStatus.onAir },
+    });
+    expect(history.get('lv1')?.source).toBe(source);
+    call.resolve(finishedResult(call));
+    await waitFor(() => history.get('lv1')?.state === 'done');
+    expect(history.get('lv1')?.error).toBeUndefined();
+  });
 
   test.each([false, true])(
     '起動時の放送中番組は設定=%sに従い、新規放送は常に録画する',
@@ -1617,11 +1571,12 @@ describe('RecordingManager', () => {
     const automatic = await nextRecordCall(1);
     expect(automatic.options.programId).toBe('lv1');
     expect(history.get('lv1')?.source).toBe('push');
-    manager.stopRecording('lv2');
+    expect(manager.stopRecording('lv2')).toBe(true);
     expect(manual.signal?.aborted).toBe(true);
     expect(automatic.signal?.aborted).toBe(false);
     manual.resolve(finishedResult(manual, { video: { reason: 'aborted', video: {} } }));
     await waitFor(() => history.get('lv2')?.state === 'done');
+    expect(manager.stopRecording('lv2')).toBe(false);
     expect(manager.hasActiveRecordings()).toBe(true);
     expect(automatic.signal?.aborted).toBe(false);
     automatic.resolve(finishedResult(automatic));

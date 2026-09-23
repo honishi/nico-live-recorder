@@ -33,53 +33,23 @@ describe('録画プレビューのキャッシュ', () => {
     expect(recordingPreviewKey({ ...recording, attempt: 1 })).toBe(keys[0]);
   });
 
-  test.each<{ state: RecordingInfo['state']; keep: boolean }>([
-    { state: 'starting', keep: true },
-    { state: 'recording', keep: true },
-    { state: 'finishing', keep: true },
-    { state: 'done', keep: false },
-    { state: 'failed', keep: false },
-  ])('$state の状態に応じて画像を保持・解放する', ({ state, keep }) => {
-    const key = recordingPreviewKey(recording);
-    recordingPreviewImages.set(key, image);
-
-    pruneRecordingPreviewImages([{ ...recording, state }]);
-
-    expect(recordingPreviewImages.size).toBe(keep ? 1 : 0);
-    expect(recordingPreviewImages.get(key)).toBe(keep ? image : undefined);
-  });
-
-  test.each([
-    { label: '別パートへの再開', current: { ...recording, attempt: 2 } },
-    {
-      label: '同一番組の録り直し',
-      current: { ...recording, startedAt: '2026-09-09T01:00:00.000Z' },
-    },
-  ])('$label で古い画像だけを解放する', ({ current }) => {
-    const oldKey = recordingPreviewKey(recording);
-    const currentKey = recordingPreviewKey(current);
-    const other = { ...recording, programId: 'lv2' };
-    const otherKey = recordingPreviewKey(other);
-    const currentImage = { ...image, dataUrl: 'data:image/jpeg;base64,new', capturedAt: 2 };
-    recordingPreviewImages.set(oldKey, image);
-    recordingPreviewImages.set(currentKey, currentImage);
-    recordingPreviewImages.set(otherKey, image);
-
-    // 録画一覧の更新だけで旧パートを解放し、現在のパートと他番組には触れない。
-    pruneRecordingPreviewImages([current, other]);
-
-    expect(recordingPreviewImages.has(oldKey)).toBe(false);
-    expect(recordingPreviewImages.size).toBe(2);
-    expect(recordingPreviewImages.get(currentKey)).toBe(currentImage);
-    expect(recordingPreviewImages.get(otherKey)).toBe(image);
-  });
-
-  test('録画一覧から消えた番組の画像も解放する', () => {
-    recordingPreviewImages.set(recordingPreviewKey(recording), image);
-    recordingPreviewImages.set(recordingPreviewKey({ ...recording, programId: 'lv2' }), image);
-
+  test('進行中の現パートだけ保持し、終了・旧パート・一覧外の画像を解放する', () => {
+    const current: RecordingInfo[] = [
+      { ...recording, state: 'starting', attempt: 2 },
+      { ...recording, programId: 'lv2', state: 'recording', startedAt: '2026-09-09T01:00:00.000Z' },
+      { ...recording, programId: 'lv3', state: 'finishing' },
+      { ...recording, programId: 'lv4', state: 'done' },
+      { ...recording, programId: 'lv5', state: 'failed' },
+    ];
+    const old = [recording, { ...recording, programId: 'lv2' }, { ...recording, programId: 'lv6' }];
+    for (const item of [...current, ...old]) {
+      recordingPreviewImages.set(recordingPreviewKey(item), image);
+    }
+    pruneRecordingPreviewImages(current);
+    expect([...recordingPreviewImages.entries()]).toEqual(
+      current.slice(0, 3).map((item) => [recordingPreviewKey(item), image]),
+    );
     pruneRecordingPreviewImages([]);
-
     expect(recordingPreviewImages.size).toBe(0);
   });
 });

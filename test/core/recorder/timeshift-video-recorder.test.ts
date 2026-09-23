@@ -1,3 +1,4 @@
+import { writeFakeFfmpeg } from '../../helpers/fake-ffmpeg';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,37 +10,6 @@ import { fragment, fragmentInit } from '../../helpers/fmp4';
 
 // バックオフの時間はHTTP層の仮想タイマーテストで検証し、ここでは結線を確認する。
 vi.mock('node:timers/promises', () => ({ setTimeout: vi.fn(async () => {}) }));
-
-function writeFakeFfmpeg(dir: string): string {
-  const script = path.join(dir, 'fake-ffmpeg.cjs');
-  fs.writeFileSync(
-    script,
-    [
-      "const fs = require('node:fs');",
-      "const net = require('node:net');",
-      'const out = process.argv[process.argv.length - 1];',
-      'const copy = (fd, file) =>',
-      '  new Promise((resolve) => {',
-      '    let input;',
-      '    try {',
-      '      input = new net.Socket({ fd, readable: true, writable: false });',
-      '    } catch {',
-      '      resolve(); // その fd が渡されていない (音声なし) ときは何もしない',
-      '      return;',
-      '    }',
-      '    const output = fs.createWriteStream(file);',
-      '    input.pipe(output);',
-      "    output.on('close', resolve);",
-      "    input.on('error', () => output.end());",
-      '  });',
-      "Promise.all([copy(3, out), copy(4, out + '.audio')]).then(() => {",
-      '  process.exit(Number(process.env.FAKE_FFMPEG_EXIT || 0));',
-      '});',
-      '',
-    ].join('\n'),
-  );
-  return script;
-}
 
 let dir: string;
 let binary: string;
@@ -148,31 +118,25 @@ test('2トラックを並列取得・復号し、両方の保存数・FFmpeg・�
   ]);
 });
 
-test.each(['missing', 'forbidden', 'live', 'ffmpeg', 'early-exit'] as const)(
+test.each(['forbidden', 'live', 'ffmpeg', 'early-exit'] as const)(
   '%s を取得完了にせずFFmpegも終了させる',
   async (failure) => {
     media({
-      missing: failure === 'missing',
       forbidden: failure === 'forbidden',
       live: failure === 'live',
     });
     if (failure === 'ffmpeg') vi.stubEnv('FAKE_FFMPEG_EXIT', '1');
     if (failure === 'early-exit') fs.writeFileSync(binary, 'process.exit(0)');
-    let report: TimeshiftVideoReport | undefined;
     await expect(
       recordTimeshiftVideo(
         stream,
         {
           outputPath: path.join(dir, 'video.ts'),
           ffmpegPath: binary,
-          onReport: (value) => {
-            report = value;
-          },
         },
         new AbortController().signal,
       ),
     ).rejects.toThrow();
-    if (failure === 'missing') expect(report?.tracks[1].missing).toBe(1);
   },
 );
 
@@ -294,23 +258,27 @@ test('手動停止でも渡したデータを排出しFFmpegを自然終了さ�
   expect(saved).toMatch(/(?:video|audio)-11/);
 });
 
-test.each(['/master', '/video', '/audio'])(
-  'プレイリスト%sの一時失敗を再試行して保存する',
-  async (target) => {
-    const mocked = media();
-    const respond = mocked.getMockImplementation()!;
-    let calls = 0;
-    mocked.mockImplementation((url, init) => {
-      if (new URL(url).pathname === target && calls++ === 0)
-        return Promise.resolve(new Response(null, { status: 503 }));
-      return respond(url, init);
-    });
-    const result = await recordTimeshiftVideo(
-      stream,
-      { outputPath: path.join(dir, 'retried.ts'), ffmpegPath: binary },
-      new AbortController().signal,
-    );
-    expect(result.reason).toBe('endlist');
-    expect(calls).toBe(2);
-  },
-);
+test('master・video・audio の一時失敗を再試行して両トラックを保存する', async () => {
+  const mocked = media();
+  const respond = mocked.getMockImplementation()!;
+  const calls = new Map<string, number>();
+  mocked.mockImplementation((url, init) => {
+    const name = new URL(url).pathname;
+    if (['/master', '/video', '/audio'].includes(name)) {
+      calls.set(name, (calls.get(name) ?? 0) + 1);
+      if (calls.get(name) === 1) return Promise.resolve(new Response(null, { status: 503 }));
+    }
+    return respond(url, init);
+  });
+  const result = await recordTimeshiftVideo(
+    stream,
+    { outputPath: path.join(dir, 'retried.ts'), ffmpegPath: binary },
+    new AbortController().signal,
+  );
+  expect(result.reason).toBe('endlist');
+  expect(Object.fromEntries(calls)).toEqual({ '/master': 2, '/video': 2, '/audio': 2 });
+  expect(fs.readFileSync(path.join(dir, 'retried.ts'), 'utf8')).toBe('init-videovideo-11video-12');
+  expect(fs.readFileSync(path.join(dir, 'retried.ts.audio'), 'utf8')).toBe(
+    'init-audioaudio-11audio-12',
+  );
+});

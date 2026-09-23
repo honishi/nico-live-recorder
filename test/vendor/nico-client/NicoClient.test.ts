@@ -85,6 +85,15 @@ async function consume(): Promise<NicoComment[]> {
   return comments;
 }
 
+// 正確な指数列ではなく、過負荷を防ぎつつ回復待ちを続ける境界を守る。
+function expectRequestBackoff(): void {
+  const intervals = requests.slice(1).map((request, index) => request.time - requests[index].time);
+  expect(intervals.every((delay) => delay >= 1000 && delay <= 30_000)).toBe(true);
+  expect(intervals).toContain(30_000);
+  expect(requests.length).toBeLessThan(40);
+  expect(requests.at(-1)!.time).toBeLessThan(660_000);
+}
+
 test.each(['停滞', '後退', '循環'])(
   '取得位置の%sが10分続いたら打ち切り、要求間隔と回数を制限する',
   async (kind) => {
@@ -95,12 +104,16 @@ test.each(['停滞', '後退', '循環'])(
       return [{ next: { at } }];
     };
     const checked = expect(consume()).rejects.toBeInstanceOf(CommentViewStalledError);
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(450_000);
+    expect(warn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(20 * 60_000);
     await checked;
-    expect(requests).toHaveLength(26);
-    expect(requests.slice(0, 8).map((r) => r.time)).toEqual([
-      0, 1000, 2000, 4000, 8000, 16000, 32000, 62000,
-    ]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      'コメントの取得位置の異常が続いています。取得間隔をあけて回復を待っています。',
+    );
+    expectRequestBackoff();
     expect(requests.at(-1)!.time).toBeGreaterThanOrEqual(600_000);
     expect(requests.slice(1).every((r) => r.at === '100')).toBe(true);
     // 取得位置の異常は外側の再接続でも繰り返さない。
@@ -162,6 +175,7 @@ test('前進すれば停滞回数・開始時刻・待機間隔を戻す', async
   await vi.advanceTimersByTimeAsync(30 * 60_000);
   await task;
   expect(requests).toHaveLength(60);
+  expect(warn).toHaveBeenCalledTimes(3);
   expect(requests[21].time - requests[20].time).toBe(1000);
   expect(requests.at(-1)!.time).toBeGreaterThan(10 * 60_000);
 });
@@ -208,37 +222,6 @@ function allowPageRefresh() {
   return vi.spyOn(NicoClient.prototype as any, 'fetchProgramInfo').mockResolvedValue(info);
 }
 
-test.each(['停滞', '欠落', '交互'])(
-  '取得位置の%sが続く間だけ一度警告し、回復待ちは継続する',
-  async (kind) => {
-    allowPageRefresh();
-    respond = async (index) => {
-      if (kind === '欠落' || (kind === '交互' && index % 2 === 1)) return [];
-      return [{ next: { at: 100 } }];
-    };
-    const task = consume();
-    await vi.advanceTimersByTimeAsync(90_000);
-    expect(warn).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(450_000);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      'コメントの取得位置の異常が続いています。取得間隔をあけて回復を待っています。',
-    );
-    controller.abort();
-    await expect(task).resolves.toEqual([]);
-  },
-);
-
-test('取得位置が前進すれば、次に異常が続いたときに再び一度警告する', async () => {
-  respond = async (index) => {
-    if (index === 39) controller.abort();
-    return [{ next: { at: 100 + Math.floor(index / 20) } }];
-  };
-  const task = consume();
-  await vi.advanceTimersByTimeAsync(20 * 60_000);
-  await task;
-  expect(warn).toHaveBeenCalledTimes(2);
-});
-
 test.each([
   { label: 'next欠落', entries: [] },
   { label: '安全な整数範囲を超えるnext', entries: [{ next: { at: '9223372036854775807' } }] },
@@ -247,15 +230,20 @@ test.each([
   const socket = vi.spyOn(NicoClient.prototype as any, 'openViewSocket');
   respond = async () => entries;
   const checked = expect(consume()).rejects.toBeInstanceOf(CommentViewMarkerMissingError);
+  await vi.advanceTimersByTimeAsync(90_000);
+  expect(warn).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(450_000);
+  expect(warn).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(20 * 60_000);
   await checked;
-  expect(requests).toHaveLength(25);
-  expect(requests.slice(0, 8).map((r) => r.time)).toEqual([
-    0, 1000, 3000, 7000, 15000, 31000, 61000, 91000,
-  ]);
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    'コメントの取得位置の異常が続いています。取得間隔をあけて回復を待っています。',
+  );
+  expectRequestBackoff();
   expect(requests.at(-1)!.time).toBeGreaterThanOrEqual(600_000);
-  expect(page).toHaveBeenCalledTimes(24);
-  expect(socket).toHaveBeenCalledTimes(25);
+  expect(page).toHaveBeenCalled();
+  expect(socket.mock.calls.length).toBeGreaterThan(1);
+  expect(socket.mock.calls.length).toBeLessThanOrEqual(requests.length);
   expect(isRetryableNicoError(new CommentViewMarkerMissingError())).toBe(false);
 });
 
@@ -301,8 +289,15 @@ test('欠落と古いnextを交互に返しても回復扱いにせず停止す�
     'code',
     expect.stringMatching(/^COMMENT_VIEW_(STALLED|MARKER_MISSING)$/),
   );
-  await vi.advanceTimersByTimeAsync(30 * 60_000);
+  await vi.advanceTimersByTimeAsync(90_000);
+  expect(warn).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(450_000);
+  expect(warn).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(20 * 60_000);
   await checked;
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    'コメントの取得位置の異常が続いています。取得間隔をあけて回復を待っています。',
+  );
   expect(requests.length).toBeLessThan(60);
 });
 

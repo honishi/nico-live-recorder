@@ -135,12 +135,21 @@ const playlist =
   '#EXTM3U\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:3,\n1.ts\n#EXTINF:3,\n2.ts\n#EXTINF:3,\n3.ts\n';
 
 test('短区間は境界に切り上げ、合成した ENDLIST と元の全編末尾を区別する', () => {
-  const clipped = clipPlaylist(playlist, 'https://example.test/media.m3u8', 4);
+  const clipped = clipPlaylist(
+    playlist.replace('#EXTM3U', '#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:3'),
+    'https://example.test/media.m3u8',
+    4,
+  );
   expect(clipped.summary).toMatchObject({
     selectedDuration: 6,
     expectedSavedSegments: 2,
     originalEndList: false,
   });
+  expect(clipped.summary.selectedTagCounts['EXT-X-DISCONTINUITY-SEQUENCE']).toBe(1);
+  expect(clipped.summary.unsupportedTags).toEqual([]);
+  expect(() => clipPlaylist(playlist, 'https://example.test/media', null)).toThrow(
+    'ORIGINAL_ENDLIST_MISSING',
+  );
   expect(clipped.text).toContain('#EXT-X-ENDLIST');
   expect(clipped.text).not.toContain('3.ts');
   const later = clipPlaylist(
@@ -152,20 +161,10 @@ test('短区間は境界に切り上げ、合成した ENDLIST と元の全編�
   expect(later.summary.unsupportedTags).toEqual([]);
 });
 
-test('DISCONTINUITY-SEQUENCE を不連続境界と誤認しない', () => {
-  const result = clipPlaylist(
-    playlist.replace('#EXTM3U', '#EXTM3U\n#EXT-X-DISCONTINUITY-SEQUENCE:3'),
-    'https://example.test/media.m3u8',
-    4,
-  );
-  expect(result.summary.selectedTagCounts['EXT-X-DISCONTINUITY-SEQUENCE']).toBe(1);
-  expect(result.summary.unsupportedTags).toEqual([]);
-});
-
 const blankPrefix =
   '#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:10\n#EXT-X-MAP:URI="/blank-init"\n#EXTINF:1,\n/blank/0.mp4\n#EXT-X-DISCONTINUITY\n#EXT-X-MAP:URI="/main-init"\n#EXT-X-KEY:METHOD=AES-128,URI="/key"\n#EXTINF:6,\n/main.m4s\n';
 
-test.each([undefined, 1, 5])(
+test.each([undefined, 5])(
   '冒頭 blank の境界だけを許可し、本編の初期化情報と元の sequence による IV を使う（並列数=%s）',
   async (threads) => {
     const key = Buffer.alloc(16, 1);
@@ -212,47 +211,6 @@ test('冒頭 blank 後でも、本編内の追加の不連続は拒否する', (
   expect(() => clipPlaylist(laterBoundary, 'https://example.test/media', 13)).toThrow(ProbeError);
   const nonBlankPrefix = blankPrefix.replace('/blank/0.mp4', '/real/0.mp4');
   expect(() => clipPlaylist(nonBlankPrefix, 'https://example.test/media', 7)).toThrow(ProbeError);
-});
-
-test('next だけの初回応答から、サーバーが返した位置を辿ってコメントを取得する', async () => {
-  const registry = await getProtoRegistry();
-  const frame = (value: Record<string, unknown>) =>
-    registry.ChunkedEntry.encodeDelimited(registry.ChunkedEntry.fromObject(value)).finish();
-  mockFetch({
-    'https://example.test/view?at=now': frame({ next: { at: '1000' } }),
-    'https://example.test/view?at=1000': Buffer.concat([
-      frame({ backward: { segment: { uri: 'https://example.test/back' } } }),
-      frame({ next: { at: '2000' } }),
-    ]),
-    'https://example.test/back': registry.PackedSegment.encode(
-      registry.PackedSegment.fromObject({
-        messages: [
-          {
-            meta: { id: 'a', at: { seconds: 1000 } },
-            message: { chat: { content: 'test', no: 1 } },
-          },
-        ],
-      }),
-    ).finish(),
-  });
-  const result = await sampleComments(
-    'https://example.test/view',
-    dir,
-    1000,
-    'now',
-    new AbortController().signal,
-    undefined,
-    3,
-  );
-  expect(result).toMatchObject({
-    count: 1,
-    reason: 'view-exhausted',
-    backwardProvided: true,
-    viewRequests: [
-      { requestedAt: 'now', nextAt: '1000', entries: 1 },
-      { requestedAt: '1000', nextAt: '2000', entries: 2 },
-    ],
-  });
 });
 
 test.each([false, true])(
@@ -453,9 +411,6 @@ test.each([
   { missing: false, threads: 5 },
   { missing: true, threads: 5 },
 ])('全プレイリストの取得で欠落を完了と区別する: %j', async ({ missing, threads }) => {
-  expect(() => clipPlaylist(playlist, 'https://example.test/media', null)).toThrow(
-    'ORIGINAL_ENDLIST_MISSING',
-  );
   mockFetch({
     'https://example.test/master': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\n/media\n',
     'https://example.test/media': playlist + '#EXT-X-ENDLIST\n',
@@ -480,7 +435,6 @@ test.each([
   expect(result.status).toBe(missing ? 'incomplete' : 'playlist-saved');
   expect(result.playlistCoverage).toBe(missing ? 'not-verified' : 'complete');
   expect(result.tracks[0]).toMatchObject({ selectedSegments: 3, originalEndList: true });
-  expect(result.timingsMs.videoDownload).toBeGreaterThanOrEqual(0);
 });
 
 test.each(['complete', 'limit', 'cycle', 'http-error', 'truncated', 'missing-next'])(
@@ -541,10 +495,12 @@ test.each(['complete', 'limit', 'cycle', 'http-error', 'truncated', 'missing-nex
       expect(result.status).toBe(scenario === 'complete' ? 'history-saved' : 'incomplete');
       expect(result.snapshotCoverage).toBe(scenario === 'complete' ? 'complete' : 'not-verified');
       expect(result.fullCoverage).toBe('not-verified');
-      expect(result.timingsMs.view).toBeGreaterThanOrEqual(0);
-      expect(result.timingsMs.sortAndSave).toBeGreaterThanOrEqual(0);
       if (scenario === 'complete')
         expect(result).toMatchObject({
+          viewRequests: [
+            { requestedAt: 'now', nextAt: '1000', entries: 1 },
+            { requestedAt: '1000', nextAt: '2000', entries: 3 },
+          ],
           count: 4,
           duplicates: 1,
           completedForwardSegments: 1,

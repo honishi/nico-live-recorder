@@ -92,7 +92,8 @@ describe('HistoryStore', () => {
         title: '雑談',
         state: 'failed',
         videoBytes: 20,
-        endedAt: '2026-09-04T02:00:00.000Z',
+        startedAt: '2026-09-04T02:00:00.000Z',
+        endedAt: undefined,
       }),
     );
     store.upsert(
@@ -135,6 +136,8 @@ describe('HistoryStore', () => {
           completion: i === 53 ? 'cancelled' : undefined,
         }),
       );
+      if (i === 54)
+        expect(store.recentFinished().map((e) => e.programId)).toEqual(['lv55', 'lv54']);
     }
     for (const state of ['starting', 'recording', 'finishing'] as const) {
       store.upsert(entry({ programId: state, state, endedAt: undefined }));
@@ -143,20 +146,6 @@ describe('HistoryStore', () => {
       Array.from({ length: 50 }, (_, i) => `lv${55 - i}`),
     );
     expect(store.recentFinished()).toEqual(store.query({ limit: 50 }).items);
-  });
-
-  test('recentFinished は 50 件未満なら全件返し、終了日時がなければ開始日時で並べる', () => {
-    const store = new HistoryStore(filePath);
-    store.upsert(entry({ programId: 'lv1' }));
-    store.upsert(
-      entry({
-        programId: 'lv2',
-        state: 'failed',
-        startedAt: '2026-09-05T00:00:00.000Z',
-        endedAt: undefined,
-      }),
-    );
-    expect(store.recentFinished().map((e) => e.programId)).toEqual(['lv2', 'lv1']);
   });
 
   test('remove と flush', () => {
@@ -180,22 +169,6 @@ describe('HistoryStore', () => {
     expect(checked.map((e) => e.videoExists)).toEqual([true, false, false, undefined]);
   });
 
-  test('checkExistence はパートのどれかが残っていれば実在とし、代表パスと容量を実在分で決める', async () => {
-    const part1 = path.join(dir, 'p1.ts');
-    fs.writeFileSync(part1, 'x'.repeat(10));
-    const [checked] = await HistoryStore.checkExistence([
-      entry({
-        programId: 'lv1',
-        videoPath: path.join(dir, 'p2-deleted.ts'),
-        videoPaths: [part1, path.join(dir, 'p2-deleted.ts')],
-        videoBytes: 30,
-      }),
-    ]);
-    expect(checked.videoExists).toBe(true);
-    expect(checked.videoPath).toBe(part1);
-    expect(checked.videoBytes).toBe(10);
-  });
-
   test('一部のパートを消した録画は、ページの合計にも残っている分だけを数える', async () => {
     const part1 = path.join(dir, 'p1.ts');
     fs.writeFileSync(part1, 'x'.repeat(10));
@@ -213,6 +186,10 @@ describe('HistoryStore', () => {
     const page = HistoryStore.paginate(matched, {}, store.providers());
     // lv2 はファイル無し (削除済) なので除外、lv1 は残っている 10B だけ
     expect(page.totalBytes).toBe(10);
-    expect(page.items.find((e) => e.programId === 'lv1')?.videoBytes).toBe(10);
+    expect(page.items.find((e) => e.programId === 'lv1')).toMatchObject({
+      videoExists: true,
+      videoPath: part1,
+      videoBytes: 10,
+    });
   });
 });

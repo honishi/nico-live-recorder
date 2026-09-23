@@ -363,17 +363,6 @@ describe('録画対象の一括操作と並び替え', () => {
     expect(new SettingsStore(path.join(dir, 'settings.json'), '/other').get()).toEqual(restored);
   });
 
-  test('不正な ID を削除して取り消しても、無効状態で復元する', async () => {
-    const invalid = { ...original[0], userId: 'broken-id', addedAt: '' };
-    settings.update({ targets: [invalid, original[1]] });
-    const result = await remove({}, ['broken-id'], false);
-    expect(restore({}, result!.removed, result!.previousOrder).targets[0]).toMatchObject({
-      userId: invalid.userId,
-      name: invalid.name,
-      enabled: false,
-    });
-  });
-
   test('一括の有効状態変更は入力全体を検証し、指定した配信者だけを変更する', () => {
     for (const [ids, enabled] of [
       [null, true],

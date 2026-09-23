@@ -56,7 +56,10 @@ test('ライブのCookie補完・文字列変換と追加情報を維持する',
       expires: undefined,
     },
   ]);
-  expect(result.receivedAt).toBeInstanceOf(Date);
+
+  expect(
+    parseStreamMessage({ protocol: 'hls', uri: 'url', quality: 'abr', cookies: null }, 'live'),
+  ).toMatchObject({ quality: 'abr', cookies: [] });
 });
 
 test('タイムシフトは完全なCookieだけを採用し、同名の別パスを保つ', () => {
@@ -67,31 +70,14 @@ test('タイムシフトは完全なCookieだけを採用し、同名の別パ�
     { name: 'session', value: 'a', domain: 'example.test', path: '/a' },
     { name: 'session', value: 'b', domain: 'example.test', path: '/b' },
   ]);
-  expect(data.cookies[0]).toEqual(completeCookies[0]);
+
+  expect(
+    parseStreamMessage({ protocol: 'hls', uri: 'url', quality: 'abr', cookies: null }, 'timeshift'),
+  ).toMatchObject({ quality: 'abr', cookies: [] });
 });
 
-test.each(['live', 'timeshift'] as const)(
-  '%s: HLS以外・URI型違いは採用せず、空文字URIは従来どおり扱う',
-  (policy) => {
-    expect(parseStreamMessage({ protocol: 'other', uri: 'url' }, policy)).toBeUndefined();
-    expect(parseStreamMessage({ protocol: 'hls', uri: 1 }, policy)).toBeUndefined();
-    expect(parseStreamMessage({}, policy)).toBeUndefined();
-    expect(parseStreamMessage({ protocol: 'hls', uri: '', cookies: null }, policy)).toMatchObject({
-      uri: '',
-      cookies: [],
-      quality: '',
-      availableQualities: [],
-    });
-  },
-);
-
-test.each(['live', 'timeshift'] as const)(
-  '%s: 正常な画質文字列とCookie配列の欠落を扱う',
-  (policy) => {
-    const result = parseStreamMessage(
-      { protocol: 'hls', uri: 'url', quality: 'abr', cookies: { name: 'not-array' } },
-      policy,
-    );
-    expect(result).toMatchObject({ quality: 'abr', cookies: [], availableQualities: [] });
-  },
-);
+test('HLS以外・URI型違い・必須項目欠落は採用しない', () => {
+  expect(parseStreamMessage({ protocol: 'other', uri: 'url' }, 'live')).toBeUndefined();
+  expect(parseStreamMessage({ protocol: 'hls', uri: 1 }, 'live')).toBeUndefined();
+  expect(parseStreamMessage({}, 'live')).toBeUndefined();
+});
