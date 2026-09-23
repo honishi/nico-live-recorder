@@ -158,16 +158,16 @@ try {
   );
   assertPreviewColors(colorImage);
   console.log('Preview colors OK: 640x360 → 320x180, red/green/blue/white');
+  // 色付き映像に加え、音声入り入力からも JPEG を生成できることを確認する。
+  const image = await extractPreviewImage(
+    { data: readFileSync(path.join(fixtures, 'combined.mp4')) },
+    new AbortController().signal,
+    ffmpeg,
+  );
+  assert.equal(image.subarray(0, 2).toString('hex'), 'ffd8');
+  assert.equal(image.subarray(-2).toString('hex'), 'ffd9');
+  console.log(`Preview OK: ${image.length} bytes`);
   for (const separateAudio of [true, false]) {
-    // 配布する実体で JPEG 出力まで通す。縮小フィルタ・エンコーダの入れ忘れも検出する。
-    const image = await extractPreviewImage(
-      { data: readFileSync(path.join(fixtures, separateAudio ? 'video.mp4' : 'combined.mp4')) },
-      new AbortController().signal,
-      ffmpeg,
-    );
-    assert.equal(image.subarray(0, 2).toString('hex'), 'ffd8');
-    assert.equal(image.subarray(-2).toString('hex'), 'ffd9');
-    console.log(`Preview OK: ${image.length} bytes`);
     const outputPath = path.join(work, `mux-${separateAudio}.ts`);
     const muxer = new FfmpegMuxer({ ffmpegPath: ffmpeg, outputPath, separateAudio });
     const streams = muxer.start();
