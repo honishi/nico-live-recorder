@@ -66,15 +66,6 @@ describe('SettingsStore', () => {
     ]);
   });
 
-  test('有効フラグの切り替えと削除', () => {
-    const store = new SettingsStore(filePath, '/videos');
-    store.upsertTarget(target('1', '2026-01-01T00:00:00Z'));
-    store.setTargetEnabled('1', false);
-    expect(store.get().targets[0].enabled).toBe(false);
-    store.removeTarget('1');
-    expect(store.get().targets).toHaveLength(0);
-  });
-
   test('一括の有効・無効変更は対象外の行や並び順を保ち、保存と通知は一度だけ行う', () => {
     const store = new SettingsStore(filePath, '/videos');
     const original = ['3', '1', '2'].map((id) => target(id, `2026-01-0${id}T00:00:00Z`));

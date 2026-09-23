@@ -218,6 +218,19 @@ describe('WebPushManager', () => {
     expect(autopush.channels).toHaveLength(2);
     expect(log.filter((l) => l.url.includes('api.push.nicovideo.jp')).length).toBe(registrations);
     expect(manager.getStatus().state).toBe('connected');
+
+    // 保存した鍵で暗号通知を復号できるところまで確認する。
+    const programs: unknown[] = [];
+    manager.on('program', (program) => programs.push(program));
+    autopush.notify(
+      saved.channelId,
+      encryptWebPush(
+        JSON.stringify({ data: { on_click: 'https://live.nicovideo.jp/watch/lv999' } }),
+        saved.keys,
+      ),
+    );
+    await waitFor(() => programs.length === 1);
+    expect(programs[0]).toMatchObject({ programId: 'lv999' });
   });
 
   test('サーバーから切られても再接続して同じ購読を復元し、error や warn は出さない', async () => {

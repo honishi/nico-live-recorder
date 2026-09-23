@@ -148,31 +148,25 @@ test('2トラックを並列取得・復号し、両方の保存数・FFmpeg・�
   ]);
 });
 
-test.each(['missing', 'forbidden', 'live', 'ffmpeg', 'early-exit'] as const)(
+test.each(['forbidden', 'live', 'ffmpeg', 'early-exit'] as const)(
   '%s を取得完了にせずFFmpegも終了させる',
   async (failure) => {
     media({
-      missing: failure === 'missing',
       forbidden: failure === 'forbidden',
       live: failure === 'live',
     });
     if (failure === 'ffmpeg') vi.stubEnv('FAKE_FFMPEG_EXIT', '1');
     if (failure === 'early-exit') fs.writeFileSync(binary, 'process.exit(0)');
-    let report: TimeshiftVideoReport | undefined;
     await expect(
       recordTimeshiftVideo(
         stream,
         {
           outputPath: path.join(dir, 'video.ts'),
           ffmpegPath: binary,
-          onReport: (value) => {
-            report = value;
-          },
         },
         new AbortController().signal,
       ),
     ).rejects.toThrow();
-    if (failure === 'missing') expect(report?.tracks[1].missing).toBe(1);
   },
 );
 

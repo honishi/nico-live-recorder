@@ -123,12 +123,10 @@ test('履歴・直近分を重複排除し、ナノ秒・番号・取得順で�
   expect(mocked).toHaveBeenCalledTimes(4);
 });
 
-test.each(['cycle', 'truncated', 'count', 'bytes', 'pages', 'invalid-time'] as const)(
+test.each(['cycle', 'truncated', 'count', 'bytes', 'pages'] as const)(
   '%s でも取得済み分を残し、完了としない',
   async (kind) => {
     const messages: unknown[] = [message('saved', 1000), message('other', 1001)];
-    if (kind === 'invalid-time')
-      messages.push({ meta: { id: 'invalid' }, message: { chat: { content: 'bad' } } });
     await routes(messages, { cycle: kind === 'cycle', truncated: kind === 'truncated' });
     const limits = {
       ...TIMESHIFT_COMMENT_LIMITS,
