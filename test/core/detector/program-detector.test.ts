@@ -97,7 +97,7 @@ describe('ProgramDetector', () => {
     }
   });
 
-  test('markSeen した番組はポーリングで通知しない', async () => {
+  test('既知の番組は抑止し、解除後のポーリングで再通知する', async () => {
     fetchFollowing.mockResolvedValue([following('lv1', '100')]);
     const { detector, detected } = createDetector();
     detector.markSeen('lv1');
@@ -105,19 +105,9 @@ describe('ProgramDetector', () => {
     detector.start();
     await vi.advanceTimersByTimeAsync(0);
     expect(detected).toHaveLength(0);
-    detector.stop();
-  });
-
-  test('unmarkSeen した番組は次のポーリングで再度通知する', async () => {
-    fetchFollowing.mockResolvedValue([following('lv1', '100')]);
-    const { detector, detected } = createDetector();
-    detector.start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(detected).toHaveLength(1);
-
     detector.unmarkSeen('lv1');
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(detected).toHaveLength(2);
+    expect(detected).toHaveLength(1);
     detector.stop();
   });
 
