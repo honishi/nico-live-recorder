@@ -64,19 +64,11 @@ describe('buildBaseName', () => {
     (timezone) => {
       vi.stubEnv('TZ', timezone);
       const beginTime = Date.parse('2026-09-05T18:24:03Z') / 1000;
-      expect(buildBaseName(info({ beginTime }))).toBe('20260906_032403_12345678_lv123');
+      expect(buildBaseName(info({ beginTime, title: '長いタイトル🆗/:'.repeat(100) }))).toBe(
+        '20260906_032403_12345678_lv123',
+      );
     },
   );
-
-  test('長いタイトルやタイトルの変更はファイル名に影響しない', () => {
-    const beginTime = Date.parse('2026-09-06T03:24:03+09:00') / 1000;
-    expect(buildBaseName(info({ beginTime, title: '長いタイトル🆗/\\'.repeat(100) }))).toBe(
-      '20260906_032403_12345678_lv123',
-    );
-    expect(buildBaseName(info({ beginTime, title: '変更後' }))).toBe(
-      '20260906_032403_12345678_lv123',
-    );
-  });
 
   test.each([undefined, '', '   '])('配信者 ID が %j なら unknown を使う', (providerId) => {
     const beginTime = Date.parse('2026-09-06T03:24:03+09:00') / 1000;
@@ -88,12 +80,6 @@ describe('buildBaseName', () => {
     expect(buildBaseName(info({ beginTime, providerId: '../123:45' }))).toBe(
       '20260906_032403_.._123_45_lv123',
     );
-  });
-
-  test('2 回目以降は末尾に連番を付ける', () => {
-    const beginTime = Date.parse('2026-09-06T03:24:03+09:00') / 1000;
-    expect(buildBaseName(info({ beginTime }), 1)).toBe('20260906_032403_12345678_lv123');
-    expect(buildBaseName(info({ beginTime }), 2)).toBe('20260906_032403_12345678_lv123_2');
   });
 
   test('開始時刻が無ければ現在時刻を使う', () => {

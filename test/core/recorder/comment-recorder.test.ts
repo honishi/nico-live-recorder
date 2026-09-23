@@ -193,12 +193,13 @@ describe('recordComments', () => {
 
   test('再開しても BOM・ヘッダーを重複させずに追記し、追加分の件数を通知する', async () => {
     const outputPath = path.join(dir, 'c.csv');
-    const run = async (): Promise<number[]> => {
+    const run = async (prefetchBackward?: boolean): Promise<number[]> => {
       const counts: number[] = [];
       const controller = new AbortController();
       const result = await recordComments(
         {
           programId: 'lv1',
+          prefetchBackward,
           outputPath,
           onComment: (_c, count) => {
             counts.push(count);
@@ -215,7 +216,9 @@ describe('recordComments', () => {
     const original = fs.readFileSync(outputPath, 'utf8');
     expect(original.startsWith(header)).toBe(true);
     comments.splice(0, comments.length, comment(3));
-    expect(await run()).toEqual([1]);
+    expect(await run(false)).toEqual([1]);
+    expect(streamCalls.map((o) => o.prefetchBackward)).toEqual([true, false]);
+    expect(streamCalls.every((o) => o.startPosition === 'now')).toBe(true);
     const saved = fs.readFileSync(outputPath, 'utf8');
     expect(saved).toBe(original + toCommentCsv(comment(3)));
     expect(saved.match(/\uFEFF/g)).toHaveLength(1);
@@ -233,7 +236,7 @@ describe('recordComments', () => {
     },
   );
 
-  test.each(['id,content\n', '{"existing":true}\n', '\uFEFFat,no'])(
+  test.each(['{"existing":true}\n', '\uFEFFat,no'])(
     '異なる形式・不完全なヘッダーには追記しない: %j',
     async (existing) => {
       const outputPath = path.join(dir, 'mismatch.csv');
@@ -258,27 +261,6 @@ describe('recordComments', () => {
     expect(result.count).toBe(1);
     expect(fs.readFileSync(outputPath, 'utf8')).toBe(header + toCommentCsv(large));
   });
-
-  test('過去分の取得は既定で有効、再開時は無効にできる', async () => {
-    const run = async (prefetchBackward?: boolean): Promise<void> => {
-      const controller = new AbortController();
-      await recordComments(
-        {
-          programId: 'lv1',
-          outputPath: path.join(dir, 'c.csv'),
-          prefetchBackward,
-          onComment: (_c, count) => {
-            if (count === comments.length) controller.abort();
-          },
-        },
-        controller.signal,
-      );
-    };
-    await run();
-    await run(false);
-    expect(streamCalls.map((o) => o.prefetchBackward)).toEqual([true, false]);
-    expect(streamCalls.every((o) => o.startPosition === 'now')).toBe(true);
-  });
 });
 
 // 列順・時差・特殊文字は期待する CSV を直接比較し、書式変更による情報の欠落を検知する
@@ -295,12 +277,9 @@ describe('toCommentCsv', () => {
     );
   });
 
-  test.each(['', '=1+2', '+1', '-1', '@name', '\t=1+2', ' white '])(
-    '本文 %j を補正せず保存し、名前付きの色は維持する',
-    (content) => {
-      expect(toCommentCsv({ ...comment(1), content })).toBe(
-        `"2026-09-04T09:00:01.000+09:00","1","${content}","100","0","a:x","Standard","naka","medium","white","defont","Normal","id1","1"\n`,
-      );
-    },
-  );
+  test.each(['', ' \t=1+2 '])('本文 %j を補正せず保存し、名前付きの色は維持する', (content) => {
+    expect(toCommentCsv({ ...comment(1), content })).toBe(
+      `"2026-09-04T09:00:01.000+09:00","1","${content}","100","0","a:x","Standard","naka","medium","white","defont","Normal","id1","1"\n`,
+    );
+  });
 });

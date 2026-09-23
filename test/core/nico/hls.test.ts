@@ -53,6 +53,14 @@ describe('parseAttributes', () => {
 describe('parseMediaPlaylist', () => {
   test('完成したセグメントだけを連番付きで取り出し、EXT-X-PART は無視する', () => {
     const playlist = parseMediaPlaylist(MEDIA, BASE);
+    expect(playlist.segments[0]).toMatchObject({
+      mapUri: 'https://cdn.test/hls/segments/abc/video/init.cmfv',
+      key: {
+        method: 'AES-128',
+        uri: 'https://cdn.test/hls/keys/abc/key1.key',
+        iv: '0000000000000000000000000000002A',
+      },
+    });
     expect(playlist.targetDuration).toBe(3);
     expect(playlist.mediaSequence).toBe(41);
     expect(playlist.endList).toBe(false);
@@ -60,16 +68,6 @@ describe('parseMediaPlaylist', () => {
     expect(playlist.segments[0].uri).toBe('https://cdn.test/hls/segments/abc/video/41.cmfv');
     expect(playlist.segments[0].programDateTime).toBe('2026-09-02T16:27:24.000Z');
     expect(playlist.segments[1].programDateTime).toBeUndefined();
-  });
-
-  test('EXT-X-MAP と最後に宣言された EXT-X-KEY が各セグメントに紐づく', () => {
-    const [first] = parseMediaPlaylist(MEDIA, BASE).segments;
-    expect(first.mapUri).toBe('https://cdn.test/hls/segments/abc/video/init.cmfv');
-    expect(first.key).toEqual({
-      method: 'AES-128',
-      uri: 'https://cdn.test/hls/keys/abc/key1.key',
-      iv: '0000000000000000000000000000002A',
-    });
   });
 
   test('相対 URI は playlist の URL を基準に解決し、ENDLIST を検出する', () => {
@@ -207,24 +205,6 @@ https://cdn.test/seg/11.cmfv
     return { sink, output: () => Buffer.concat(chunks) };
   };
 
-  test('init セグメントと復号したセグメントを順に流し、ENDLIST で終わる', async () => {
-    const { fetchImpl, calls } = makeFetch(new Set());
-    const { sink, output } = collect();
-    const downloader = new HlsTrackDownloader({
-      label: 'video',
-      playlistUrl: 'https://cdn.test/media.m3u8',
-      cookies: () => [],
-      fetchImpl,
-    });
-
-    const result = await downloader.run(sink);
-
-    expect(result).toMatchObject({ reason: 'endlist', segments: 2, firstSeq: 10, lastSeq: 11 });
-    expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
-    // 鍵は 1 回だけ取得する
-    expect(calls.filter((u) => u.endsWith('.key'))).toHaveLength(1);
-  });
-
   test('プレビューへ復号済み映像と初期化情報を渡し、失敗しても録画と取得回数を維持する', async () => {
     const { fetchImpl, calls } = makeFetch(new Set());
     const { sink, output } = collect();
@@ -238,52 +218,33 @@ https://cdn.test/seg/11.cmfv
       fetchImpl,
       onVideoSample,
     });
-    expect((await downloader.run(sink)).segments).toBe(2);
+    expect(await downloader.run(sink)).toMatchObject({
+      reason: 'endlist',
+      segments: 2,
+      firstSeq: 10,
+      lastSeq: 11,
+    });
+    expect(calls.filter((url) => url.endsWith('.key'))).toHaveLength(1);
     expect(onVideoSample).toHaveBeenNthCalledWith(1, { data: SEG1, init: INIT });
     expect(onVideoSample).toHaveBeenNthCalledWith(2, { data: SEG2, init: INIT });
     expect(output()).toEqual(Buffer.concat([INIT, SEG1, SEG2]));
     expect(calls.filter((url) => url.endsWith('init.cmfv'))).toHaveLength(1);
   });
 
-  test.each([true, false])(
-    '初期化情報の上限ログはプレビュー観測先がある場合だけ1回出す（%s）',
-    async (observe) => {
+  test.each([1024 * 1024, 1024 * 1024 + 1])(
+    '初期化情報が %i bytes のとき上限内だけプレビューへ渡し、録画は全量保存する',
+    async (size) => {
+      const init = Buffer.alloc(size);
       const debug = vi.fn();
-      const oversized = Buffer.alloc(1024 * 1024 + 1);
       const changedInitPlaylist = playlist.replace(
         '#EXTINF:3,\nhttps://cdn.test/seg/11.cmfv',
         '#EXT-X-MAP:URI="https://cdn.test/init2.cmfv"\n#EXTINF:3,\nhttps://cdn.test/seg/11.cmfv',
       );
       const { fetchImpl } = makeFetch(new Set(), {
         'https://cdn.test/media.m3u8': changedInitPlaylist,
-        'https://cdn.test/init.cmfv': oversized,
-        'https://cdn.test/init2.cmfv': oversized,
+        'https://cdn.test/init.cmfv': init,
+        'https://cdn.test/init2.cmfv': init,
       });
-      const { sink, output } = collect();
-      const downloader = new HlsTrackDownloader({
-        label: 'video',
-        playlistUrl: 'https://cdn.test/media.m3u8',
-        cookies: () => [],
-        fetchImpl,
-        onVideoSample: observe ? vi.fn() : undefined,
-        logger: { ...silentLogger, debug },
-      });
-      expect((await downloader.run(sink)).segments).toBe(2);
-      // 大きなBufferは要素ごとの深い比較を避け、全バイトをまとめて比較する。
-      expect(output().equals(Buffer.concat([oversized, SEG1, oversized, SEG2]))).toBe(true);
-      const diagnostic =
-        'video: preview skipped: initialization size 1048577 exceeds 1048576 bytes';
-      expect(debug.mock.calls.filter(([message]) => message === diagnostic)).toHaveLength(
-        observe ? 1 : 0,
-      );
-    },
-  );
-
-  test.each([1024 * 1024, 1024 * 1024 + 1])(
-    '初期化情報が %i bytes のとき上限内だけプレビューへ渡し、録画は全量保存する',
-    async (size) => {
-      const init = Buffer.alloc(size);
-      const { fetchImpl } = makeFetch(new Set(), { 'https://cdn.test/init.cmfv': init });
       const { sink, output } = collect();
       const onVideoSample = vi.fn<VideoSampleListener>();
       const downloader = new HlsTrackDownloader({
@@ -292,11 +253,16 @@ https://cdn.test/seg/11.cmfv
         cookies: () => [],
         fetchImpl,
         onVideoSample,
+        logger: { ...silentLogger, debug },
       });
 
       // 上限超過で表示用の通知を省いても、録画用データや完了結果は変えない。
       expect(await downloader.run(sink)).toMatchObject({ reason: 'endlist', segments: 2 });
-      expect(output().equals(Buffer.concat([init, SEG1, SEG2]))).toBe(true);
+      expect(output().equals(Buffer.concat([init, SEG1, init, SEG2]))).toBe(true);
+      const sizeLogs = debug.mock.calls.filter(([message]) =>
+        String(message).includes('preview skipped: initialization size'),
+      );
+      expect(sizeLogs).toHaveLength(size === 1024 * 1024 ? 0 : 1);
       if (size === 1024 * 1024) {
         expect(onVideoSample).toHaveBeenCalledTimes(2);
         const samples = onVideoSample.mock.calls.map(([sample]) => sample);

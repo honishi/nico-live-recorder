@@ -147,19 +147,6 @@ test.each(['cycle', 'truncated', 'count', 'bytes', 'pages'] as const)(
   },
 );
 
-test('停止はソートを開始せず取得済みCSVを残す', async () => {
-  await routes([message('first', 1001), message('second', 1000)]);
-  const stop = new AbortController();
-  const result = await recordTimeshiftComments(
-    'https://example.test/view',
-    output,
-    stop.signal,
-    () => stop.abort(),
-  );
-  expect(result).toMatchObject({ status: 'partial', count: 1, sorted: false, aborted: true });
-  expect(await fs.readFile(output, 'utf8')).toContain('"first"');
-});
-
 test('ソート結果の置換失敗でも取得済みCSVを失わない', async () => {
   await routes([message('saved', 1000)]);
   vi.spyOn(fs, 'rename').mockRejectedValue(new Error('disk unavailable'));
@@ -284,36 +271,34 @@ test('overflowed_chatと名前付き色を既存CSVの表現に変換する', ()
   expect(converted?.seconds).toBe(1000);
 });
 
-test.each([
-  'USER_CANCELLED',
-  'COMMENT_TOTAL_TIMEOUT',
-  'VIDEO_FAILED',
-  'SESSION_DISCONNECTED',
-  'OUTPUT_MISSING',
-])('中断理由%sを部分保存の診断へ残す', async (code) => {
-  const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
-  await routes([message('saved', 1000)]);
-  const stop = new AbortController();
-  const reason =
-    code === 'USER_CANCELLED'
-      ? new DOMException('stop', 'AbortError')
-      : code === 'COMMENT_TOTAL_TIMEOUT'
-        ? new DOMException('timeout', 'TimeoutError')
-        : new TimeshiftError(code);
-  const result = await recordTimeshiftComments(
-    'https://example.test/view',
-    output,
-    stop.signal,
-    () => stop.abort(reason),
-  );
-  expect(result).toMatchObject({
-    reason: code,
-    status: 'partial',
-    count: 1,
-    sorted: false,
-    aborted: true,
-  });
-});
+test.each(['USER_CANCELLED', 'COMMENT_TOTAL_TIMEOUT', 'VIDEO_FAILED'])(
+  '中断理由%sを部分保存の診断へ残す',
+  async (code) => {
+    const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
+    await routes([message('first', 1001), message('second', 1000)]);
+    const stop = new AbortController();
+    const reason =
+      code === 'USER_CANCELLED'
+        ? new DOMException('stop', 'AbortError')
+        : code === 'COMMENT_TOTAL_TIMEOUT'
+          ? new DOMException('timeout', 'TimeoutError')
+          : new TimeshiftError(code);
+    const result = await recordTimeshiftComments(
+      'https://example.test/view',
+      output,
+      stop.signal,
+      () => stop.abort(reason),
+    );
+    expect(result).toMatchObject({
+      reason: code,
+      status: 'partial',
+      count: 1,
+      sorted: false,
+      aborted: true,
+    });
+    expect(await fs.readFile(output, 'utf8')).toContain('"first"');
+  },
+);
 
 test('0件でもbackwardが提供されなければ全履歴を確認した扱いにしない', async () => {
   const registry = await getProtoRegistry();

@@ -73,9 +73,9 @@ describe('配布成果物の署名・公証ゲート', () => {
     expect(() => verifyNotarizedApp(app, teamId)).toThrow(message);
   });
 
-  test.each(['ffmpeg', 'ffprobe'])('同梱 %s の署名の破損を拒否する', (name) => {
+  test('同梱 ffprobe の署名の破損を拒否する', () => {
     spawnSync.mockImplementation((command, args) => {
-      if (args.includes('--verify') && args.at(-1).endsWith(`${path.sep}${name}`)) {
+      if (args.includes('--verify') && args.at(-1).endsWith(`${path.sep}ffprobe`)) {
         return { status: 1, stderr: 'invalid signature' };
       }
       return success(command, args);

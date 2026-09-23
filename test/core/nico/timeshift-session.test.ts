@@ -52,12 +52,23 @@ function begin() {
 test('HLSが先に届けばコメントを待たず利用でき、終了通知だけでは中止しない', async () => {
   const { session, socket, send } = begin();
   socket.emit('open');
+  send('stream', { protocol: 'other', uri: 'ignored' });
   send('stream', {
     protocol: 'hls',
     uri: 'https://example.test/master',
-    cookies: [{ name: 's', value: 'v', path: '/', domain: 'example.test' }],
+    quality: 720,
+    availableQualities: ['abr'],
+    syncUri: 'https://example.test/sync',
+    cookies: [
+      { name: 's', value: 'v', path: '/', domain: 'example.test' },
+      { name: 'missing-path', value: 'v', domain: 'example.test' },
+    ],
   });
-  expect(await session.stream).toMatchObject({
+  const stream = await session.stream;
+  expect(stream).not.toHaveProperty('syncUri');
+  expect(stream).toMatchObject({
+    quality: '',
+    availableQualities: [],
     uri: 'https://example.test/master',
     cookies: [{ name: 's', value: 'v' }],
   });
@@ -136,28 +147,4 @@ test('pingへ応答し、seat更新で保持間隔を切り替え、終了時に
   expect(count()).toBe(4);
   session.close();
   expect(vi.getTimerCount()).toBe(0);
-});
-
-test('stream応答解析の共通化後も不完全なCookieやライブ用情報を取り込まない', async () => {
-  const { session, socket, send } = begin();
-  socket.emit('open');
-  send('stream', { protocol: 'other', uri: 'ignored' });
-  send('stream', {
-    protocol: 'hls',
-    uri: 'https://example.test/master',
-    quality: 720,
-    availableQualities: ['abr'],
-    syncUri: 'https://example.test/sync',
-    cookies: [
-      { name: 'complete', value: 'v', path: '/', domain: 'example.test', secure: true },
-      { name: 'missing-path', value: 'v', domain: 'example.test' },
-    ],
-  });
-  const result = await session.stream;
-  expect(result).toMatchObject({ quality: '', availableQualities: [] });
-  expect(result.cookies).toStrictEqual([
-    { name: 'complete', value: 'v', path: '/', domain: 'example.test' },
-  ]);
-  expect(result).not.toHaveProperty('syncUri');
-  session.close();
 });

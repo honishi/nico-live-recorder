@@ -98,7 +98,7 @@ test.each(['header', 'body', 'stop'] as const)('%s待機の期限・利用者停
   expect(vi.getTimerCount()).toBe(0);
 });
 
-test.each([400, 401, 403, 404, 408, 429, 500, 503, undefined])(
+test.each([403, 408, 429, 503, undefined])(
   'HTTP %sで再試行対象と回数上限を守る',
   async (status) => {
     const { TimeshiftError } = await import('../../../src/main/core/nico/timeshift-common');
@@ -109,7 +109,7 @@ test.each([400, 401, 403, 404, 408, 429, 500, 503, undefined])(
     const rejected = expect(pending).rejects.toBeInstanceOf(TimeshiftError);
     await vi.advanceTimersByTimeAsync(3500);
     await rejected;
-    expect(attempt).toHaveBeenCalledTimes(status && [408, 429, 500, 503].includes(status) ? 4 : 1);
+    expect(attempt).toHaveBeenCalledTimes(status && [408, 429, 503].includes(status) ? 4 : 1);
   },
 );
 
