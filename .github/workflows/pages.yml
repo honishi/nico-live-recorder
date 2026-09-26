@@ -1,0 +1,43 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - docs/images/recording-screen.jpg
+      - build/icons/mac-256.png
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 公開中のデプロイは途中で止めず、後から来たものを待たせる。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      # 画像は README やアプリと共有するので、リポジトリ内の原本をそのまま同梱する。
+      - name: Assemble site
+        run: |
+          mkdir _site
+          cp -R site/. _site/
+          cp docs/images/recording-screen.jpg _site/
+          cp build/icons/mac-256.png _site/icon.png
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v5

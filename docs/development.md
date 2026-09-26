@@ -180,6 +180,7 @@ macOSの通知にはアプリの署名が必要です。`npm run dev` で使う 
 - PR と main への push で GitHub Actions (`.github/workflows/ci.yml`) が ubuntu と windows で format / lint / typecheck / test / build を実行します。macOS arm64 と Windows x64 では FFmpeg のビルドとパッケージ内実体の検証も行います。
 - `v0.1.0` のような `v` 始まりのタグを push すると、macOS (Apple Silicon) と Windows (x64) のパッケージを作り、下書きのリリースに添付します (`release.yml`)。内容を確認してから公開してください。
 - 本家の Release は macOS の署名・公証と、DMG / ZIP 展開後の Gatekeeper / FFmpeg 検証を必須にします。Windows は未署名の NSIS を作り、展開後の FFmpeg を検証します。手動実行ではリリースを作らず、検証済み成果物を Actions の artifact に保存します。必要な Secrets と検証手順は [mac-signing.md](mac-signing.md) を参照してください。
+- 公開ページ (https://honishi.github.io/nico-live-recorder/) は `site/` に置き、main への push で `pages.yml` が GitHub Pages へデプロイします。スクリーンショットとアイコンはリポジトリ内の原本 (`docs/images/recording-screen.jpg`、`build/icons/mac-256.png`) をデプロイ時に同梱します。ダウンロードボタンは表示時に GitHub API から最新リリースの `.dmg` / `Setup*.exe` を探してリンクし、取得できなければリリースページへ誘導します。成果物のファイル名の形を変えるときはページ側の判定も合わせてください。
 
 ### アプリの自動更新
 

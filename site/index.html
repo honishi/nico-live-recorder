@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NicoLiveRecorder</title>
+    <meta
+      name="description"
+      content="登録した配信者のニコニコ生放送を自動で検知し、映像とコメントを保存する Windows / macOS 向けアプリ。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="NicoLiveRecorder" />
+    <meta
+      property="og:description"
+      content="ニコニコ生放送を自動で検知して、映像とコメントを録画する Windows / macOS 向けアプリ。"
+    />
+    <meta property="og:url" content="https://honishi.github.io/nico-live-recorder/" />
+    <meta
+      property="og:image"
+      content="https://honishi.github.io/nico-live-recorder/recording-screen.jpg"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#0c0d0f" />
+    <link rel="icon" type="image/png" href="icon.png" />
+    <link rel="apple-touch-icon" href="icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Unbounded:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0c0d0f;
+        --bg-2: #141619;
+        --line: #26292e;
+        --text: #eceef1;
+        --text-2: #9aa1ab;
+        --text-3: #666d77;
+        --rec: #ff4438;
+        --rec-deep: #d92b2b;
+        --mono: 'IBM Plex Mono', ui-monospace, monospace;
+        --display: 'Unbounded', 'Zen Kaku Gothic New', sans-serif;
+        --body: 'Zen Kaku Gothic New', 'Hiragino Sans', 'Yu Gothic UI', sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--bg);
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        color: var(--text);
+        font-family: var(--body);
+        line-height: 1.8;
+        -webkit-font-smoothing: antialiased;
+        background:
+          radial-gradient(60rem 40rem at 78% 38%, rgb(255 68 56 / 0.13), transparent 70%),
+          radial-gradient(40rem 30rem at 0% 100%, rgb(70 110 200 / 0.08), transparent 70%),
+          var(--bg);
+        overflow-x: hidden;
+      }
+
+      /* 走査線とノイズで、モニター越しに見ているような質感を足す */
+      body::before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 10;
+        background: repeating-linear-gradient(
+          to bottom,
+          rgb(255 255 255 / 0.018) 0 1px,
+          transparent 1px 3px
+        );
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .wrap {
+        width: min(1240px, 100% - 48px);
+        margin-inline: auto;
+      }
+
+      /* ---- 上部のステータスバー ---- */
+      .bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 22px 0;
+        font-family: var(--mono);
+        font-size: 13px;
+        letter-spacing: 0.06em;
+        color: var(--text-2);
+      }
+
+      .rec {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--text);
+      }
+
+      .rec-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--rec);
+        box-shadow: 0 0 12px var(--rec);
+        animation: blink 1.2s steps(1) infinite;
+      }
+
+      .timecode {
+        font-variant-numeric: tabular-nums;
+        color: var(--text-2);
+      }
+
+      .bar nav {
+        display: flex;
+        gap: 24px;
+      }
+
+      .bar nav a {
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      .bar nav a:hover {
+        color: var(--text);
+      }
+
+      /* ---- ヒーロー: 左に説明とダウンロード、右にスクリーンショット ---- */
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+        align-items: center;
+        gap: clamp(32px, 5vw, 72px);
+        padding: clamp(24px, 5vh, 64px) 0 clamp(48px, 8vh, 96px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 36px;
+      }
+
+      .brand img {
+        width: 52px;
+        height: 52px;
+        border-radius: 12px;
+      }
+
+      .brand-name {
+        font-family: var(--display);
+        font-weight: 700;
+        font-size: 19px;
+        letter-spacing: -0.01em;
+      }
+
+      .brand-sub {
+        display: block;
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        color: var(--text-3);
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0 0 24px;
+        font-weight: 900;
+        font-size: clamp(32px, 3.5vw, 50px);
+        line-height: 1.3;
+        letter-spacing: 0.01em;
+      }
+
+      h1 span {
+        white-space: nowrap;
+      }
+
+      h1 em {
+        font-style: normal;
+        color: var(--rec);
+      }
+
+      .lead {
+        margin: 0 0 36px;
+        max-width: 30em;
+        color: var(--text-2);
+        font-size: 16px;
+      }
+
+      .downloads {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+
+      .dl {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        flex: 1 1 190px;
+        gap: 14px;
+        padding: 14px 22px 14px 18px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--bg-2);
+        text-decoration: none;
+        transition:
+          border-color 0.2s,
+          transform 0.2s,
+          background 0.2s;
+      }
+
+      .dl:hover {
+        border-color: var(--rec);
+        transform: translateY(-2px);
+      }
+
+      .dl.primary {
+        background: var(--rec-deep);
+        border-color: var(--rec-deep);
+      }
+
+      .dl.primary:hover {
+        background: var(--rec);
+        border-color: var(--rec);
+      }
+
+      .dl svg {
+        flex: none;
+        width: 22px;
+        height: 22px;
+        fill: currentColor;
+      }
+
+      .dl-label {
+        display: block;
+        font-weight: 700;
+        font-size: 15px;
+        line-height: 1.4;
+      }
+
+      .dl-meta {
+        display: block;
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        opacity: 0.72;
+      }
+
+      .release-note {
+        margin: 16px 0 0;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-3);
+      }
+
+      .release-note a {
+        color: var(--text-2);
+      }
+
+      /* ---- ビューファインダー風の枠 ---- */
+      .finder {
+        position: relative;
+        padding: clamp(18px, 2.4vw, 32px);
+      }
+
+      .finder::before,
+      .finder::after,
+      .finder > .corner-b::before,
+      .finder > .corner-b::after {
+        content: '';
+        position: absolute;
+        width: clamp(28px, 3.4vw, 44px);
+        height: clamp(28px, 3.4vw, 44px);
+        border: 3px solid var(--text);
+        opacity: 0.9;
+      }
+
+      .finder::before {
+        top: 0;
+        left: 0;
+        border-right: 0;
+        border-bottom: 0;
+      }
+
+      .finder::after {
+        top: 0;
+        right: 0;
+        border-left: 0;
+        border-bottom: 0;
+      }
+
+      .finder > .corner-b::before {
+        bottom: 0;
+        left: 0;
+        border-right: 0;
+        border-top: 0;
+      }
+
+      .finder > .corner-b::after {
+        bottom: 0;
+        right: 0;
+        border-left: 0;
+        border-top: 0;
+      }
+
+      .finder img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 10px;
+        box-shadow:
+          0 40px 80px -20px rgb(0 0 0 / 0.7),
+          0 0 0 1px rgb(255 255 255 / 0.06);
+      }
+
+      .finder-label {
+        position: absolute;
+        top: -2px;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        color: var(--text-3);
+        white-space: nowrap;
+      }
+
+      /* ---- 機能の紹介 ---- */
+      .features {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-top: 1px solid var(--line);
+      }
+
+      .feature {
+        padding: 36px 32px 44px 0;
+      }
+
+      .feature + .feature {
+        padding-left: 32px;
+        border-left: 1px solid var(--line);
+      }
+
+      .feature-no {
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: 0.1em;
+        color: var(--rec);
+      }
+
+      .feature h2 {
+        margin: 10px 0 10px;
+        font-size: 19px;
+        font-weight: 700;
+      }
+
+      .feature p {
+        margin: 0;
+        font-size: 14px;
+        color: var(--text-2);
+      }
+
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 28px 0 40px;
+        border-top: 1px solid var(--line);
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-3);
+      }
+
+      footer a {
+        color: var(--text-2);
+      }
+
+      /* ---- 読み込み時の出現 ---- */
+      .reveal {
+        opacity: 0;
+        transform: translateY(14px);
+        animation: rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+        animation-delay: calc(var(--i, 0) * 90ms + 100ms);
+      }
+
+      .finder.reveal {
+        transform: scale(0.97);
+        animation-name: focus-in;
+        animation-duration: 1.1s;
+      }
+
+      @keyframes rise {
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      @keyframes focus-in {
+        0% {
+          opacity: 0;
+          filter: blur(8px);
+        }
+        to {
+          opacity: 1;
+          filter: none;
+          transform: none;
+        }
+      }
+
+      @keyframes blink {
+        50% {
+          opacity: 0.15;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .reveal,
+        .rec-dot {
+          animation: none;
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      /* ---- 狭い画面では縦に積む ---- */
+      @media (max-width: 900px) {
+        .hero {
+          grid-template-columns: 1fr;
+        }
+
+        .features {
+          grid-template-columns: 1fr;
+        }
+
+        .feature,
+        .feature + .feature {
+          padding: 24px 0;
+          border-left: 0;
+        }
+
+        .feature + .feature {
+          border-top: 1px solid var(--line);
+        }
+      }
+
+      @media (max-width: 520px) {
+        .wrap {
+          width: calc(100% - 32px);
+        }
+
+        .timecode,
+        .bar nav a:not(:last-child) {
+          display: none;
+        }
+
+        .dl {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="bar">
+        <span class="rec"
+          ><span class="rec-dot" aria-hidden="true"></span>REC
+          <span class="timecode" id="timecode" aria-hidden="true">00:00:00:00</span></span
+        >
+        <nav>
+          <a href="https://github.com/honishi/nico-live-recorder#使い方">使い方</a>
+          <a href="https://github.com/honishi/nico-live-recorder/releases">Releases</a>
+          <a href="https://github.com/honishi/nico-live-recorder">GitHub</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div>
+            <div class="brand reveal" style="--i: 0">
+              <img src="icon.png" alt="" width="52" height="52" />
+              <span>
+                <span class="brand-name">NicoLiveRecorder</span>
+                <span class="brand-sub">for Windows / macOS</span>
+              </span>
+            </div>
+            <h1 class="reveal" style="--i: 1">
+              <span>配信が始まったら、</span><br /><span>もう<em>録って</em>いる。</span>
+            </h1>
+            <p class="lead reveal" style="--i: 2">
+              登録した配信者のニコニコ生放送を自動で検知して、映像とコメントを保存するアプリです。番組
+              ID や URL を指定した手動録画や、タイムシフトの保存にも対応しています。
+            </p>
+            <div class="downloads reveal" style="--i: 3">
+              <a
+                class="dl primary"
+                id="dl-mac"
+                href="https://github.com/honishi/nico-live-recorder/releases/latest"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M16.37 1.43c0 1.14-.42 2.2-1.25 3.17-1 1.14-2.2 1.8-3.5 1.7a3.5 3.5 0 0 1-.03-.43c0-1.09.48-2.26 1.32-3.21.42-.48.96-.88 1.61-1.2.65-.31 1.26-.48 1.83-.51.02.16.02.32.02.48Zm4.33 15.58c-.36.83-.78 1.6-1.28 2.3-.67.96-1.23 1.62-1.66 1.99-.66.61-1.37.92-2.13.94-.55 0-1.2-.16-1.97-.47-.77-.31-1.48-.47-2.13-.47-.68 0-1.4.16-2.18.47-.78.31-1.41.48-1.89.49-.73.03-1.46-.29-2.18-.96-.47-.4-1.05-1.1-1.75-2.08a14.4 14.4 0 0 1-1.84-3.66A13.4 13.4 0 0 1 .9 11.2c0-1.47.32-2.74.95-3.8a5.6 5.6 0 0 1 2-2.02 5.36 5.36 0 0 1 2.7-.76c.53 0 1.23.16 2.1.49.86.33 1.42.49 1.66.49.18 0 .8-.2 1.85-.58.99-.36 1.83-.5 2.52-.45 1.86.15 3.26.89 4.19 2.2-1.66 1.01-2.49 2.42-2.47 4.23.01 1.41.53 2.58 1.53 3.51.46.43.97.77 1.53 1-.12.36-.25.7-.39 1.03Z"
+                  />
+                </svg>
+                <span>
+                  <span class="dl-label">macOS 版</span>
+                  <span class="dl-meta" data-meta>Apple Silicon</span>
+                </span>
+              </a>
+              <a
+                class="dl"
+                id="dl-win"
+                href="https://github.com/honishi/nico-live-recorder/releases/latest"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M1 3.45 10 2.2v8.68H1V3.45Zm10.1-1.4L23 .4v10.48H11.1V2.05ZM1 12.1h9v8.7l-9-1.24V12.1Zm10.1 0H23V23.6l-11.9-1.64V12.1Z"
+                  />
+                </svg>
+                <span>
+                  <span class="dl-label">Windows 版</span>
+                  <span class="dl-meta" data-meta>x64</span>
+                </span>
+              </a>
+            </div>
+            <p class="release-note reveal" style="--i: 4">
+              <span id="version">最新版</span> ·
+              <a href="https://github.com/honishi/nico-live-recorder#インストール"
+                >インストール手順</a
+              >
+              · 無料 / オープンソース
+            </p>
+          </div>
+
+          <figure class="finder reveal" style="--i: 2; margin: 0">
+            <span class="corner-b" aria-hidden="true"></span>
+            <span class="finder-label" aria-hidden="true">● REC — AUTO</span>
+            <img
+              src="recording-screen.jpg"
+              width="2116"
+              height="1490"
+              alt="NicoLiveRecorder の録画画面。2 件の番組を録画中で、直近の録画の一覧が並んでいる"
+            />
+          </figure>
+        </section>
+
+        <section class="features">
+          <article class="feature reveal" style="--i: 5">
+            <span class="feature-no">01 / DETECT</span>
+            <h2>放送開始を自動で検知</h2>
+            <p>
+              フォロー中の配信者を push
+              通知と定期確認で見張り、始まったら録画、終わったら停止します。
+            </p>
+          </article>
+          <article class="feature reveal" style="--i: 6">
+            <span class="feature-no">02 / RECORD</span>
+            <h2>映像もコメントも</h2>
+            <p>
+              取得できる最高画質の映像と、コメントを CSV
+              で保存します。切断されても自動で再開します。
+            </p>
+          </article>
+          <article class="feature reveal" style="--i: 7">
+            <span class="feature-no">03 / TIMESHIFT</span>
+            <h2>手動録画とタイムシフト</h2>
+            <p>
+              番組 ID や URL
+              を入れればすぐ録画。終了済みの放送も、視聴できるタイムシフトを保存できます。
+            </p>
+          </article>
+        </section>
+      </main>
+
+      <footer>
+        <span>© honishi · MIT License · FFmpeg (LGPL-2.1-or-later) を同梱</span>
+        <a href="https://github.com/honishi/nico-live-recorder"
+          >github.com/honishi/nico-live-recorder</a
+        >
+      </footer>
+    </div>
+
+    <script>
+      // 上部のタイムコードを、ページを開いてからの経過時間で進める
+      const timecode = document.getElementById('timecode');
+      const startedAt = performance.now();
+      const pad = (n) => String(n).padStart(2, '0');
+      const tick = (now) => {
+        const elapsed = now - startedAt;
+        const s = Math.floor(elapsed / 1000);
+        const frames = Math.floor((elapsed % 1000) / (1000 / 30));
+        timecode.textContent = `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}:${pad(frames)}`;
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+
+      // 最新リリースの成果物へ直接リンクする。取得できなければリリースページのまま
+      fetch('https://api.github.com/repos/honishi/nico-live-recorder/releases/latest')
+        .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+        .then((release) => {
+          const find = (pattern) => release.assets.find((asset) => pattern.test(asset.name));
+          const targets = [
+            ['dl-mac', find(/-arm64\.dmg$/)],
+            ['dl-win', find(/Setup.*\.exe$/)],
+          ];
+          for (const [id, asset] of targets) {
+            if (!asset) continue;
+            const link = document.getElementById(id);
+            link.href = asset.browser_download_url;
+            const meta = link.querySelector('[data-meta]');
+            meta.textContent += ` · ${Math.round(asset.size / 1024 / 1024)} MB`;
+          }
+          document.getElementById('version').textContent = `最新版 ${release.tag_name}`;
+        })
+        .catch(() => {});
+    </script>
+  </body>
+</html>
