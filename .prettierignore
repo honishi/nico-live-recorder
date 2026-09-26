@@ -6,3 +6,5 @@ resources/proto/
 package-lock.json
 .cache/
 resources/ffmpeg/
+# Google Search Console の所有権確認ファイル。内容を変えると確認に失敗する
+site/google*.html
