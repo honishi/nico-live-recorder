@@ -5,6 +5,8 @@
 登録した配信者のニコニコ生放送を自動で検知し、映像とコメントを保存する Windows / macOS 向けアプリです。
 番組 ID や URL を指定した手動録画にも対応しています。終了済み放送は、ログイン中のアカウントで視聴できるタイムシフトを保存できます。
 
+[公式サイト](https://honishi.github.io/nico-live-recorder/)
+
 ## インストール
 
 [Releases](https://github.com/honishi/nico-live-recorder/releases/latest) からダウンロードしてください。
