@@ -115,14 +115,18 @@ if (process.platform === 'darwin') {
 if (process.platform === 'win32') {
   // UCRT と OS DLL 以外は静的にする。ランタイムに適用される例外・著作権表示も同梱する。
   const prefix = run('cygpath', ['-w', '/ucrt64']).trim();
-  for (const name of ['gcc-libs', 'crt', 'headers', 'winpthreads']) {
-    cpSync(
-      path.join(prefix, 'share', 'licenses', name),
-      path.join(staging, 'toolchain-licenses', name),
-      {
-        recursive: true,
-      },
-    );
+  const licenses = path.join(prefix, 'share', 'licenses');
+  // GCC 16.2.0-4 以降は静的ランタイムを含む gcc に許諾文がある。旧構成にも対応する。
+  const gccLicenses = existsSync(path.join(licenses, 'gcc')) ? 'gcc' : 'gcc-libs';
+  for (const [sourceName, bundleName] of [
+    [gccLicenses, 'gcc-libs'],
+    ['crt', 'crt'],
+    ['headers', 'headers'],
+    ['winpthreads', 'winpthreads'],
+  ]) {
+    cpSync(path.join(licenses, sourceName), path.join(staging, 'toolchain-licenses', bundleName), {
+      recursive: true,
+    });
   }
   toolchain += run('pacman', ['-Q']);
 }

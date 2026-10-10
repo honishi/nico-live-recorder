@@ -40,6 +40,8 @@ FFmpeg のソース変更はありません。独立したアプリ本体の MIT
 
 Windows は MSYS2 **UCRT64** の GCC で通常のコンパイルを行い、GCC ランタイムは Runtime Library Exception 3.1 の対象として扱います (GCC プラグイン等による非適格なコンパイルはしません)。FFmpeg ライブラリとコンパイラランタイムは静的にリンクし、Windows 標準の UCRT / システム DLL を利用します。ツールチェーンの例外・著作権表示はインストールしたパッケージからコピーします。macOS は Apple Clang とシステムライブラリを使用します。
 
+MSYS2 の GCC 16.2.0-4 以降ではランタイムのパッケージが分割され、静的ランタイムの許諾文は `/ucrt64/share/licenses/gcc/` から取得します。旧構成では `/ucrt64/share/licenses/gcc-libs/` を使います。どちらも配布先は `toolchain-licenses/gcc-libs/` に統一し、ライセンス本文と Runtime Library Exception の存在を従来どおり検証します。
+
 ## ビルド
 
 macOS arm64 では Xcode Command Line Tools (clang / make) が必要です。Windows x64 では MSYS2 UCRT64 シェルを使い、Windows 用 Node.js を PATH に含めます。
