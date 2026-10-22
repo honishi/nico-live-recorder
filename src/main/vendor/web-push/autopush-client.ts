@@ -97,6 +97,8 @@ export class AutoPushClient {
   private probeTimeoutTimer?: NodeJS.Timeout;
   private pendingProbe?: { sentAt: number; attempt: number; controller: AbortController };
   private lastProbeMissReconnectAt = 0;
+  /** 受信成功まで失敗を数え、自動再接続を挟んでも警告を繰り返さない。 */
+  private consecutiveProbeFailures = 0;
   private readonly canaryProbeIntervalMs = 60 * 1000;
   private readonly canaryProbeTimeoutMs = 10 * 1000;
   private readonly maxCanaryProbeAttempts = 2; // one immediate retry before declaring desync
@@ -426,6 +428,9 @@ export class AutoPushClient {
     this.testAutoCloseTimer = undefined;
     this.clearSessionTimers();
 
+    // 明示的に停止した監視の失敗は、次の監視へ持ち越さない。
+    this.consecutiveProbeFailures = 0;
+
     if (this.ws) {
       pushLog.debug('[AutoPush] Disconnecting WebSocket...');
       this.intentionalDisconnect = true; // Set intentional disconnect flag
@@ -452,6 +457,10 @@ export class AutoPushClient {
    * immediately when the session is already authenticated.
    */
   configureCanaryProbe(channelId: string, endpoint: string): void {
+    // 購読を作り直した場合は、新しい経路として数え直す。
+    if (this.canaryChannelId !== channelId || this.canaryEndpoint !== endpoint) {
+      this.consecutiveProbeFailures = 0;
+    }
     this.canaryChannelId = channelId;
     this.canaryEndpoint = endpoint;
     if (this.isConnectionOpen() && this.uaid && !this.subscriptionRepairRequired) {
@@ -1001,6 +1010,15 @@ export class AutoPushClient {
     }, this.canaryProbeIntervalMs);
   }
 
+  /** 単発の失敗は debug に残し、2回連続したときだけ画面向けに警告する。 */
+  private reportCanaryFailure(message: string, ...details: unknown[]): void {
+    this.consecutiveProbeFailures += 1;
+    pushLog.debug(message, ...details);
+    if (this.consecutiveProbeFailures === 2) {
+      pushLog.warn('[AutoPush] Canary probe failed 2 consecutive times:', message, ...details);
+    }
+  }
+
   /**
    * Send one canary probe: POST a TTL:0 empty-body push to the canary
    * endpoint and expect it back as a notification on this socket within
@@ -1041,7 +1059,7 @@ export class AutoPushClient {
       }
       this.pendingProbe = undefined;
       if (attempt < this.maxCanaryProbeAttempts) {
-        pushLog.warn('[AutoPush] Canary probe unanswered, retrying immediately');
+        this.reportCanaryFailure('[AutoPush] Canary probe unanswered, retrying immediately');
         void this.runCanaryProbe(attempt + 1);
         return;
       }
@@ -1049,12 +1067,16 @@ export class AutoPushClient {
         // Failure budget: repeated misses right after a probe-triggered
         // reconnect must not become a reconnect storm; polling remains the
         // safety net until the cooldown passes
-        pushLog.error('[AutoPush] Canary probe missed again within cooldown, not reconnecting');
+        this.reportCanaryFailure(
+          '[AutoPush] Canary probe missed again within cooldown, not reconnecting',
+        );
         pushDiagnostics.record('probe_miss', { attempts: attempt, suppressed: true });
         return;
       }
       this.lastProbeMissReconnectAt = Date.now();
-      pushLog.error('[AutoPush] Canary probe unanswered twice: session desync, reconnecting');
+      this.reportCanaryFailure(
+        '[AutoPush] Canary probe unanswered twice: session desync, reconnecting',
+      );
       pushDiagnostics.record('probe_miss', { attempts: attempt });
       this.forceReconnect();
     }, this.canaryProbeTimeoutMs);
@@ -1068,11 +1090,15 @@ export class AutoPushClient {
       });
       status = response.status;
     } catch (error) {
-      if (controller.signal.aborted) {
+      if (
+        controller.signal.aborted ||
+        this.ws !== probeSocket ||
+        this.pendingProbe?.sentAt !== sentAt
+      ) {
         return; // The deadline or session cleanup owns this probe's outcome
       }
       // A failed POST proves nothing about this socket's delivery path
-      pushLog.warn('[AutoPush] Canary probe POST failed:', error);
+      this.reportCanaryFailure('[AutoPush] Canary probe POST failed:', error);
       pushDiagnostics.record('probe_error', { error: (error as Error).message, attempt });
       if (this.pendingProbe?.sentAt === sentAt) {
         this.pendingProbe = undefined;
@@ -1088,7 +1114,7 @@ export class AutoPushClient {
 
     if (status < 200 || status >= 300) {
       // A rejected POST cannot produce a notification; cancel the deadline
-      pushLog.warn('[AutoPush] Canary probe POST rejected, status:', status);
+      this.reportCanaryFailure('[AutoPush] Canary probe POST rejected, status:', status);
       pushDiagnostics.record('probe_error', { status, attempt });
       this.pendingProbe = undefined;
       clearTimeout(this.probeTimeoutTimer);
@@ -1103,6 +1129,8 @@ export class AutoPushClient {
    * both the push pipeline and the per-message diagnostics.
    */
   private handleCanaryNotification(message: NotificationMessage): void {
+    // POST の成功だけでなく、通知の到着で経路の復旧を確認する。
+    this.consecutiveProbeFailures = 0;
     if (this.isConnected) {
       const ack = {
         messageType: 'ack',
