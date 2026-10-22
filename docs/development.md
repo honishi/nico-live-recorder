@@ -36,6 +36,21 @@ nico-live-recorder の仕組み、開発の手順、コード構成、リリー�
 Node のバージョンは `.node-version` に固定しています (nodenv などで自動的に切り替わります)。
 Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` などに使う npm 11 が同梱されます。
 
+開発・CI 用 Node.js は 2026-10-21 のセキュリティ修正版 24.22.1 に固定しています。
+配布アプリの Node.js は Electron が内蔵するため、`.node-version` の更新だけでは変更されません。
+Electron 44.9.3 内蔵の Undici 7.29.1 に残る HTTP 応答・WebSocket の DoS 対策として、
+依存パッケージの Undici は修正版 8.12.2 に完全固定しています。
+`main/index.ts` の先頭で `core/network-runtime.ts` を読み込み、Undici の `install()` により
+`fetch`・`WebSocket` と関連する `Request`・`Response` 等を通信開始前に差し替えます。
+テストも同じ初期化を行い、アプリと同じ実装を検証します。
+Node.js のスクリプトは `.node-version` の修正版を使って実行してください。
+この差し替えは Node.js 自体の TLS・DNS などの修正を取り込むものではありません。
+
+2026-10-22 の Undici 更新時だけ
+`npm install --save-exact undici@8.12.2 --min-release-age-exclude=undici --ignore-scripts`
+で公開後7日間の導入制限を例外にしました。`.npmrc` に恒久的な除外は追加せず、
+今後の更新には引き続き7日間の制限を適用します。Node.js 24.22.1 も今回の固定版として導入します。
+
 Electron は eMudhra の証明書問題への対策として 44.9.3 に完全固定しています。
 Node.js と Chromium の証明書検証に公開鍵の拒否リストを適用する
 [修正 #55126](https://github.com/electron/electron/pull/55126) を含みます。
