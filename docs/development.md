@@ -93,6 +93,16 @@ NLR_USER_DATA="$nlr_check_dir/userdata" NLR_OUTPUT_DIR="$nlr_check_dir/recording
 
 終了済み放送の検証スクリプトについては [タイムシフト検証手順](timeshift-probe.md)、検証の結論と本体実装へ引き継ぐ範囲は [検証結果と初期対応範囲](timeshift-feasibility.md) を参照してください。 本体への変更方針は [手動タイムシフト録画の組み込み設計](timeshift-recording-design.md) にまとめています。手動入力した終了済み番組は専用の有限取得へ分岐し、自動検知と放送中の手動録画は従来のライブ経路を使います。
 
+### Electron 更新時の Undici 暫定対策の見直し
+
+`src/main/core/network-runtime.ts` の `install()` は、Electron 内蔵の Undici に修正が届くまでの暫定対策です。
+Electron を更新するたびに、次の手順で撤去できるか確認してください。
+
+1. 更新先の Electron 実体の `process.versions.node`・`process.versions.undici` と修正履歴を調べ、2026-10-21 の Node.js セキュリティ更新で扱われた Undici の修正が取り込まれていることを確認します。最新版との一致ではなく、対象の修正が入っていることが条件です。開発・CI 用 Node.js の更新だけでは判断できません。
+2. 差し替えを無効にした Electron 実体で、`test/core/network-runtime.test.ts` の不正な圧縮指定・途中切断のケースを再現し、未処理例外が出ず、後続の通信と正常な Brotli 展開が成功することを確認します。WebSocket の修正取り込みも確認し、隔離した設定・保存先で録画と停止を検証します。ログインが必要な push 通知・フォロー監視は人間に確認を依頼します。通常の Vitest は開発用 Node.js で動くため、その成功だけで Electron 内蔵版の検証を代用しないでください。
+3. 確認できたら `src/main/core/network-runtime.ts`、`src/main/index.ts` の初期化 import、`vitest.config.ts` の該当 `setupFiles` 設定を削除します。テストの「外部 Undici と同一である」という暫定対策用の検証は外し、不正応答からの回復を確認する回帰テストは残します。この文書の説明と `AGENTS.md` の参照も整理します。
+4. `undici` の依存自体は削除しません。`src/main/vendor/nico-client/internal/httpClient.ts` が直接利用するため、修正済みバージョンを維持します。開発・CI 用の `.node-version` も修正済みバージョンを維持します。
+
 ### コード構成
 
 ```
