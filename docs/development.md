@@ -110,6 +110,12 @@ test/                         main・shared・vendor のテスト。偽サーバ
 
 AutoPush の `onStateChanged` と状態変化の通知、および停止時の購読解除は流用コードへの独自追加です。上流の変更を取り込む際も、ログ出力と独立した通知を維持してください。
 
+Canary probe の応答なし・POST通信失敗・HTTPエラーは種類をまたいで連続失敗として数えます。
+各失敗の詳細はdebugに残し、2回連続したときだけwarnを一度出します。
+通知の受信成功、明示的な監視停止、Canaryチャネルの変更で数え直し、自動再接続やHELLO・POSTの成功だけではリセットしません。
+即時再試行・再接続・クールダウンの動作は変更せず、クールダウン中の失敗も警告を繰り返しません。
+このログ抑制も流用コードへの独自変更なので、上流の更新時は維持してください。
+
 ### 流用コードの独自変更
 
 stream-journal 由来の `vendor/nico-client/` には、このアプリで追加した独自変更があります。`NicoClient.ts` の `streamComments` にあるView要求の最小間隔、取得位置の停滞・後退・next欠落に対するバックオフと打ち切り、回復待ち中の一度だけの警告、および `errors.ts` の `CommentViewStalledError` / `CommentViewMarkerMissingError` が該当します。流用元の更新を取り込む際は、これらの保護を保持するか同等の処理へ置き換え、`test/vendor/nico-client/NicoClient.test.ts` と `test/core/recorder/comment-recorder.test.ts` で正常な受信・回復・停止・要求回数の上限を確認してください。この記載は独自変更の所在を示すもので、流用元の最新コードへの反映状況は確認していません。
