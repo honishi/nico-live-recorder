@@ -36,6 +36,14 @@ nico-live-recorder の仕組み、開発の手順、コード構成、リリー�
 Node のバージョンは `.node-version` に固定しています (nodenv などで自動的に切り替わります)。
 Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` などに使う npm 11 が同梱されます。
 
+Electron は eMudhra の証明書問題への対策として 44.9.3 に完全固定しています。
+Node.js と Chromium の証明書検証に公開鍵の拒否リストを適用する
+[修正 #55126](https://github.com/electron/electron/pull/55126) を含みます。
+2026-10-22 の更新時だけ `npm install --save-dev --save-exact electron@44.9.3 --min-release-age-exclude=electron`
+で公開後7日間の導入制限を例外にしました。npm の除外設定はパッケージ名単位なので、
+`.npmrc` に恒久的な除外は追加していません。通常の `npm ci` はロック済みの44.9.3を導入し、
+今後のバージョン更新には引き続き7日間の制限を適用します。
+
 ```bash
 npm ci
 npm run ffmpeg:build # 録画用 FFmpeg をビルド (前提ツールは下記参照)
