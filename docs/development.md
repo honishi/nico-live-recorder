@@ -36,6 +36,21 @@ nico-live-recorder の仕組み、開発の手順、コード構成、リリー�
 Node のバージョンは `.node-version` に固定しています (nodenv などで自動的に切り替わります)。
 Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` などに使う npm 11 が同梱されます。
 
+開発・CI 用 Node.js は 2026-10-21 のセキュリティ修正版 24.22.1 に固定しています。
+配布アプリの Node.js は Electron が内蔵するため、`.node-version` の更新だけでは変更されません。
+Electron 44.9.3 内蔵の Undici 7.29.1 に残る HTTP 応答・WebSocket の DoS 対策として、
+依存パッケージの Undici は修正版 8.12.2 に完全固定しています。
+`main/index.ts` の先頭で `core/network-runtime.ts` を読み込み、Undici の `install()` により
+`fetch`・`WebSocket` と関連する `Request`・`Response` 等を通信開始前に差し替えます。
+テストも同じ初期化を行い、アプリと同じ実装を検証します。
+Node.js のスクリプトは `.node-version` の修正版を使って実行してください。
+この差し替えは Node.js 自体の TLS・DNS などの修正を取り込むものではありません。
+
+2026-10-22 の Undici 更新時だけ
+`npm install --save-exact undici@8.12.2 --min-release-age-exclude=undici --ignore-scripts`
+で公開後7日間の導入制限を例外にしました。`.npmrc` に恒久的な除外は追加せず、
+今後の更新には引き続き7日間の制限を適用します。Node.js 24.22.1 も今回の固定版として導入します。
+
 Electron は eMudhra の証明書問題への対策として 44.9.3 に完全固定しています。
 Node.js と Chromium の証明書検証に公開鍵の拒否リストを適用する
 [修正 #55126](https://github.com/electron/electron/pull/55126) を含みます。
@@ -77,6 +92,16 @@ NLR_USER_DATA="$nlr_check_dir/userdata" NLR_OUTPUT_DIR="$nlr_check_dir/recording
 失敗後の再開処理は `NLR_DEV_FAIL_VIDEO_AFTER_MS=8000` のように設定して起動すると、映像を強制的に失敗させて確認できます。
 
 終了済み放送の検証スクリプトについては [タイムシフト検証手順](timeshift-probe.md)、検証の結論と本体実装へ引き継ぐ範囲は [検証結果と初期対応範囲](timeshift-feasibility.md) を参照してください。 本体への変更方針は [手動タイムシフト録画の組み込み設計](timeshift-recording-design.md) にまとめています。手動入力した終了済み番組は専用の有限取得へ分岐し、自動検知と放送中の手動録画は従来のライブ経路を使います。
+
+### Electron 更新時の Undici 暫定対策の見直し
+
+`src/main/core/network-runtime.ts` の `install()` は、Electron 内蔵の Undici に修正が届くまでの暫定対策です。
+Electron を更新するたびに、次の手順で撤去できるか確認してください。
+
+1. 更新先の Electron 実体の `process.versions.node`・`process.versions.undici` と修正履歴を調べ、2026-10-21 の Node.js セキュリティ更新で扱われた Undici の修正が取り込まれていることを確認します。最新版との一致ではなく、対象の修正が入っていることが条件です。開発・CI 用 Node.js の更新だけでは判断できません。
+2. 差し替えを無効にした Electron 実体で、`test/core/network-runtime.test.ts` の不正な圧縮指定・途中切断のケースを再現し、未処理例外が出ず、後続の通信と正常な Brotli 展開が成功することを確認します。WebSocket の修正取り込みも確認し、隔離した設定・保存先で録画と停止を検証します。ログインが必要な push 通知・フォロー監視は人間に確認を依頼します。通常の Vitest は開発用 Node.js で動くため、その成功だけで Electron 内蔵版の検証を代用しないでください。
+3. 確認できたら `src/main/core/network-runtime.ts`、`src/main/index.ts` の初期化 import、`vitest.config.ts` の該当 `setupFiles` 設定を削除します。テストの「外部 Undici と同一である」という暫定対策用の検証は外し、不正応答からの回復を確認する回帰テストは残します。この文書の説明と `AGENTS.md` の参照も整理します。
+4. `undici` の依存自体は削除しません。`src/main/vendor/nico-client/internal/httpClient.ts` が直接利用するため、修正済みバージョンを維持します。開発・CI 用の `.node-version` も修正済みバージョンを維持します。
 
 ### コード構成
 

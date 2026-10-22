@@ -29,7 +29,7 @@
     "electron-updater": "6.8.9",
     "protobufjs": "^8.8.0",
     "set-cookie-parser": "^3.1.2",
-    "undici": "^8.10.0",
+    "undici": "8.12.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {

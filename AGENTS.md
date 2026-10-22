@@ -39,6 +39,7 @@ nico-live-recorder (ニコ生自動録画の Electron アプリ) で作業する
 
 ## 依存パッケージ
 
+- Electron を更新するときは、[Undici 暫定対策の見直し手順](docs/development.md#electron-更新時の-undici-暫定対策の見直し)を確認し、内蔵版の修正状況と差し替えを外せるかを検証する。
 - 公開から 7 日未満のバージョンは `.npmrc` の `min-release-age` で弾かれる。最新版が入らないときは 1 つ前を使う。
 - 新しい依存を足すときは install script の有無を確認し、必要なものだけ `package.json` の `allowScripts` で許可する。
 
