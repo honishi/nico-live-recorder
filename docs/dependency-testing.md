@@ -14,6 +14,9 @@
 | コメント変換              | `test/vendor/nico-client/NicoClient.test.ts`                 | 実デコード結果のRGB色と名前付き色、既定値、重複排除                                    |
 | 録画全体                  | `test/core/recorder/program-recorder-integration.test.ts`    | 番組HTML→視聴WS→HLS・コメント→動画・CSV・JSONの保存                                    |
 
+Electron・React・electron-viteは `scripts/test-electron.mjs` でビルド済み画面の起動、
+preload・IPC、タブ操作、変更通知、設定の保存・再起動後の復元を確認します。
+
 結合テストはライブ・タイムシフト、別音声・音声込み、コメント認証エラー、
 タイムシフトの欠落と再取得、ライブの鍵失効・手動停止を対象にします。
 本体のHTTP・WebSocket・暗号処理・Protobuf・ファイル保存は差し替えません。
@@ -40,10 +43,24 @@ ffprobeで出力TSを読み直し、H.264とAACを持つこと、各トラック
 PRのCIではmacOS arm64・Windows x64のpackageジョブに含めています。
 Releaseでも実行し、既存の配布物展開後のFFmpeg・更新メタデータ検証と併用します。
 
+## Electron実体のスモークテスト
+
+通常のVitestと実FFmpegのテストはNode上で実行します。Electron実体は次のコマンドで別途確認します。
+
+```sh
+npm run build
+npm run test:electron
+```
+
+Electronのスモークテストは、空の一時userData・保存先と自動割当のCDPポートを使います。
+起動・画面更新はイベントを待って確認し、固定秒数のsleepには依存しません。
+実FFmpegを配置してから実行してください。mainのエラーログも失敗として扱います。
+PRとReleaseのmacOS・Windowsジョブにも含めています。
+
 ## 残る確認
 
-これらはNode上でのテストです。Electron実体の起動、preload・IPC、ログイン、
-実アカウントのpush登録・フォローAPI、更新インストーラーの適用を保証しません。
+このスモークテストはビルド済みソースをElectronで起動するため、配布後のASAR・リソース配置は
+保証しません。ログイン、実アカウントのpush登録・フォローAPI、更新インストーラーの適用も対象外です。
 固定データは現在想定している通信形式との互換性を確認するものであり、
 ニコニコ側のAPI変更を検知する監視ではありません。
 
