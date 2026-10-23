@@ -50,6 +50,7 @@ jobs:
           cache: npm
       - run: npm ci
       - uses: ./.github/actions/build-ffmpeg
+      - run: npm run test:recording
       - run: npm run build
       # Release と同じ形式を作り、圧縮・インストーラへの格納後も実体を検証する。
       - run: npx electron-builder ${{ matrix.args }} --publish never

@@ -72,6 +72,9 @@ npm run build        # out/ に成果物を出力
 
 Electron を起動せずに録画部分だけを試すスクリプトもあります。
 
+依存更新時に自動で保証する範囲と、実FFmpegを使う `npm run test:recording` については
+[依存更新時の回帰テスト](dependency-testing.md) を参照してください。
+
 ```bash
 npx tsx scripts/record.ts lv123456789 30 ./recordings      # 30 秒だけ録画
 npx tsx scripts/record-comments.ts                          # コメント取得のみ
