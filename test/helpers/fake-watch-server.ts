@@ -6,6 +6,8 @@ export interface WatchServerOptions {
   /** startWatching を受けたときに返す stream メッセージの data */
   streamData: (connectionIndex: number) => Record<string, unknown>;
   keepIntervalSec?: number;
+  /** コメント結合テストではローカルの NDGR サーバーを指定する。 */
+  viewUri?: string;
   /** true を返した接続は何も送らずに即座に切る (障害の再現用) */
   dropConnection?: (connectionIndex: number) => boolean;
 }
@@ -50,7 +52,10 @@ export async function startFakeWatchServer(options: WatchServerOptions): Promise
         socket.send(
           JSON.stringify({
             type: 'messageServer',
-            data: { viewUri: 'https://mpn.example/view', vposBaseTime: '2026-09-04T00:00:00Z' },
+            data: {
+              viewUri: options.viewUri ?? 'https://mpn.example/view',
+              vposBaseTime: '2026-09-04T00:00:00Z',
+            },
           }),
         );
       }

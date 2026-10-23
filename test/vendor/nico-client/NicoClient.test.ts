@@ -6,6 +6,7 @@ import {
 } from '../../../src/main/vendor/nico-client/errors';
 import { HttpClient } from '../../../src/main/vendor/nico-client/internal/httpClient';
 import { getProtoRegistry } from '../../../src/main/vendor/nico-client/internal/protoLoader';
+import { ndgrFixture } from '../../helpers/ndgr-fixture';
 import { isRetryableNicoError } from '../../../src/main/vendor/nico-client/retryPolicy';
 import {
   NicoLiveProgramStatus,
@@ -214,7 +215,52 @@ test('コメントと終了通知を受け取る通常経路を維持する', as
   const comments = await consume();
   expect(comments).toHaveLength(1);
   expect(comments[0].content).toBe('test');
+  expect(comments[0].color).toBe('white');
   expect(httpText).not.toHaveBeenCalled();
+});
+
+test('固定バイナリのRGB色をprotobufの省略フィールド既定値で上書きしない', async () => {
+  httpStream.mockImplementation(async function* (url) {
+    if (url.startsWith('https://example.test/view?')) {
+      yield registry.ChunkedEntry.encodeDelimited({
+        segment: { uri: 'https://example.test/segment' },
+      }).finish();
+      return;
+    }
+    if (url !== 'https://example.test/segment') throw new Error('unexpected request');
+    yield ndgrFixture('forward');
+  });
+  const comments = await consume();
+  expect(comments).toHaveLength(1);
+  expect(comments[0]).toMatchObject({
+    id: 'fixture-comment',
+    color: { r: 1, g: 2, b: 3 },
+    rawUserId: 4294967297,
+    liveId: Number.MAX_SAFE_INTEGER,
+  });
+});
+
+test.each([
+  [0, 'white'],
+  [1, 'red'],
+] as const)('明示した名前付き色 %i は %s として保持する', async (namedColor, expectedColor) => {
+  httpStream.mockImplementation(async function* (url) {
+    if (url.startsWith('https://example.test/view?')) {
+      yield registry.ChunkedEntry.encodeDelimited({
+        segment: { uri: 'https://example.test/segment' },
+      }).finish();
+      return;
+    }
+    if (url !== 'https://example.test/segment') throw new Error('unexpected request');
+    yield registry.ChunkedMessage.encodeDelimited({
+      meta: { id: 'named', at: { seconds: 1000 } },
+      message: { chat: { content: 'named color', modifier: { named_color: namedColor } } },
+    }).finish();
+    yield registry.ChunkedMessage.encodeDelimited({
+      state: { program_status: { state: 1 } },
+    }).finish();
+  });
+  expect((await consume())[0].color).toBe(expectedColor);
 });
 
 // 欠落の回復では番組ページも取り直す。その入口だけを差し替えて再取得回数を数える。
