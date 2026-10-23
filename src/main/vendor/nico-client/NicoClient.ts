@@ -1075,7 +1075,8 @@ export class NicoClient {
   }
 
   private toCommentColor(modifier: any): CommentColor {
-    if (typeof modifier.named_color === 'number') {
+    // protobuf のプロトタイプ上の既定値 (white) は、受信した RGB 色より優先しない。
+    if (Object.hasOwn(modifier, 'named_color') && typeof modifier.named_color === 'number') {
       return COLOR_NAME_MAP[modifier.named_color] ?? 'white';
     }
     if (modifier.full_color) {
