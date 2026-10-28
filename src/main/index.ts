@@ -1,4 +1,3 @@
-import './core/network-runtime';
 import path from 'node:path';
 import { autoUpdater } from 'electron-updater';
 import { app, BrowserWindow, powerSaveBlocker, screen, shell } from 'electron';

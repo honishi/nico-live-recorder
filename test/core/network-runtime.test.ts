@@ -1,21 +1,6 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { brotliCompressSync } from 'node:zlib';
-import * as undici from 'undici';
-
-test('通信と関連オブジェクトを修正版 Undici に揃える', () => {
-  // Node 自体が修正版でも、Electron 内蔵版へ戻る変更を検出する。
-  for (const name of [
-    'fetch',
-    'WebSocket',
-    'Headers',
-    'Request',
-    'Response',
-    'FormData',
-  ] as const) {
-    expect(globalThis[name]).toBe(undici[name]);
-  }
-});
 
 test('不正な圧縮指定と途中切断を拒否した後も、通常の通信を続けられる', async () => {
   const server = createServer((request, response) => {
