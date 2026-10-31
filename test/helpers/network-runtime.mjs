@@ -29,11 +29,13 @@ export async function verifyHttpRecovery() {
   try {
     for (const route of ['invalid', 'truncated', 'abort']) {
       // ヘッダー受信前・本文消費中のどちらで失敗しても、後続通信の回復を確認する。
+      const signal = route === 'abort' ? controller.signal : AbortSignal.timeout(5000);
       await assert.rejects(async () => {
-        const signal = route === 'abort' ? controller.signal : AbortSignal.timeout(5000);
         const response = await fetch(`${origin}/${route}`, { signal });
         await response.text();
       });
+      if (route !== 'abort')
+        assert.equal(signal.aborted, false, `${route}: timeout is not recovery`);
       const response = await fetch(`${origin}/healthy`, { signal: AbortSignal.timeout(5000) });
       assert.equal(await response.text(), '録画を続けられます');
     }

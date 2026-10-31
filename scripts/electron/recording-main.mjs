@@ -25,4 +25,14 @@ export function prepareRecordingMain(require, { origin }) {
       callback({ cancel: !['file:', 'data:', 'devtools:'].includes(protocol) });
     });
   });
+
+  // 実際の子プロセスは差し替えず、終了後に残っていないことを親のテストから調べる。
+  const childProcess = require('node:child_process');
+  const spawn = childProcess.spawn;
+  globalThis.__nlrTest.children = [];
+  childProcess.spawn = function (...args) {
+    const child = spawn.apply(this, args);
+    child.once('spawn', () => globalThis.__nlrTest.children.push(child.pid));
+    return child;
+  };
 }

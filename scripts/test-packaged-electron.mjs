@@ -67,6 +67,8 @@ async function verifyFiles(recording, resources, separateAudio) {
 for (const scenario of [
   { mode: 'live', separateAudio: true, openEnded: true },
   { mode: 'timeshift', separateAudio: false },
+  { mode: 'live', separateAudio: true, openEnded: true, quitDuringRecording: true },
+  { mode: 'timeshift', separateAudio: false, holdForward: true, quitDuringRecording: true },
 ]) {
   const work = await mkdtemp(path.join(os.tmpdir(), 'nlr 配布テスト '));
   const program = await startFakeProgram(scenario);
@@ -92,14 +94,25 @@ for (const scenario of [
     assert.equal(await app.evaluate('typeof window.require'), 'undefined');
     await app.evaluate('window.api.updateSettings({ pollIntervalSec: 45 })');
     await app.evaluate('window.api.startRecording("lv42")');
-    if (scenario.mode === 'live') {
-      await waitForRecording(app, 'recording.commentCount === 1');
-      assert.equal(await app.evaluate('window.api.stopRecording("lv42")'), true);
+    let recording;
+    if (scenario.quitDuringRecording) {
+      // 映像が完了していても、コメント取得中なら未完了ジョブとして終了を待つ。
+      recording = await waitForRecording(
+        app,
+        scenario.mode === 'timeshift'
+          ? 'recording.commentCount === 1 && recording.timeshift?.phase === "comments"'
+          : 'recording.commentCount === 1 && recording.state === "recording"',
+      );
+      if (scenario.mode === 'timeshift')
+        assert.ok(program.requests.some((request) => request.path === '/forward'));
+    } else {
+      if (scenario.mode === 'live') {
+        await waitForRecording(app, 'recording.commentCount === 1');
+        assert.equal(await app.evaluate('window.api.stopRecording("lv42")'), true);
+      }
+      recording = await waitForRecording(app, '["done", "failed"].includes(recording.state)');
+      assert.equal(recording.state, 'done');
     }
-    const recording = await waitForRecording(app, '["done", "failed"].includes(recording.state)');
-    assert.equal(recording.state, 'done');
-    const metadata = await verifyFiles(recording, runtime.resources, scenario.separateAudio);
-    if (scenario.mode === 'timeshift') assert.equal(metadata.timeshift.completion, 'complete');
     assert.deepEqual(app.errors, []);
     assert.deepEqual(
       await app.evaluate(
@@ -107,7 +120,33 @@ for (const scenario of [
       ),
       [],
     );
+    const children = await app.mainEvaluate('__nlrTest.children');
+    assert.ok(children.length > 0, '実FFmpegの起動が必要');
     await app.quit();
+    // 親の終了だけでは合格にせず、実ファイルの最終状態と子プロセスの終了を検査する。
+    for (const pid of children) assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+    const metadata = await verifyFiles(recording, runtime.resources, scenario.separateAudio);
+    if (scenario.mode === 'timeshift') {
+      assert.equal(
+        metadata.timeshift.completion,
+        scenario.quitDuringRecording ? 'cancelled' : 'complete',
+      );
+      if (scenario.quitDuringRecording) {
+        assert.equal(metadata.timeshift.comments.reason, 'USER_CANCELLED');
+        assert.equal(metadata.video.reason, 'endlist');
+      }
+    } else assert.equal(metadata.video.reason, 'aborted');
+    const saved = JSON.parse(
+      await readFile(path.join(work, 'userdata/recording-history.json'), 'utf8'),
+    );
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].state, 'done');
+    assert.equal(saved[0].commentCount, 1);
+    assert.ok(saved[0].endedAt);
+    const log = await readFile(path.join(work, 'userdata/logs/app.log'), 'utf8');
+    assert.ok(log.includes('[rec] finished lv42'));
+    assert.ok(log.includes('ffmpeg exited code=0'));
+    if (scenario.quitDuringRecording) assert.ok(log.includes('stopping recordings before quit'));
     // 同じ隔離userDataで実際に再起動し、アプリ経由で履歴と設定を読み直す。
     app = await launch();
     assert.equal((await app.evaluate('window.api.getSettings()')).pollIntervalSec, 45);
@@ -115,8 +154,13 @@ for (const scenario of [
     assert.equal(history.items.length, 1);
     assert.equal(history.items[0].videoPath, recording.videoPath);
     assert.equal(history.items[0].commentCount, 1);
+    assert.equal(history.items[0].state, 'done');
+    assert.equal(history.items[0].completion, saved[0].completion);
+    assert.deepEqual(app.errors, []);
     await app.quit();
-    console.log(`Packaged Electron OK: ${scenario.mode}, recording/CSV/proto/IPC/history/restart`);
+    console.log(
+      `Packaged Electron OK: ${scenario.mode}, quitDuringRecording=${!!scenario.quitDuringRecording}, recording/CSV/proto/IPC/history/logs/restart/child exit`,
+    );
   } catch (error) {
     console.error(app?.output());
     throw error;

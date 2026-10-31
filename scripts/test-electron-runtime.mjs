@@ -17,13 +17,20 @@ for (const key of ['ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS', 'NICO_USER_SESSION'])
 const child = spawn(
   electron,
   [fileURLToPath(new URL('./electron/network-main.cjs', import.meta.url))],
-  { env, stdio: 'inherit' },
+  { env, stdio: ['ignore', 'pipe', 'pipe'] },
 );
+let output = '';
+child.stdout.on('data', (data) => {
+  output += data;
+  process.stdout.write(data);
+});
+child.stderr.on('data', (data) => process.stderr.write(data));
 // 未処理例外とハングも失敗にする。タイマーは成功判定や通信のタイミングには使わない。
 const timer = setTimeout(() => child.kill('SIGKILL'), 30_000);
 try {
-  const [code, signal] = await once(child, 'exit');
+  const [code, signal] = await once(child, 'close');
   assert.equal(code, 0, `Electron runtime exited: ${code}/${signal}`);
+  assert.ok(output.includes('Electron network OK:'), '通信検証の完了前に終了しました');
 } finally {
   clearTimeout(timer);
   await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

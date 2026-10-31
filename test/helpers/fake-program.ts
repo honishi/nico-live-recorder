@@ -14,6 +14,8 @@ export interface FakeProgramOptions {
   missingSegment?: boolean;
   openEnded?: boolean;
   refreshKey?: boolean;
+  /** backward 保存後のコメント取得を止め、終了処理の検証で使う。 */
+  holdForward?: boolean;
 }
 
 /** 番組HTMLから暗号化HLS・NDGRまで、外部通信なしで本体の取得経路を通す。 */
@@ -72,6 +74,7 @@ export async function startFakeProgram(options: FakeProgramOptions = {}) {
       return;
     }
     if (url.pathname === '/packed' || url.pathname === '/forward') {
+      if (url.pathname === '/forward' && options.holdForward) return;
       response.writeHead(200, { 'content-encoding': 'gzip' });
       response.end(gzipSync(ndgrFixture(url.pathname === '/packed' ? 'packed' : 'forward')));
       return;
