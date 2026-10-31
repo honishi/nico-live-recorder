@@ -8,6 +8,8 @@ import { startFakeWatchServer, type FakeWatchServer } from './fake-watch-server'
 import { ndgrFixture } from './ndgr-fixture';
 
 export interface FakeProgramOptions {
+  /** 録画中の実出力を検証するため、FFmpegの解析・出力バッファを満たす20秒素材を使う。 */
+  longMedia?: boolean;
   mode?: 'live' | 'timeshift';
   separateAudio?: boolean;
   commentsStatus?: number;
@@ -33,7 +35,12 @@ export async function startFakeProgram(options: FakeProgramOptions = {}) {
   iv[15] = 1;
   const media = new Map<string, Buffer>();
   for (const track of options.separateAudio ? ['video', 'audio'] : ['combined']) {
-    const input = readFileSync(new URL(`../fixtures/ffmpeg/${track}.mp4`, import.meta.url));
+    const input = readFileSync(
+      new URL(
+        `../fixtures/ffmpeg/${options.longMedia && track === 'combined' ? 'live-combined' : track}.mp4`,
+        import.meta.url,
+      ),
+    );
     const split = input.indexOf(Buffer.from('moof')) - 4;
     if (split < 0) throw new Error(`fragment not found: ${track}`);
     media.set(`/init-${track}`, input.subarray(0, split));

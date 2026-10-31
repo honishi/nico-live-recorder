@@ -45,6 +45,9 @@ jobs:
       - run: npm run test:electron:auth
       - run: npm run test:electron:runtime
       - run: npm run test:electron
+      - run: npm run test:electron:prepare-baseline
+      - run: npm run test:electron:upgrade
+      - run: npm run test:electron:recovery
       # 本家の macOS 配布だけに認証情報を渡す。不足時は未署名のまま配布しない。
       - name: Sign and notarize macOS
         if: runner.os == 'macOS' && github.repository == 'honishi/nico-live-recorder'
@@ -101,3 +104,11 @@ jobs:
             release/*.exe
             release/latest*.yml
             release/*.blockmap
+      - name: Upload Electron failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: electron-diagnostics-${{ runner.os }}
+          path: artifacts/electron
+          retention-days: 7
+          if-no-files-found: ignore

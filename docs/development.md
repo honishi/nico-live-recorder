@@ -113,6 +113,23 @@ Windows 実機とログインが必要な push・フォロー監視は未確認�
 3. ログインが必要な push 通知・フォロー監視は人間に確認を依頼します。
 4. 外部 `undici` は HTTP クライアントから直接使うため削除せず、開発・CI 用の `.node-version` とともに修正済みバージョンを維持します。
 
+### Electron のメジャー移行・異常終了の回帰テスト
+
+`npm run build` と配布対象のFFmpegの準備後、以下を実行します。CI/ReleaseではmacOS arm64・Windows x64の両方で実行します。
+
+- `npm run test:electron`: 実preloadの引数・購読解除・再購読、画面操作、同一バージョンの設定復元。
+- `npm run test:electron:prepare-baseline`: `scripts/electron/baseline.json` に固定した旧Electronを取得・SHA256検証・展開します。ネットワークを使う準備工程です。
+- `npm run test:electron:upgrade`: 旧ElectronでCookie・設定・録画履歴・push購読を保存し、現在のElectronで同じ一時プロファイルを開きます。保存した鍵で暗号通知を復号し、重複通知でも一つだけ録画すること、以前の動画を保持することまで確認します。
+- `npm run test:electron:recovery`: 録画中のrenderer再読み込み・クラッシュ、main強制終了と子プロセス終了、履歴の中断扱い、再録画を確認します。
+
+メジャー更新時は、`baseline.json` を更新前のElectronバージョンに進めてください。比較対象が一つ前のメジャーでない場合は移行テストを失敗させます。現在のアプリコードを旧・新の両ランタイムで動かすため、検証するのはElectron/Chromiumの保存形式とランタイム差です。過去リリースのアプリ独自データ形式の移行は別途扱います。
+
+検証中の通信先はローカル偽サーバーと固定応答に限定し、Cookieもダミーです。実サービスでのログイン・push登録の確認を代替するものではありません。すべての起動で一時userDataと保存先を使い、実ユーザーのプロファイルは読みません。
+
+`runElectronScenario` は途中で後始末に失敗しても残りを実行します。失敗時は `artifacts/electron/`（`NLR_TEST_ARTIFACTS` で変更可）にステージのエラー、Electron出力、アプリログ、設定・履歴を保存し、CIは7日間のartifactとしてアップロードします。Cookie DB・購読鍵・動画は含めません。状態待機のタイムアウトには期待条件と最後に受け取った状態を含めます。
+
+RecordingManagerの単体テストは責務ごとの `recording-manager-*.test.ts` と共通の `test/helpers/recording-manager.ts` に分けています。スイートごとにフックを登録し、実ファイル・時計・mockをテスト間で初期化します。
+
 ### コード構成
 
 ```
