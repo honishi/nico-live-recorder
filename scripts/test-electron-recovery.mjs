@@ -59,7 +59,8 @@ await runElectronScenario('recovery', async ({ work, launch, defer }) => {
   await app.evaluate('window.api.startRecording("lv42")');
   const next = await waitForRecording(
     app,
-    'recording.state === "recording" && recording.videoBytes > 0',
+    // 再開直後のvideoBytesには旧パートも含まれる。新パートのパス確定を別に待つ。
+    `recording.state === "recording" && typeof recording.videoPath === "string" && recording.videoPath !== ${JSON.stringify(recording.videoPath)}`,
   );
   assert.notEqual(next.videoPath, recording.videoPath);
   await waitFor(
@@ -70,6 +71,7 @@ await runElectronScenario('recovery', async ({ work, launch, defer }) => {
           return Buffer.alloc(0);
         })
       ).length > 0,
+    12000,
   );
   await app.evaluate('window.api.stopRecording("lv42")');
   await waitForRecording(app, 'recording.state === "done"');
