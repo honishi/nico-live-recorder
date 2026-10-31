@@ -102,8 +102,11 @@ await runElectronScenario('upgrade', async ({ work, launch, defer }) => {
   );
   const children = await current.mainEvaluate('__nlrTest.children');
   const acknowledgements = push.acks.length;
+  const receivedAt = (await current.evaluate('window.api.getStatus()')).push.lastReceivedAt;
   push.notify(savedPush.channelId, data);
   await waitFor(() => push.acks.length > acknowledgements);
+  // ACKは復号より先に返る。復号後に更新される状態通知まで待ってから重複を検査する。
+  await waitForStatus(current, `status.push.lastReceivedAt !== ${JSON.stringify(receivedAt)}`);
   assert.equal(
     (await current.evaluate('window.api.getStatus()')).recordings.filter(
       (item) => item.state === 'recording',

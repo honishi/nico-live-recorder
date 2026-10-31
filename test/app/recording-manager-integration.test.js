@@ -183,8 +183,11 @@ test('保存したpush購読を再読込して暗号通知から録画し、再�
   feed.publish();
   settings.update({ pollIntervalSec: 45 });
   await waitFor(() => feed.polls() > previousPolls);
+  const receivedAt = manager.getPushStatus().lastReceivedAt;
   push.notify(saved.channelId, data);
   await waitFor(() => push.acks.length >= 2);
+  // ACKだけで録画を止めず、暗号通知が本体で処理されたことを確認する。
+  await waitFor(() => manager.getPushStatus().lastReceivedAt !== receivedAt);
   await manager.stopRecording('lv42');
   await recordingMatches((r) => r.state === 'done');
   // 映像とコメントがそれぞれ視聴WSを1本使う。二重録画なら4本になる。
