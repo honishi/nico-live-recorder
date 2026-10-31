@@ -47,6 +47,10 @@ ffprobeで出力TSを読み直し、H.264とAACを持つこと、各トラック
 スクリプト内部の `NLR_TEST_FFMPEG` と `NLR_TEST_FFPROBE` はテスト専用です。
 
 PRのCIではmacOS arm64・Windows x64のpackageジョブに含めています。
+FFmpegのソースはmacOSの準備ジョブで一度取得・SHA-256検証し、同じ実行のartifactとして
+各OSへ渡します。各ビルドでも再検証するため、Windowsランナーからffmpeg.orgへの
+直接接続が失敗しても、ソースやビルド条件を変えずにテストできます。
+`node scripts/ffmpeg/build.mjs --download-only` で取得・検証だけを実行できます。
 Releaseでも実行し、既存の配布物展開後のFFmpeg・更新メタデータ検証と併用します。
 
 ## Electron内蔵通信ランタイム

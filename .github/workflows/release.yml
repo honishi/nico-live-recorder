@@ -7,7 +7,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  ffmpeg-source:
+    uses: ./.github/workflows/ffmpeg-source.yml
+
   package:
+    needs: ffmpeg-source
     strategy:
       fail-fast: false
       matrix:
@@ -30,6 +34,10 @@ jobs:
         if: github.event_name == 'push'
         run: node -e "const expected = 'v' + require('./package.json').version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag must be ' + expected)"
       - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-source
+          path: .cache/ffmpeg
       - uses: ./.github/actions/build-ffmpeg
       - run: npm test
       - run: npm run test:recording

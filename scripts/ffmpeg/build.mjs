@@ -19,10 +19,11 @@ import { assertLicense, configureArgs, sha256, source, sourceName } from './conf
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const target = `${process.platform}-${process.arch}`;
-if (!['darwin-arm64', 'win32-x64', 'linux-x64'].includes(target)) {
+const downloadOnly = process.argv.includes('--download-only');
+if (!downloadOnly && !['darwin-arm64', 'win32-x64', 'linux-x64'].includes(target)) {
   throw new Error(`未対応の FFmpeg ビルド環境: ${target}`);
 }
-if (process.platform === 'win32' && process.env.MSYSTEM !== 'UCRT64') {
+if (!downloadOnly && process.platform === 'win32' && process.env.MSYSTEM !== 'UCRT64') {
   throw new Error('Windows のビルドは MSYS2 UCRT64 シェルで実行してください');
 }
 
@@ -49,6 +50,11 @@ if (!existsSync(archive)) {
 }
 if (sha256(readFileSync(archive)) !== source.sha256) {
   throw new Error('キャッシュ済み FFmpeg ソースの SHA-256 が一致しません');
+}
+// CIでは検証済みソースだけを共有し、各OSで再検証してからビルドする。
+if (downloadOnly) {
+  console.log(`FFmpeg source verified: ${archive}`);
+  process.exit(0);
 }
 const work = mkdtempSync(path.join(cache, 'build-'));
 run('tar', ['-xf', sourceName, '-C', path.basename(work)], cache);
