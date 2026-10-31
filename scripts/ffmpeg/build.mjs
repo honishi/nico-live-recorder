@@ -14,6 +14,7 @@ import {
 } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { assertLicense, configureArgs, sha256, source, sourceName } from './config.mjs';
 
@@ -42,9 +43,26 @@ mkdirSync(cache, { recursive: true });
 const archive = path.join(cache, sourceName);
 if (!existsSync(archive)) {
   console.log(`Downloading ${source.url}`);
-  const response = await fetch(source.url, { signal: AbortSignal.timeout(120_000) });
-  if (!response.ok) throw new Error(`FFmpeg source: HTTP ${response.status}`);
-  const data = Buffer.from(await response.arrayBuffer());
+  let data;
+  // 一時的な接続失敗・HTTPエラーは最大3回まで。検証前のデータはキャッシュへ書かない。
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await fetch(source.url, { signal: AbortSignal.timeout(120_000) });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`FFmpeg source: HTTP ${response.status}`);
+      }
+      data = Buffer.from(await response.arrayBuffer());
+      break;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      console.warn(
+        `FFmpeg source download failed (${attempt}/3): ${error.cause?.message ?? error.message}`,
+      );
+      await delay(attempt * 1000);
+    }
+  }
+  // 内容の不一致はネットワーク障害と区別し、再試行せず失敗させる。
   if (sha256(data) !== source.sha256) throw new Error('FFmpeg ソースの SHA-256 が一致しません');
   writeFileSync(archive, data);
 }
