@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /** fd 3・4 を保存し、指定の終了コードで終わる。Node スクリプトなので Windows でも動く。 */
-export function writeFakeFfmpeg(dir: string): string {
+export function writeFakeFfmpeg(dir: string, options: { failFirstPart?: boolean } = {}): string {
   const script = path.join(dir, 'fake-ffmpeg.cjs');
   fs.writeFileSync(
     script,
@@ -25,7 +25,9 @@ export function writeFakeFfmpeg(dir: string): string {
       "    input.on('error', () => output.end());",
       '  });',
       "Promise.all([copy(3, out), copy(4, out + '.audio')]).then(() => {",
-      '  process.exit(Number(process.env.FAKE_FFMPEG_EXIT || 0));',
+      options.failFirstPart
+        ? '  process.exit(/_\\d+\\.ts$/.test(out) ? 0 : 1);'
+        : '  process.exit(Number(process.env.FAKE_FFMPEG_EXIT || 0));',
       '});',
       '',
     ].join('\n'),

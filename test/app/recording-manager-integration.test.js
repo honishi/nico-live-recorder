@@ -68,14 +68,7 @@ test('実録画の失敗後に次のパートへ再開し、動画・CSV・累�
   program = await startFakeProgram();
   manager = createManager();
   // 最初の子だけ入力を書き切って異常終了し、2パート目は正常終了する。
-  const ffmpeg = path.join(dir, 'fake-ffmpeg.cjs');
-  await fs.writeFile(
-    ffmpeg,
-    (await fs.readFile(ffmpeg, 'utf8')).replace(
-      'Number(process.env.FAKE_FFMPEG_EXIT || 0)',
-      "out.endsWith('_2.ts') ? 0 : 1",
-    ),
-  );
+  writeFakeFfmpeg(dir, { failFirstPart: true });
   await manager.startRecording('lv42', 'manual');
   const first = await recordingMatches(
     (r) => r.state === 'starting' && r.commentCount === 1 && r.videoBytes > 0,
