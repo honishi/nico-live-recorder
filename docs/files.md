@@ -107,6 +107,14 @@ at,no,content,vpos,rawUserId,hashedUserId,accountStatus,position,size,color,font
 - コメントの保存処理が始まれば、0件でも BOM とヘッダーを保存します。タイムシフトで接続前に失敗した場合は空の予約CSVを除去し、CSVが残らない場合があります。ライブでCSVに追記する際はBOM・ヘッダーを重複して書かず、既存ファイルの先頭が想定する BOM・ヘッダーと一致しなければ追記を中止します。コメント保存が失敗しても映像録画は続行します。
 - JSONL の新規保存や形式の選択はありません。過去の `.comments.jsonl` は変換・追記・削除しません。旧形式の履歴がある番組を録り直す場合は CSV を新規に作り、取得できる過去コメントも取得します。履歴のコメント数は新しい CSV の件数になります。
 
+## テストカバレッジ (開発・CI)
+
+`npm run test:coverage` は `.cache/coverage/` に `index.html` とその関連ファイル、
+`coverage-summary.json` を出力します。実行のたびに前回のカバレッジ出力を置き換えます。
+`node scripts/coverage-summary.mjs` は同じ場所に `summary.md` を作り、CI では Actions の Summary にも追記します。
+CI の Artifact `coverage-report` の保存期間は7日間です。計測範囲と確認方法は
+[テストカバレッジ](development.md#テストカバレッジ) を参照してください。
+
 ## 開発用スクリプト (手動で実行したときだけ)
 
 | スクリプト                   | 出力                                                                                                                                                        |
