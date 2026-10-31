@@ -30,6 +30,24 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+        if: runner.os != 'Linux'
+      # 同じテストを二重に実行せず、Ubuntu 側だけカバレッジを計測する。
+      - name: Test with coverage
+        id: coverage
+        if: runner.os == 'Linux'
+        run: npm run test:coverage
+      - name: Summarize coverage
+        if: ${{ !cancelled() && (steps.coverage.outcome == 'success' || steps.coverage.outcome == 'failure') }}
+        run: node scripts/coverage-summary.mjs
+      - name: Upload coverage report
+        if: ${{ !cancelled() && (steps.coverage.outcome == 'success' || steps.coverage.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: .cache/coverage
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
       - run: npm run build
 
   # タグを打つ前にも、配布対象上で実体のライセンスと多重化を検証する。

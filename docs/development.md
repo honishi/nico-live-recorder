@@ -270,6 +270,22 @@ macOSの通知にはアプリの署名が必要です。`npm run dev` で使う 
 - 本家の Release は macOS の署名・公証と、DMG / ZIP 展開後の Gatekeeper / FFmpeg 検証を必須にします。Windows は未署名の NSIS を作り、展開後の FFmpeg を検証します。手動実行ではリリースを作らず、検証済み成果物を Actions の artifact に保存します。必要な Secrets と検証手順は [mac-signing.md](mac-signing.md) を参照してください。
 - 公開ページ (https://honishi.github.io/nico-live-recorder/) は `site/` に置き、main への push で `pages.yml` が GitHub Pages へデプロイします。スクリーンショットとアイコンはリポジトリ内の原本 (`docs/images/recording-screen.jpg`、`build/icons/mac-256.png`) をデプロイ時に同梱します。ダウンロードボタンは表示時に GitHub API から最新リリースの `.dmg` / `Setup*.exe` を探してリンクし、取得できなければリリースページへ誘導します。成果物のファイル名の形を変えるときはページ側の判定も合わせてください。
 
+### テストカバレッジ
+
+`npm run test:coverage` で Vitest の全テストを V8 カバレッジ付きで実行します。
+`@vitest/coverage-v8` は Vitest と同じバージョンに揃えて更新してください。
+
+- 対象は `src/main/**/*.ts` 全体です。録画・検知のコア、アプリの制御、流用コードを含め、テストから読み込まれていないファイルも集計します。
+- preload・renderer・開発用スクリプトと、別プロセスで実行する Electron / FFmpeg の検証は集計に含めません。アプリ全体の E2E カバレッジではありません。
+- 行・分岐・関数・文の実行率を表示します。当面は可視化だけを行い、カバレッジの下限による失敗判定は設けません。テスト自体の失敗は従来どおり CI を失敗させます。
+- CI は Ubuntu のテスト実行時だけ計測し、Windows は通常の `npm test` を続けます。テスト失敗時も、生成できたレポートを保存します。
+- Actions の実行結果の Summary に集計表を表示し、Artifact `coverage-report` に詳細を7日間保存します。ダウンロード・展開後に `index.html` をブラウザで開くと、ファイルごとの未実行行と分岐を確認できます。
+
+ローカルの HTML は `.cache/coverage/index.html`、集計データは `.cache/coverage/coverage-summary.json` に出力します。
+`node scripts/coverage-summary.mjs` で CI と同じ表を標準出力と `.cache/coverage/summary.md` に出せます。
+`GITHUB_STEP_SUMMARY` が設定されている場合は、そのファイルにも表を追記します。
+`.cache/` は Git・整形・lint の対象外なので、生成物をコミットする必要はありません。
+
 ### アプリの自動更新
 
 - `electron-updater` が公開 GitHub Releases の正式版を起動時と6時間ごとに確認し、ダウンロードします。手動確認も同じ処理へ合流させ、最低60秒の間隔を設けます。HTTP の403 / 429では1時間待ちます。分類はエラーの `code` / `statusCode` を優先し、それらを失うライブラリのラッパーでは既知の HTTP エラー形式だけを読みます。スタックの行番号や URL の数字は判定に使いません。開発起動と配布対象外のOSでは通信も適用も無効です。
