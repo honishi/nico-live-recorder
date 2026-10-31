@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 import { EventEmitter, once } from 'node:events';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +58,7 @@ async function connect(url, sockets) {
             pending.set(id, { resolve, reject });
             socket.send(JSON.stringify({ id, method, params }));
           }),
-          method,
+          `${method}: ${params.expression?.slice(0, 240) ?? ''}`,
         );
       } finally {
         pending.delete(id);
@@ -72,10 +73,19 @@ function value(result) {
 }
 
 /** 本番コードにテスト用IPCを足さず、最初のmain文の実行前に隔離設定を注入する。 */
-export async function launchElectron({ work, binary, prepareMain, config = {} }) {
+export async function launchElectron({
+  work,
+  binary,
+  executable,
+  prepareMain,
+  config = {},
+  label = 'electron',
+}) {
   const sockets = new Set();
   const errors = [];
   let output = '';
+  let pendingOutput = '';
+  const ownedChildren = new Set();
   const env = {
     ...process.env,
     NLR_USER_DATA: path.join(work, 'userdata'),
@@ -97,7 +107,7 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
     '--remote-debugging-port=0',
   ];
   if (!binary) args.unshift(root);
-  const child = spawn(binary ?? electron, args, {
+  const child = spawn(binary ?? executable ?? electron, args, {
     cwd: work,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -108,46 +118,74 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
   const changed = new EventEmitter();
   const append = (data) => {
     output = (output + data).slice(-64_000);
+    pendingOutput += data;
+    const lines = pendingOutput.split('\n');
+    pendingOutput = lines.pop();
+    for (const line of lines) {
+      const marker = line.match(/^NLR_TEST_CHILD_(SPAWN|EXIT) (\d+)$/);
+      if (marker?.[1] === 'SPAWN') ownedChildren.add(Number(marker[2]));
+      if (marker?.[1] === 'EXIT') ownedChildren.delete(Number(marker[2]));
+    }
     changed.emit('output');
   };
   child.stdout.on('data', append);
   child.stderr.on('data', append);
-  const debuggerUrl = (pattern) =>
-    deadline(
-      new Promise((resolve, reject) => {
-        const check = () => {
-          const url = output.match(pattern)?.[1];
-          if (url) {
-            cleanup();
-            resolve(url);
-          }
-        };
-        const fail = (error) => {
-          cleanup();
-          reject(error);
-        };
-        const stopped = (code, signal) =>
-          fail(new Error(`Electron exited before ready: ${code}/${signal}`));
-        const cleanup = () => {
-          changed.off('output', check);
-          child.off('error', fail);
-          child.off('exit', stopped);
-        };
-        changed.on('output', check);
-        child.once('error', fail);
-        child.once('exit', stopped);
-        check();
-      }),
-      'debugger startup',
-    );
-  const dispose = async () => {
+  const debuggerUrl = async (pattern) => {
+    let cleanup;
+    try {
+      return await deadline(
+        new Promise((resolve, reject) => {
+          const check = () => {
+            const url = output.match(pattern)?.[1];
+            if (url) resolve(url);
+          };
+          const stopped = (code, signal) =>
+            reject(new Error(`Electron exited before ready: ${code}/${signal}`));
+          cleanup = () => {
+            changed.off('output', check);
+            child.off('error', reject);
+            child.off('exit', stopped);
+          };
+          changed.on('output', check);
+          child.once('error', reject);
+          child.once('exit', stopped);
+          check();
+        }),
+        `${label}: debugger startup`,
+      );
+    } finally {
+      cleanup?.();
+    }
+  };
+  const forceExit = async () => {
     for (const socket of sockets) socket.terminate();
     sockets.clear();
     if (child.exitCode === null && child.signalCode === null && child.pid) {
-      // 正常系は quit() を使う。ここは失敗した検証プロセスだけを終了させる。
       child.kill('SIGKILL');
-      await deadline(exited, 'forced exit', 5000);
+      await deadline(exited, `${label}: forced exit`, 5000);
     }
+  };
+  const dispose = async () => {
+    const failures = [];
+    try {
+      await forceExit();
+    } catch (error) {
+      failures.push(error);
+    }
+    // 親の終了に失敗しても、今回spawnを観測した子だけは全て後始末する。
+    for (const pid of ownedChildren) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') failures.push(error);
+      }
+    }
+    try {
+      await waitForChildExit([...ownedChildren], `${label}: child cleanup`);
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length) throw new AggregateError(failures, `${label}: cleanup failed`);
   };
   try {
     const main = await connect(await debuggerUrl(/Debugger listening on (ws:\/\/[^\s]+)/), sockets);
@@ -161,12 +199,15 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
       ? 'process.resourcesPath + "/app.asar/package.json"'
       : JSON.stringify(path.join(root, 'package.json'));
     const prepare = prepareMain
-      ? `(${prepareMain.toString()})(__nlrTest.require, ${JSON.stringify(config)})`
+      ? [prepareMain]
+          .flat()
+          .map((prepare) => `(${prepare.toString()})(__nlrTest.require, ${JSON.stringify(config)})`)
+          .join(';')
       : '';
     value(
       await main.send('Debugger.evaluateOnCallFrame', {
         callFrameId: pause.callFrames[0].callFrameId,
-        expression: `globalThis.__nlrTest = { require: process.getBuiltinModule("module").createRequire(${requireBase}) }; ${prepare}; true`,
+        expression: `globalThis.__nlrTest = { require: process.getBuiltinModule("module").createRequire(${requireBase}) }; ${'(' + observeChildren.toString() + ')(__nlrTest.require)'}; ${prepare}; true`,
         returnByValue: true,
       }),
     );
@@ -181,6 +222,7 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
       );
     const browserUrl = await debuggerUrl(/DevTools listening on (ws:\/\/[^\s]+)/);
     const browser = await connect(browserUrl, sockets);
+    let removeTargetListeners;
     const targetReady = new Promise((resolve) => {
       const found = ({ targetInfo }) => {
         if (
@@ -190,11 +232,17 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
         )
           resolve(targetInfo.targetId);
       };
+      removeTargetListeners = () => {
+        browser.events.off('Target.targetCreated', found);
+        browser.events.off('Target.targetInfoChanged', found);
+      };
       browser.events.on('Target.targetCreated', found);
       browser.events.on('Target.targetInfoChanged', found);
     });
     await browser.send('Target.setDiscoverTargets', { discover: true });
-    const target = await deadline(targetReady, 'renderer target');
+    const target = await deadline(targetReady, `${label}: renderer target`).finally(
+      removeTargetListeners,
+    );
     const renderer = await connect(new URL(`/devtools/page/${target}`, browserUrl).href, sockets);
     renderer.events.on('Runtime.exceptionThrown', (event) => errors.push(event.exceptionDetails));
     renderer.events.on('Runtime.consoleAPICalled', (event) => {
@@ -210,9 +258,10 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
         }),
       );
     const waitForDom = (condition) =>
-      evaluate(`new Promise(resolve => {
+      evaluate(`new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { observer.disconnect(); reject(new Error(${JSON.stringify(`${label}: DOM ${condition}`)})); }, 12000);
       const observer = new MutationObserver(check);
-      function check() { if (${condition}) { observer.disconnect(); resolve(true); } }
+      function check() { if (${condition}) { clearTimeout(timer); observer.disconnect(); resolve(true); } }
       observer.observe(document, { childList: true, subtree: true, attributes: true });
       check();
     })`);
@@ -223,9 +272,25 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
       waitForDom,
       errors,
       dispose,
+      forceExit,
+      async waitForChildExit() {
+        await waitForChildExit([...ownedChildren], `${label}: child exit`);
+        ownedChildren.clear();
+      },
+      async reloadRenderer(crash = false) {
+        await mainEvaluate(
+          `new Promise(resolve => {
+          const contents = __nlrTest.require("electron").BrowserWindow.getAllWindows()[0].webContents;
+          const reload = () => { contents.once("did-finish-load", () => resolve(true)); contents.reload(); };
+          if (${crash}) { contents.once("render-process-gone", reload); contents.forcefullyCrashRenderer(); }
+          else reload();
+        })`,
+        );
+        await waitForDom('window.api && document.querySelector(".status-band")');
+      },
       output: () => output,
       async secondInstance() {
-        const second = spawn(binary ?? electron, binary ? [] : [root], {
+        const second = spawn(binary ?? executable ?? electron, binary ? [] : [root], {
           cwd: work,
           env,
           stdio: 'ignore',
@@ -252,7 +317,49 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
     };
   } catch (error) {
     console.error(output);
-    await dispose();
+    error.message = `${label}: ${error.message}\n${output}`;
+    try {
+      await dispose();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], `${label}: startup and cleanup failed`, {
+        cause: cleanupError,
+      });
+    }
     throw error;
+  }
+}
+
+/** 実際のspawnは維持し、親がクラッシュしても外側から所有する子を片付けられるようにする。 */
+function observeChildren(require) {
+  const childProcess = require('node:child_process');
+  const spawn = childProcess.spawn;
+  globalThis.__nlrTest.children = [];
+  childProcess.spawn = function (...args) {
+    const child = spawn.apply(this, args);
+    child.once('spawn', () => {
+      globalThis.__nlrTest.children.push(child.pid);
+      process.stderr.write(`NLR_TEST_CHILD_SPAWN ${child.pid}\n`);
+    });
+    child.once('exit', () => process.stderr.write(`NLR_TEST_CHILD_EXIT ${child.pid}\n`));
+    return child;
+  };
+}
+
+async function waitForChildExit(pids, label) {
+  // OSのプロセス終了はイベント購読できないため、上限付きで生存を調べる。
+  const until = Date.now() + 5000;
+  for (;;) {
+    const alive = pids.filter((pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+        return false;
+      }
+    });
+    if (!alive.length) return;
+    if (Date.now() >= until) throw new Error(`${label}: remaining PIDs ${alive.join(', ')}`);
+    await delay(50);
   }
 }

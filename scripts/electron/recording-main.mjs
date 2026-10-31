@@ -11,6 +11,7 @@ export function prepareRecordingMain(require, { origin, observePreviews = false 
     .reply(302, '', { headers: { location: `${origin}/watch` } })
     .persist();
   setGlobalDispatcher(agent);
+  globalThis.__nlrTest.agent = agent;
 
   // パッケージ状態は維持する。自動更新だけは通信を始めさせず、本番キャッシュにも触れない。
   const { autoUpdater } = require('electron-updater');
@@ -43,12 +44,4 @@ export function prepareRecordingMain(require, { origin, observePreviews = false 
       });
     };
   }
-  const childProcess = require('node:child_process');
-  const spawn = childProcess.spawn;
-  globalThis.__nlrTest.children = [];
-  childProcess.spawn = function (...args) {
-    const child = spawn.apply(this, args);
-    child.once('spawn', () => globalThis.__nlrTest.children.push(child.pid));
-    return child;
-  };
 }

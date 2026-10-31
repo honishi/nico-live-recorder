@@ -1,17 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
-import { launchElectron } from './electron/driver.mjs';
+import { verifyPreloadEvents } from './electron/preload-events.mjs';
+import { runElectronScenario } from './electron/scenario.mjs';
 
-const work = await mkdtemp(path.join(os.tmpdir(), 'nlr-electron-test-'));
-let active;
-async function launch() {
-  active = await launchElectron({ work });
-  return active;
-}
-
-try {
+await runElectronScenario('smoke', async ({ work, launch }) => {
   const first = await launch();
   // 実preloadからmainへ到達し、隔離した設定と未ログイン状態を読めることを確認する。
   const settings = await first.evaluate('window.api.getSettings()');
@@ -19,6 +11,8 @@ try {
   assert.deepEqual(settings.targets, []);
   assert.equal((await first.evaluate('window.api.getStatus()')).auth.loggedIn, false);
   assert.equal(await first.evaluate('typeof window.require'), 'undefined');
+
+  await verifyPreloadEvents(first);
 
   // Reactの操作・再描画と、main→preload→rendererの変更通知を確認する。
   for (const label of ['録画対象', '履歴', 'ログ', '設定']) {
@@ -45,7 +39,7 @@ try {
     ),
     [],
   );
-  await active.quit();
+  await first.quit();
 
   // 同じ一時userDataで起動し直し、ディスク保存と復元を実際のアプリで確認する。
   const second = await launch();
@@ -64,11 +58,4 @@ try {
   console.log(
     'Electron smoke OK: startup, preload/IPC, React tabs, settings events, restart persistence',
   );
-} catch (error) {
-  console.error(active?.output());
-  throw error;
-} finally {
-  // 今回作成した一時領域だけを、プロセスの終了後に削除する。
-  await active?.dispose();
-  await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}
+});

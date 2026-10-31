@@ -9,3 +9,6 @@ release/
 *.tsbuildinfo
 .cache/
 resources/ffmpeg/
+
+# 失敗したElectron検証の診断出力
+artifacts/
