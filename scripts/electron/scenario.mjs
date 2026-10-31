@@ -1,10 +1,11 @@
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { verifyScenarioDiagnostics } from './diagnostics.mjs';
 
 /** 途中の失敗でも全資源を片付け、削除前に今回の一時環境の診断情報だけを保存する。 */
 export async function runElectronScenario(name, run) {
-  const work = await mkdtemp(path.join(os.tmpdir(), `nlr-${name}-`));
+  const work = await mkdtemp(path.join(os.tmpdir(), `nlr 日本語 テスト ${name}-`));
   const apps = [];
   const cleanups = [];
   const failures = [];
@@ -29,6 +30,11 @@ export async function runElectronScenario(name, run) {
       } catch (error) {
         failures.push(error);
       }
+    }
+    try {
+      await verifyScenarioDiagnostics(apps, work);
+    } catch (error) {
+      failures.push(error);
     }
     if (failures.length) {
       try {

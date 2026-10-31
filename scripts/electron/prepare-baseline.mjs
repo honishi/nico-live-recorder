@@ -1,29 +1,16 @@
 import { createRequire } from 'node:module';
-import { mkdir, readFile, access } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdir, access } from 'node:fs/promises';
+import {
+  baselineVersion as version,
+  baselineDirectory as directory,
+  baselineBinary as binary,
+} from './baseline.mjs';
 
 // Electron自身のインストーラーと同じ、lockfileで固定した取得・検証・展開実装を使う。
 const require = createRequire(import.meta.url);
 const electronRequire = createRequire(require.resolve('electron/package.json'));
 const { downloadArtifact } = electronRequire('@electron/get');
 const { extract } = electronRequire('@electron-internal/extract-zip');
-const { version } = JSON.parse(await readFile(new URL('./baseline.json', import.meta.url), 'utf8'));
-const root = fileURLToPath(new URL('../../', import.meta.url));
-const directory = path.join(
-  root,
-  '.cache/electron-baseline',
-  version,
-  `${process.platform}-${process.arch}`,
-);
-const binary = path.join(
-  directory,
-  process.platform === 'darwin'
-    ? 'Electron.app/Contents/MacOS/Electron'
-    : process.platform === 'win32'
-      ? 'electron.exe'
-      : 'electron',
-);
 const installed = await access(binary).then(
   () => true,
   () => false,

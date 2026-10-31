@@ -1,19 +1,14 @@
 import assert from 'node:assert/strict';
 import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { baselineVersion as baseline, baselineBinary as oldBinary } from './electron/baseline.mjs';
 import { runElectronScenario } from './electron/scenario.mjs';
 import { prepareRecordingMain } from './electron/recording-main.mjs';
 import { prepareDetectionMain } from './electron/detection-main.mjs';
 import { waitForRecording, waitForStatus } from './electron/recording-status.mjs';
 import { startFakeProgram } from '../test/helpers/fake-program.ts';
 import { startFakeAutoPush, encryptWebPush } from '../test/helpers/fake-autopush.ts';
-import { waitFor } from '../test/helpers/fake-watch-server.ts';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-const { version: baseline } = JSON.parse(
-  await readFile(new URL('./electron/baseline.json', import.meta.url), 'utf8'),
-);
 const {
   devDependencies: { electron: candidate },
 } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
@@ -21,17 +16,6 @@ assert.equal(
   Number(baseline.split('.')[0]),
   Number(candidate.split('.')[0]) - 1,
   'メジャー更新時はbaseline.jsonを更新前のElectronへ進めてください',
-);
-const oldBinary = path.join(
-  root,
-  '.cache/electron-baseline',
-  baseline,
-  `${process.platform}-${process.arch}`,
-  process.platform === 'darwin'
-    ? 'Electron.app/Contents/MacOS/Electron'
-    : process.platform === 'win32'
-      ? 'electron.exe'
-      : 'electron',
 );
 await access(oldBinary);
 
@@ -79,6 +63,12 @@ await runElectronScenario('upgrade', async ({ work, launch, defer }) => {
     "status.push.state === 'connected' && status.push.niconicoRegistered",
   );
   assert.equal(status.auth.loggedIn, true);
+  assert.equal(
+    await current.mainEvaluate(
+      `__nlrTest.require('electron').session.defaultSession.cookies.get({ url: 'https://www.nicovideo.jp', name: 'user_session' }).then(cookies => cookies[0]?.value)`,
+    ),
+    'upgrade-dummy',
+  );
   const history = await current.evaluate('window.api.listHistory({})');
   assert.equal(history.items[0].state, 'done');
   assert.equal(history.items[0].videoPath, before.videoPath);
@@ -90,7 +80,7 @@ await runElectronScenario('upgrade', async ({ work, launch, defer }) => {
   );
   assert.deepEqual(restoredPush.keys, savedPush.keys);
 
-  // 移行した鍵で暗号通知を復号し、重複通知でも実録画が一つだけになることを検査する。
+  // 移行した鍵で暗号通知を復号し、実録画まで到達することを検査する。重複防止はmanager単体テストで検査する。
   const data = encryptWebPush(
     JSON.stringify({ data: { on_click: 'https://live.nicovideo.jp/watch/lv42' } }),
     savedPush.keys,
@@ -100,20 +90,6 @@ await runElectronScenario('upgrade', async ({ work, launch, defer }) => {
     current,
     `recording.source === "push" && recording.state === "recording" && recording.commentCount === ${before.commentCount + 1} && recording.videoBytes > ${before.videoBytes}`,
   );
-  const children = await current.mainEvaluate('__nlrTest.children');
-  const acknowledgements = push.acks.length;
-  const receivedAt = (await current.evaluate('window.api.getStatus()')).push.lastReceivedAt;
-  push.notify(savedPush.channelId, data);
-  await waitFor(() => push.acks.length > acknowledgements);
-  // ACKは復号より先に返る。復号後に更新される状態通知まで待ってから重複を検査する。
-  await waitForStatus(current, `status.push.lastReceivedAt !== ${JSON.stringify(receivedAt)}`);
-  assert.equal(
-    (await current.evaluate('window.api.getStatus()')).recordings.filter(
-      (item) => item.state === 'recording',
-    ).length,
-    1,
-  );
-  assert.deepEqual(await current.mainEvaluate('__nlrTest.children'), children);
   assert.notEqual(recording.videoPath, before.videoPath);
   await current.evaluate('window.api.stopRecording("lv42")');
   await waitForRecording(current, 'recording.state === "done"');

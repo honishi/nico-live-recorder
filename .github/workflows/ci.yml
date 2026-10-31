@@ -35,6 +35,7 @@ jobs:
   # タグを打つ前にも、配布対象上で実体のライセンスと多重化を検証する。
   package:
     needs: ffmpeg-source
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

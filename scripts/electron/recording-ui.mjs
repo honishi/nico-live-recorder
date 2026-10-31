@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { verifyPaint } from './paint.mjs';
 
 export async function verifyRecordingUi(app, releaseSegments) {
   const waitForRequest = (visible) =>
@@ -29,6 +30,7 @@ export async function verifyRecordingUi(app, releaseSegments) {
     return { width: img.naturalWidth, height: img.naturalHeight, rendered: bounds.width > 0 && bounds.height > 0 };
   })()`);
   assert.deepEqual(image, { width: 180, height: 180, rendered: true });
+  await verifyPaint(app);
   await clearRequests();
   await tab('ログ');
   await waitForRequest(false);
@@ -53,11 +55,16 @@ export async function verifyRecordingUi(app, releaseSegments) {
 
   // OSの二重起動を通し、既存ウィンドウの再表示とロックによる新プロセス終了を確認する。
   await clearRequests();
-  const shown = app.mainEvaluate(`new Promise(resolve => {
-    const window = __nlrTest.require('electron').BrowserWindow.getAllWindows()[0];
-    window.once('show', () => resolve(true));
-  })`);
-  await Promise.all([shown, app.secondInstance()]);
+  await app.mainEvaluate(`__nlrTest.shown = new Promise(resolve => {
+    __nlrTest.require('electron').app.once('second-instance', () => resolve(true));
+  }); true`);
+  await Promise.all([app.mainEvaluate('__nlrTest.shown'), app.secondInstance()]);
+  assert.equal(
+    await app.mainEvaluate(
+      '__nlrTest.require("electron").BrowserWindow.getAllWindows()[0].isVisible()',
+    ),
+    true,
+  );
   await waitForRequest(true);
   assert.equal(
     await app.mainEvaluate('__nlrTest.require("electron").BrowserWindow.getAllWindows().length'),

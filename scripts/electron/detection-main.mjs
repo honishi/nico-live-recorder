@@ -1,7 +1,7 @@
 /** 接続先とAPI応答だけを隔離し、WebSocket・鍵生成・復号・検知はElectron内の本体を通す。 */
 export function prepareDetectionMain(_require, { pushOrigin }) {
   const agent = globalThis.__nlrTest.agent;
-  agent.enableNetConnect(new URL(pushOrigin).host);
+  globalThis.__nlrTest.allowNetworkOrigin(pushOrigin.replace(/^ws/, 'http'));
   const NativeWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = class extends NativeWebSocket {
     constructor(url, protocols) {

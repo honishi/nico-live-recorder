@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { verifyPreloadEvents } from './electron/preload-events.mjs';
 import { runElectronScenario } from './electron/scenario.mjs';
+import { verifyPaint } from './electron/paint.mjs';
 
 await runElectronScenario('smoke', async ({ work, launch }) => {
   const first = await launch();
@@ -13,6 +14,7 @@ await runElectronScenario('smoke', async ({ work, launch }) => {
   assert.equal(await first.evaluate('typeof window.require'), 'undefined');
 
   await verifyPreloadEvents(first);
+  await verifyPaint(first);
 
   // Reactの操作・再描画と、main→preload→rendererの変更通知を確認する。
   for (const label of ['録画対象', '履歴', 'ログ', '設定']) {
@@ -58,4 +60,41 @@ await runElectronScenario('smoke', async ({ work, launch }) => {
   console.log(
     'Electron smoke OK: startup, preload/IPC, React tabs, settings events, restart persistence',
   );
+});
+
+// 本物のElectronが警告だけで継続しても、検査器が終了後に失敗扱いにできることを確認する。
+await runElectronScenario('diagnostics-check', async ({ work }) => {
+  const previous = process.env.NLR_TEST_ARTIFACTS;
+  process.env.NLR_TEST_ARTIFACTS = path.join(work, 'expected-diagnostics');
+  let quitCompleted = false;
+  try {
+    await assert.rejects(
+      runElectronScenario('expected-errors', async ({ launch }) => {
+        const app = await launch();
+        await app.mainEvaluate(`(() => {
+        setImmediate(() => {
+          void Promise.reject(new Error('NLR sentinel rejection'));
+          process.emitWarning('NLR sentinel deprecation', 'DeprecationWarning');
+        });
+        __nlrTest.require('electron').app.on('will-quit', () => {
+          process.stderr.write(new Date().toISOString() + ' ERROR NLR sentinel shutdown\\n');
+        });
+        return true;
+      })()`);
+        await app.quit();
+        quitCompleted = true;
+      }),
+      (error) => {
+        assert.match(error.message, /UnhandledPromiseRejectionWarning/);
+        assert.match(error.message, /NLR sentinel deprecation/);
+        assert.match(error.message, /NLR sentinel shutdown/);
+        return true;
+      },
+    );
+    assert.equal(quitCompleted, true);
+  } finally {
+    if (previous === undefined) delete process.env.NLR_TEST_ARTIFACTS;
+    else process.env.NLR_TEST_ARTIFACTS = previous;
+  }
+  console.log('Electron diagnostics OK: unhandled rejection, deprecation, shutdown error');
 });

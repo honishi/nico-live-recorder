@@ -119,7 +119,7 @@ Windows 実機とログインが必要な push・フォロー監視は未確認�
 
 - `npm run test:electron`: 実preloadの引数・購読解除・再購読、画面操作、同一バージョンの設定復元。
 - `npm run test:electron:prepare-baseline`: `scripts/electron/baseline.json` に固定した旧Electronを取得・SHA256検証・展開します。ネットワークを使う準備工程です。
-- `npm run test:electron:upgrade`: 旧ElectronでCookie・設定・録画履歴・push購読を保存し、現在のElectronで同じ一時プロファイルを開きます。保存した鍵で暗号通知を復号し、重複通知でも一つだけ録画すること、以前の動画を保持することまで確認します。
+- `npm run test:electron:upgrade`: 旧ElectronでCookie・設定・録画履歴・push購読を保存し、現在のElectronで同じ一時プロファイルを開きます。保存したCookie値と鍵を確認し、暗号通知を復号して録画できること、以前の動画を保持することまで確認します。重複通知の防止はRecordingManagerの単体テストで確認します。
 - `npm run test:electron:recovery`: 録画中のrenderer再読み込み・クラッシュ、main強制終了と子プロセス終了、履歴の中断扱い、再録画を確認します。
 
 メジャー更新時は、`baseline.json` を更新前のElectronバージョンに進めてください。比較対象が一つ前のメジャーでない場合は移行テストを失敗させます。現在のアプリコードを旧・新の両ランタイムで動かすため、検証するのはElectron/Chromiumの保存形式とランタイム差です。過去リリースのアプリ独自データ形式の移行は別途扱います。

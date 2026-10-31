@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import WebSocket from 'ws';
+import { createOutputDiagnostics } from './diagnostics.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -88,6 +89,7 @@ export async function launchElectron({
 }) {
   const sockets = new Set();
   const errors = [];
+  const diagnostics = createOutputDiagnostics(errors);
   let output = '';
   let pendingOutput = '';
   const ownedChildren = new Set();
@@ -118,6 +120,8 @@ export async function launchElectron({
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const exited = once(child, 'exit');
+  const closed = once(child, 'close');
+  void closed.catch(() => {});
   // 起動失敗時にも exit の監視を未処理のrejectionにしない。
   void exited.catch(() => {});
   const changed = new EventEmitter();
@@ -133,8 +137,13 @@ export async function launchElectron({
     }
     changed.emit('output');
   };
-  child.stdout.on('data', append);
-  child.stderr.on('data', append);
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.on('data', (data) => {
+      append(data);
+      diagnostics.append(stream, data);
+    });
+  }
+  child.once('close', () => diagnostics.finish());
   const debuggerUrl = async (pattern) => {
     let cleanup;
     try {
@@ -187,6 +196,7 @@ export async function launchElectron({
     }
     try {
       await waitForChildExit([...ownedChildren], `${label}: child cleanup`);
+      await deadline(closed, `${label}: output drain`, 5000);
     } catch (error) {
       failures.push(error);
     }
@@ -311,8 +321,10 @@ export async function launchElectron({
         const second = spawn(binary ?? executable ?? electron, binary ? [] : [root], {
           cwd: work,
           env,
-          stdio: 'ignore',
+          stdio: ['ignore', 'pipe', 'pipe'],
         });
+        second.stdout.on('data', append);
+        second.stderr.on('data', append);
         try {
           const [code, signal] = await deadline(once(second, 'exit'), 'second instance exit');
           assert.equal(code, 0, `Second instance exited: ${code}/${signal}`);
@@ -329,7 +341,7 @@ export async function launchElectron({
         await mainEvaluate('setImmediate(() => __nlrTest.require("electron").app.quit()); true');
         for (const socket of sockets) socket.terminate();
         sockets.clear();
-        const [code, signal] = await deadline(exited, 'normal app quit', 25_000);
+        const [code, signal] = await deadline(closed, 'normal app quit', 25_000);
         assert.equal(code, 0, `Electron quit: ${code}/${signal}\n${output}`);
       },
     };

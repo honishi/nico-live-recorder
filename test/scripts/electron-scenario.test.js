@@ -61,3 +61,18 @@ test('成功時にもcleanupを実行し、一時ディレクトリを削除す�
     code: 'ENOENT',
   });
 });
+
+test('cleanupで書かれた終了時エラーとトレイ欠落を最終検査で拒否する', async () => {
+  await expect(
+    runElectronScenario('late-error', async ({ work, defer }) => {
+      expect(work).toContain('日本語 テスト');
+      await mkdir(path.join(work, 'userdata/logs'), { recursive: true });
+      defer(() =>
+        writeFile(
+          path.join(work, 'userdata/logs/app.log'),
+          '2026-01-01 ERROR shutdown failed\n2026-01-01 WARN tray icon not found: missing.png\n',
+        ),
+      );
+    }),
+  ).rejects.toThrow('shutdown failed');
+});

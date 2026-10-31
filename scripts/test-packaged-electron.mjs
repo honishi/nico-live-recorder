@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { startFakeProgram } from '../test/helpers/fake-program.ts';
+import { waitFor } from '../test/helpers/fake-watch-server.ts';
 import { CSV_HEADER } from '../src/main/core/recorder/comment-csv.ts';
 import { runElectronScenario } from './electron/scenario.mjs';
 import { prepareRecordingMain } from './electron/recording-main.mjs';
@@ -90,6 +91,18 @@ for (const scenario of [
       await app.evaluate('window.api.updateSettings({ pollIntervalSec: 45 })');
       await app.evaluate('window.api.startRecording("lv42")');
       if (scenario.checkUi) await verifyRecordingUi(app, program.releaseSegments);
+      // 各トラックが最初のセグメントをpipeへ書き終え、次のplaylist取得へ進むまで待つ。
+      // コメント到着やサーバーのresponse.endだけでは受信完了を保証できない。
+      if (scenario.mode === 'live') {
+        await waitFor(
+          () =>
+            ['video', 'audio'].every(
+              (track) =>
+                program.requests.filter((request) => request.path === `/${track}.m3u8`).length >= 2,
+            ),
+          12000,
+        );
+      }
       let recording;
       if (scenario.quitDuringRecording) {
         // 映像が完了していても、コメント取得中なら未完了ジョブとして終了を待つ。
@@ -109,6 +122,9 @@ for (const scenario of [
         recording = await waitForRecording(app, '["done", "failed"].includes(recording.state)');
         assert.equal(recording.state, 'done');
       }
+      const dispatches = await app.mainEvaluate('__nlrTest.networkDispatches');
+      assert.ok(dispatches.native > 0, 'HLS must use the native dispatcher');
+      assert.ok(dispatches.npm > 0, 'program/comments must use the npm dispatcher');
       assert.deepEqual(app.errors, []);
       assert.deepEqual(
         await app.evaluate(

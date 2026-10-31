@@ -53,6 +53,9 @@ for (const corrupt of [false, true]) {
             }),
           );
         } else if (pathname === `/${filename}`) {
+          response.writeHead(302, { location: `/downloads/${filename}` });
+          response.end();
+        } else if (pathname === `/downloads/${filename}`) {
           held.push(response);
           downloadStarted();
         } else {
@@ -127,6 +130,7 @@ for (const corrupt of [false, true]) {
       }
       assert.deepEqual(app.errors, []);
       assert.equal(requests.filter((url) => url === `/${filename}`).length, 1);
+      assert.equal(requests.filter((url) => url === `/downloads/${filename}`).length, 1);
       await app.quit();
       await assert.rejects(access(installMarker), { code: 'ENOENT' });
       console.log(
