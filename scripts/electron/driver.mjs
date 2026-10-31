@@ -224,6 +224,23 @@ export async function launchElectron({ work, binary, prepareMain, config = {} })
       errors,
       dispose,
       output: () => output,
+      async secondInstance() {
+        const second = spawn(binary ?? electron, binary ? [] : [root], {
+          cwd: work,
+          env,
+          stdio: 'ignore',
+        });
+        try {
+          const [code, signal] = await deadline(once(second, 'exit'), 'second instance exit');
+          assert.equal(code, 0, `Second instance exited: ${code}/${signal}`);
+        } finally {
+          if (second.pid && second.exitCode === null && second.signalCode === null) {
+            const stopped = once(second, 'exit');
+            second.kill('SIGKILL');
+            await deadline(stopped, 'second instance cleanup');
+          }
+        }
+      },
       async quit() {
         // 応答を返してから通常の終了イベントへ進む。OSのkillで代用しない。
         await mainEvaluate('setImmediate(() => __nlrTest.require("electron").app.quit()); true');

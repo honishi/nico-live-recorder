@@ -16,10 +16,17 @@ export interface FakeProgramOptions {
   refreshKey?: boolean;
   /** backward 保存後のコメント取得を止め、終了処理の検証で使う。 */
   holdForward?: boolean;
+  /** プレビュー購読を待ってからセグメントを渡す。 */
+  holdSegments?: boolean;
 }
 
 /** 番組HTMLから暗号化HLS・NDGRまで、外部通信なしで本体の取得経路を通す。 */
 export async function startFakeProgram(options: FakeProgramOptions = {}) {
+  let releaseSegments!: () => void;
+  const segmentsReady = new Promise<void>((resolve) => {
+    releaseSegments = resolve;
+  });
+  if (!options.holdSegments) releaseSegments();
   const registry = await getProtoRegistry();
   const key = Buffer.alloc(16, 7);
   const iv = Buffer.alloc(16);
@@ -114,7 +121,9 @@ export async function startFakeProgram(options: FakeProgramOptions = {}) {
       return send(key);
     }
     const body = media.get(url.pathname);
-    send(body ?? 'missing', body ? 200 : 404);
+    if (url.pathname.startsWith('/segment-')) {
+      void segmentsReady.then(() => send(body ?? 'missing', body ? 200 : 404));
+    } else send(body ?? 'missing', body ? 200 : 404);
   });
   const originalDispatcher = getGlobalDispatcher();
   const agent = new MockAgent();
@@ -140,9 +149,11 @@ export async function startFakeProgram(options: FakeProgramOptions = {}) {
     return {
       url: http.url,
       dispatcher: agent,
+      releaseSegments,
       requests,
       watch,
       close: async () => {
+        releaseSegments();
         setGlobalDispatcher(originalDispatcher);
         await watch.close();
         await http.close();

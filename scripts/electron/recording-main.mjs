@@ -1,5 +1,5 @@
 /** debuggerから実mainへ注入する。関数外の値には依存せず、配布アプリ内の依存を使う。 */
-export function prepareRecordingMain(require, { origin }) {
+export function prepareRecordingMain(require, { origin, observePreviews = false }) {
   const { app, session } = require('electron');
   const { MockAgent, setGlobalDispatcher } = require('undici');
   const agent = new MockAgent();
@@ -27,6 +27,22 @@ export function prepareRecordingMain(require, { origin }) {
   });
 
   // 実際の子プロセスは差し替えず、終了後に残っていないことを親のテストから調べる。
+  // 応答を差し替えず、rendererの購読・解除が実IPCへ届いた順序を記録する。
+  if (observePreviews) {
+    const { ipcMain } = require('electron');
+    const handle = ipcMain.handle;
+    globalThis.__nlrTest.previewRequests = [];
+    globalThis.__nlrTest.events = new (require('node:events').EventEmitter)();
+    ipcMain.handle = function (channel, listener) {
+      if (channel !== 'recording:preview') return handle.call(this, channel, listener);
+      return handle.call(this, channel, (event, ...args) => {
+        const result = listener(event, ...args);
+        globalThis.__nlrTest.previewRequests.push({ visible: args[1], image: !!result });
+        globalThis.__nlrTest.events.emit('preview');
+        return result;
+      });
+    };
+  }
   const childProcess = require('node:child_process');
   const spawn = childProcess.spawn;
   globalThis.__nlrTest.children = [];

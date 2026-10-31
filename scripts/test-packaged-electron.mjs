@@ -9,6 +9,7 @@ import { startFakeProgram } from '../test/helpers/fake-program.ts';
 import { CSV_HEADER } from '../src/main/core/recorder/comment-csv.ts';
 import { launchElectron } from './electron/driver.mjs';
 import { prepareRecordingMain } from './electron/recording-main.mjs';
+import { verifyRecordingUi } from './electron/recording-ui.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const binary = process.argv[2];
@@ -65,7 +66,7 @@ async function verifyFiles(recording, resources, separateAudio) {
 }
 
 for (const scenario of [
-  { mode: 'live', separateAudio: true, openEnded: true },
+  { mode: 'live', separateAudio: true, openEnded: true, holdSegments: true, checkUi: true },
   { mode: 'timeshift', separateAudio: false },
   { mode: 'live', separateAudio: true, openEnded: true, quitDuringRecording: true },
   { mode: 'timeshift', separateAudio: false, holdForward: true, quitDuringRecording: true },
@@ -79,7 +80,7 @@ for (const scenario of [
         work,
         binary,
         prepareMain: prepareRecordingMain,
-        config: { origin: program.url },
+        config: { origin: program.url, observePreviews: scenario.checkUi },
       });
     app = await launch();
     const runtime = await app.mainEvaluate(
@@ -92,8 +93,14 @@ for (const scenario of [
       path.join(work, 'recordings'),
     );
     assert.equal(await app.evaluate('typeof window.require'), 'undefined');
+    if (scenario.checkUi) {
+      await app.mainEvaluate(`__nlrTest.require('electron').session.defaultSession.cookies.set({
+        url: 'https://www.nicovideo.jp', name: 'user_session', value: 'offline-ui-test', secure: true
+      })`);
+    }
     await app.evaluate('window.api.updateSettings({ pollIntervalSec: 45 })');
     await app.evaluate('window.api.startRecording("lv42")');
+    if (scenario.checkUi) await verifyRecordingUi(app, program.releaseSegments);
     let recording;
     if (scenario.quitDuringRecording) {
       // 映像が完了していても、コメント取得中なら未完了ジョブとして終了を待つ。
@@ -163,6 +170,7 @@ for (const scenario of [
     );
   } catch (error) {
     console.error(app?.output());
+
     throw error;
   } finally {
     await app?.dispose();
