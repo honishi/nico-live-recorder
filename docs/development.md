@@ -109,7 +109,7 @@ Windows 実機とログインが必要な push・フォロー監視は未確認�
 今後の Electron 更新でも、次の確認を行ってください。
 
 1. Electron 実体の `process.versions.node`・`process.versions.undici` と修正履歴を確認します。開発・CI 用 Node.js の更新だけでは配布アプリの修正状況を判断できません。
-2. Electron 内蔵の通信 API で、`test/core/network-runtime.test.ts` の不正な圧縮指定・途中切断から回復し、後続の通信と正常な Brotli 展開が成功することを確認します。WebSocket の接続・送受信・切断と、隔離した設定・保存先で録画と停止も検証します。通常の Vitest の成功だけで Electron 内蔵版の検証を代用しないでください。
+2. Electron 内蔵の通信 API で、`test/core/network-runtime.test.js` の不正な圧縮指定・途中切断から回復し、後続の通信と正常な Brotli 展開が成功することを確認します。WebSocket の接続・送受信・切断と、隔離した設定・保存先で録画と停止も検証します。通常の Vitest の成功だけで Electron 内蔵版の検証を代用しないでください。
 3. ログインが必要な push 通知・フォロー監視は人間に確認を依頼します。
 4. 外部 `undici` は HTTP クライアントから直接使うため削除せず、開発・CI 用の `.node-version` とともに修正済みバージョンを維持します。
 

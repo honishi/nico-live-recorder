@@ -52,6 +52,7 @@ jobs:
       - uses: ./.github/actions/build-ffmpeg
       - run: npm run test:recording
       - run: npm run build
+      - run: npm run test:electron:runtime
       - run: npm run test:electron
       # Release と同じ形式を作り、圧縮・インストーラへの格納後も実体を検証する。
       - run: npx electron-builder ${{ matrix.args }} --publish never

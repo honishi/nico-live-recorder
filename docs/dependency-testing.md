@@ -43,6 +43,15 @@ ffprobeで出力TSを読み直し、H.264とAACを持つこと、各トラック
 PRのCIではmacOS arm64・Windows x64のpackageジョブに含めています。
 Releaseでも実行し、既存の配布物展開後のFFmpeg・更新メタデータ検証と併用します。
 
+## Electron内蔵通信ランタイム
+
+`npm run test:electron:runtime` は独立した Electron main を一時 userData で起動します。
+内蔵fetchで不正圧縮指定・本文途中切断・応答待ちの中断を個別に発生させ、各失敗後に
+正常なBrotli応答を読めることを確認します。内蔵WebSocketと`ws`では送受信・制御フレームの
+PING/PONG・異常切断後の新規接続を確認します。通常のNodeテストと同じローカルサーバーを
+使い、未処理例外・プロセス異常終了・ハングも失敗にします。実行時の`process.versions`を出力します。
+PRとReleaseのmacOS・Windowsジョブで実行します。脆弱性全般の検証や実サービスの監視ではありません。
+
 ## Electron実体のスモークテスト
 
 通常のVitestと実FFmpegのテストはNode上で実行します。Electron実体は次のコマンドで別途確認します。

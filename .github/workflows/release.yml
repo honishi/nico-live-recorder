@@ -34,6 +34,7 @@ jobs:
       - run: npm test
       - run: npm run test:recording
       - run: npm run build
+      - run: npm run test:electron:runtime
       - run: npm run test:electron
       # 本家の macOS 配布だけに認証情報を渡す。不足時は未署名のまま配布しない。
       - name: Sign and notarize macOS
