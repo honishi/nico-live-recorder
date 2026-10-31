@@ -6,7 +6,7 @@ export function createOutputDiagnostics(errors) {
   const pending = new Map();
   const inspect = (line) => {
     if (
-      /UnhandledPromiseRejection|Unhandled promise rejection|DeprecationWarning|\bERROR\s|tray icon not found:/.test(
+      /UnhandledPromiseRejection|Unhandled promise rejection|DeprecationWarning|\(electron\).*\bdeprecated\b|\bERROR\s|tray icon not found:/.test(
         line,
       )
     )

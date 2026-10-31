@@ -11,11 +11,16 @@ test('分割されたstderr警告と終了直前の改行なしエラーを保�
   diagnostics.append('stdout', 'normal output\n');
   diagnostics.append('stderr', 'RejectionWarning: rejected\n');
   diagnostics.append('stderr', '(node:1) [DEP0001] DeprecationWarning: old API\n');
+  diagnostics.append(
+    'stderr',
+    "(electron) 'webContents.canGoBack' is deprecated and will be removed.\n",
+  );
   diagnostics.append('stdout', '2026-01-01T00:00:00Z ERROR shutdown failed');
   diagnostics.finish();
   expect(errors).toEqual([
     '(node:1) UnhandledPromiseRejectionWarning: rejected',
     '(node:1) [DEP0001] DeprecationWarning: old API',
+    "(electron) 'webContents.canGoBack' is deprecated and will be removed.",
     '2026-01-01T00:00:00Z ERROR shutdown failed',
   ]);
 });

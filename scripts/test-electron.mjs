@@ -71,7 +71,16 @@ await runElectronScenario('diagnostics-check', async ({ work }) => {
     await assert.rejects(
       runElectronScenario('expected-errors', async ({ launch }) => {
         const app = await launch();
+        // Electron固有の警告はNodeのemitWarningとは別形式。削除時は別の非推奨APIへ差し替える。
+        assert.equal(
+          await app.mainEvaluate(
+            'typeof __nlrTest.require("electron").BrowserWindow.getAllWindows()[0].webContents.canGoBack',
+          ),
+          'function',
+          'Replace the deprecated Electron API probe: webContents.canGoBack was removed',
+        );
         await app.mainEvaluate(`(() => {
+        __nlrTest.require('electron').BrowserWindow.getAllWindows()[0].webContents.canGoBack();
         setImmediate(() => {
           void Promise.reject(new Error('NLR sentinel rejection'));
           process.emitWarning('NLR sentinel deprecation', 'DeprecationWarning');
@@ -94,6 +103,7 @@ await runElectronScenario('diagnostics-check', async ({ work }) => {
       (error) => {
         assert.match(error.message, /UnhandledPromiseRejectionWarning/);
         assert.match(error.message, /NLR sentinel deprecation/);
+        assert.match(error.message, /\(electron\).*webContents.canGoBack.*deprecated/);
         assert.match(error.message, /NLR sentinel shutdown/);
         assert.match(error.message, /Electron render-process-gone.*(?:crashed|killed)/);
         return true;

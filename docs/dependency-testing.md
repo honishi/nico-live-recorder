@@ -94,6 +94,9 @@ Electronのスモークテストは、空の一時userData・保存先と自動�
 トレイ画像欠落を失敗として扱います。driver経由の起動ではrenderer・GPU・utility等の異常終了も監視し、
 復旧検査で指定したrendererの意図的なクラッシュ1回だけを除外します。警告・実rendererクラッシュ・
 終了時エラーを発生させる負の検査で、この検出器自身も確認します。専用mainの認証・通信検査も共通の一時環境と診断保存を使います。
+廃止警告はNodeの`DeprecationWarning`とElectronの`(electron) ... deprecated`形式を検査し、
+実際の`webContents.canGoBack()`呼び出しでも後者の検出を確認します。Electron更新でこのAPIが削除されたら、
+負の検査を削除・スキップせず、別の非推奨APIへ差し替えてください。
 PRとReleaseのmacOS・Windowsジョブにも含めています。
 
 ## Electron Cookieの契約
