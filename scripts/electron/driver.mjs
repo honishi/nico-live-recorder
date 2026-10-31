@@ -38,7 +38,8 @@ async function connect(url, sockets) {
     }
     const request = pending.get(message.id);
     pending.delete(message.id);
-    if (message.error) request?.reject(new Error(JSON.stringify(message.error)));
+    if (message.error)
+      request?.reject(new Error(`${request.label}: ${JSON.stringify(message.error)}`));
     else request?.resolve(message.result);
   });
   const rejectPending = (error) => {
@@ -55,7 +56,11 @@ async function connect(url, sockets) {
       try {
         return await deadline(
           new Promise((resolve, reject) => {
-            pending.set(id, { resolve, reject });
+            pending.set(id, {
+              resolve,
+              reject,
+              label: `${method}: ${params.expression?.slice(0, 240) ?? ''}`,
+            });
             socket.send(JSON.stringify({ id, method, params }));
           }),
           `${method}: ${params.expression?.slice(0, 240) ?? ''}`,
@@ -248,6 +253,19 @@ export async function launchElectron({
     renderer.events.on('Runtime.consoleAPICalled', (event) => {
       if (event.type === 'error') errors.push(event.args);
     });
+    // TargetのURLはナビゲーション開始時点で変わる。古いabout:blankのcontextへ
+    // DOM待機を注入しないよう、main側のload完了を待ってからrendererを操作する。
+    await mainEvaluate(`new Promise((resolve, reject) => {
+      const contents = __nlrTest.require('electron').BrowserWindow.getAllWindows()[0].webContents;
+      if (!contents.isLoadingMainFrame()) { resolve(true); return; }
+      const cleanup = () => { contents.off('did-finish-load', done); contents.off('did-fail-load', failed); };
+      const done = () => { cleanup(); resolve(true); };
+      const failed = (_event, code, description, _url, mainFrame) => {
+        if (mainFrame) { cleanup(); reject(new Error('renderer initial load: ' + code + ' ' + description)); }
+      };
+      contents.once('did-finish-load', done);
+      contents.on('did-fail-load', failed);
+    })`);
     await renderer.send('Runtime.enable');
     const evaluate = async (expression) =>
       value(
