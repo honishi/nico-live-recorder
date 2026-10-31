@@ -1,0 +1,40 @@
+name: Prepare FFmpeg source
+
+on:
+  workflow_call:
+
+jobs:
+  download:
+    # Windowsランナーからffmpeg.orgへの接続がタイムアウトするため、取得を分離する。
+    runs-on: macos-15
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - uses: actions/cache/restore@v6
+        id: source-cache
+        with:
+          path: .cache/ffmpeg/*.tar.xz
+          key: ffmpeg-source-${{ hashFiles('scripts/ffmpeg/source.json') }}
+      # キャッシュの有無にかかわらず固定SHA-256で再検証する。
+      # Node組み込みモジュールだけで動く。依存パッケージやコンパイラーは不要。
+      - run: node scripts/ffmpeg/build.mjs --download-only
+      - uses: actions/cache/save@v6
+        if: steps.source-cache.outputs.cache-hit != 'true'
+        with:
+          path: .cache/ffmpeg/*.tar.xz
+          key: ${{ steps.source-cache.outputs.cache-primary-key }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-source
+          path: .cache/ffmpeg/*.tar.xz
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+          overwrite: true

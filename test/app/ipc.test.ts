@@ -12,7 +12,7 @@ import {
   type TargetRemovalResult,
   type TargetUser,
 } from '../../src/shared/types';
-import { registerIpcHandlers, type IpcContext } from '../../src/main/app/ipc';
+import { registerTestIpc, ipcHandler } from '../helpers/ipc-context';
 import { SettingsStore } from '../../src/main/app/settings-store';
 
 // ネイティブダイアログと IPC を差し替え、承認前にログアウトへ進まないことを確認する
@@ -36,8 +36,8 @@ describe('プレビューの要求元と表示状態', () => {
     const getRecordingPreview = vi.fn();
     let visible = true;
     let minimized = false;
-    let tab = 'recordings';
-    const ctx = {
+    let tab: AppSettings['ui']['tab'] = 'recordings';
+    registerTestIpc({
       auth: new EventEmitter(),
       manager: { getRecordingPreview },
       settings: { get: () => ({ ui: { tab } }) },
@@ -46,16 +46,10 @@ describe('プレビューの要求元と表示状態', () => {
         isVisible: () => visible,
         isMinimized: () => minimized,
       }),
-    } as unknown as IpcContext;
-    registerIpcHandlers(ctx);
-    const handler = handle.mock.calls.find(
-      ([channel]) => channel === IPC.getRecordingPreview,
-    )![1] as unknown as (
-      event: { senderFrame: object },
-      id: unknown,
-      visible: unknown,
-      after?: unknown,
-    ) => void;
+    });
+    const handler = ipcHandler<
+      (event: { senderFrame: object }, id: unknown, visible: unknown, after?: unknown) => void
+    >(handle.mock.calls, IPC.getRecordingPreview);
     handler({ senderFrame: {} }, 'lv1', true);
     handler({ senderFrame: frame }, '/etc/passwd', true);
     expect(getRecordingPreview).not.toHaveBeenCalled();
@@ -88,13 +82,12 @@ describe('ログアウトの確認', () => {
     showMessageBox.mockReset();
     performLogout = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     window = {} as BrowserWindow;
-    const ctx = {
+    registerTestIpc({
       auth: new EventEmitter(),
       manager: { logout: performLogout, getActiveRecordingCount: () => 2 },
       getMainWindow: () => window,
-    } as unknown as IpcContext;
-    registerIpcHandlers(ctx);
-    logout = handle.mock.calls.find(([channel]) => channel === IPC.logout)![1];
+    });
+    logout = ipcHandler<typeof logout>(handle.mock.calls, IPC.logout);
   });
 
   test('停止件数を表示し、キャンセルでは録画停止や購読解除を実行しない', async () => {
@@ -168,10 +161,11 @@ describe('フォロー確認とログイン切替', () => {
     });
     const fetch = vi.fn();
     vi.stubGlobal('fetch', fetch);
-    registerIpcHandlers({ auth } as unknown as IpcContext);
-    const checkFollow = handle.mock.calls.find(
-      ([channel]) => channel === IPC.checkFollow,
-    )![1] as unknown as (event: unknown, userId: string) => Promise<FollowStatus>;
+    registerTestIpc({ auth });
+    const checkFollow = ipcHandler<(event: unknown, userId: string) => Promise<FollowStatus>>(
+      handle.mock.calls,
+      IPC.checkFollow,
+    );
     const pending = checkFollow({}, '1');
     auth.revision += 1;
     auth.emit('change', true);
@@ -188,17 +182,19 @@ describe('フォロー確認とログイン切替', () => {
     });
     const fetch = vi.fn(async () => new Response('', { status: 503 }));
     vi.stubGlobal('fetch', fetch);
-    registerIpcHandlers({
+    registerTestIpc({
       auth,
       logger: silentLogger,
       settings: { get: () => ({ targets: [{ userId: '2', name: 'target', enabled: true }] }) },
-    } as unknown as IpcContext);
-    const checkFollow = handle.mock.calls.find(
-      ([channel]) => channel === IPC.checkFollow,
-    )![1] as unknown as (event: unknown, userId: string) => Promise<FollowStatus>;
-    const addTarget = handle.mock.calls.find(
-      ([channel]) => channel === IPC.addTarget,
-    )![1] as unknown as (event: unknown, input: string) => Promise<TargetAddResult>;
+    });
+    const checkFollow = ipcHandler<(event: unknown, userId: string) => Promise<FollowStatus>>(
+      handle.mock.calls,
+      IPC.checkFollow,
+    );
+    const addTarget = ipcHandler<(event: unknown, input: string) => Promise<TargetAddResult>>(
+      handle.mock.calls,
+      IPC.addTarget,
+    );
     expect(await checkFollow({}, '1')).toMatchObject({ state: 'paused' });
     expect((await addTarget({}, '2')).follow).toMatchObject({ state: 'paused' });
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -230,23 +226,15 @@ describe('録画対象の一括操作と並び替え', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nlr-bulk-ipc-'));
     settings = new SettingsStore(path.join(dir, 'settings.json'), path.join(dir, 'out'));
     settings.update({ targets: original });
-    registerIpcHandlers({
+    registerTestIpc({
       settings,
       auth: new EventEmitter(),
       getMainWindow: () => undefined,
-    } as unknown as IpcContext);
-    remove = handle.mock.calls.find(
-      ([channel]) => channel === IPC.removeTargets,
-    )![1] as unknown as typeof remove;
-    restore = handle.mock.calls.find(
-      ([channel]) => channel === IPC.restoreTargets,
-    )![1] as unknown as typeof restore;
-    move = handle.mock.calls.find(
-      ([channel]) => channel === IPC.moveTarget,
-    )![1] as unknown as typeof move;
-    setEnabled = handle.mock.calls.find(
-      ([channel]) => channel === IPC.setTargetsEnabled,
-    )![1] as unknown as typeof setEnabled;
+    });
+    remove = ipcHandler<typeof remove>(handle.mock.calls, IPC.removeTargets);
+    restore = ipcHandler<typeof restore>(handle.mock.calls, IPC.restoreTargets);
+    move = ipcHandler<typeof move>(handle.mock.calls, IPC.moveTarget);
+    setEnabled = ipcHandler<typeof setEnabled>(handle.mock.calls, IPC.setTargetsEnabled);
   });
 
   afterEach(() => {
@@ -414,16 +402,16 @@ describe('録画対象の一括操作と並び替え', () => {
 test('更新の適用はメイン画面だけから受け付ける', () => {
   handle.mockClear();
   const frame = {};
-  const install = vi.fn(() => 'busy');
-  const ctx = {
+  const install = vi.fn(() => 'busy' as const);
+  registerTestIpc({
     auth: new EventEmitter(),
     updates: { install },
     getMainWindow: () => ({ webContents: { mainFrame: frame } }),
-  } as unknown as IpcContext;
-  registerIpcHandlers(ctx);
-  const handler = handle.mock.calls.find(
-    ([channel]) => channel === IPC.installUpdate,
-  )![1] as unknown as (event: { senderFrame?: object }) => string;
+  });
+  const handler = ipcHandler<(event: { senderFrame?: object }) => string>(
+    handle.mock.calls,
+    IPC.installUpdate,
+  );
   expect(handler({ senderFrame: {} })).toBe('not-ready');
   expect(handler({})).toBe('not-ready');
   expect(install).not.toHaveBeenCalled();

@@ -6,6 +6,9 @@ on:
   pull_request:
 
 jobs:
+  ffmpeg-source:
+    uses: ./.github/workflows/ffmpeg-source.yml
+
   check:
     strategy:
       fail-fast: false
@@ -31,6 +34,7 @@ jobs:
 
   # タグを打つ前にも、配布対象上で実体のライセンスと多重化を検証する。
   package:
+    needs: ffmpeg-source
     strategy:
       fail-fast: false
       matrix:
@@ -49,10 +53,27 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-source
+          path: .cache/ffmpeg
       - uses: ./.github/actions/build-ffmpeg
       - run: npm run test:recording
       - run: npm run build
+      - run: npm run test:electron:auth
+      - run: npm run test:electron:runtime
       - run: npm run test:electron
+      - run: npm run test:electron:prepare-baseline
+      - run: npm run test:electron:upgrade
+      - run: npm run test:electron:recovery
       # Release と同じ形式を作り、圧縮・インストーラへの格納後も実体を検証する。
       - run: npx electron-builder ${{ matrix.args }} --publish never
       - run: npm run ffmpeg:verify-artifacts
+      - name: Upload Electron failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: electron-diagnostics-${{ runner.os }}
+          path: artifacts/electron
+          retention-days: 7
+          if-no-files-found: ignore

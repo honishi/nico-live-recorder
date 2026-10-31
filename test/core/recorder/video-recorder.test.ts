@@ -308,15 +308,28 @@ describe('recordVideo', () => {
       { programId: 'lv1', outputPath, ffmpegPath, programInfo: programInfo(watch.url) },
       controller.signal,
     );
-    // 最初のセグメントが流れてから止める
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    controller.abort();
-    const result = await promise;
+    try {
+      // 子が両トラックを書き込んだことを確認してから止める。
+      await waitFor(
+        () =>
+          fs.existsSync(outputPath) &&
+          fs.existsSync(`${outputPath}.audio`) &&
+          fs.statSync(outputPath).size ===
+            INIT_V.length + SEG('video-1').length + SEG('video-2').length &&
+          fs.statSync(`${outputPath}.audio`).size ===
+            INIT_A.length + SEG('audio-1').length + SEG('audio-2').length,
+      );
+      controller.abort();
+      const result = await promise;
 
-    expect(result.reason).toBe('aborted');
-    expect(result.ffmpegExitCode).toBe(0);
-    expect(result.video.segments).toBe(2);
-    expect(fs.existsSync(outputPath)).toBe(true);
+      expect(result.reason).toBe('aborted');
+      expect(result.ffmpegExitCode).toBe(0);
+      expect(result.video.segments).toBe(2);
+      expect(fs.existsSync(outputPath)).toBe(true);
+    } finally {
+      controller.abort();
+      await promise;
+    }
   });
 
   test('視聴 WebSocket の再接続は 1 つだけ動かし、上限に達したら増やさない', async () => {
@@ -354,20 +367,22 @@ describe('recordVideo', () => {
     try {
       // 録画が始まってからサーバー側で切る
       await waitFor(() => watch.connections[0]?.received.length > 0);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await waitFor(() => hls.requests.includes('/seg/video-2'));
       watch.connections[0].socket.terminate();
 
       // 5 回試して諦める。切られた再接続が別のループを起こしていれば接続数が 6 を超える
       await waitFor(() =>
         warn.mock.calls.some((args) => String(args[0]).includes('reconnect 5/5 failed')),
       );
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // 再接続ループが完了してトラックを停止するまで待ち、終了時点の接続数を検査する。
+      const result = await promise;
+      expect(result.reason).toBe('disconnected');
       expect(watch.connections).toHaveLength(6);
     } finally {
       controller.abort();
       await promise;
     }
-  });
+  }, 15_000);
 
   test('番組が終了済みなら開始しない', async () => {
     await expect(

@@ -73,8 +73,9 @@ const api = {
     return () => ipcRenderer.off(IPC.logsChanged, handler);
   },
   onSettingsChanged: (listener: () => void): (() => void) => {
-    ipcRenderer.on(IPC.settingsChanged, listener);
-    return () => ipcRenderer.off(IPC.settingsChanged, listener);
+    const handler = (): void => listener();
+    ipcRenderer.on(IPC.settingsChanged, handler);
+    return () => ipcRenderer.off(IPC.settingsChanged, handler);
   },
   onStatusChanged: (listener: (status: AppStatus) => void): (() => void) => {
     const handler = (_event: unknown, status: AppStatus): void => listener(status);

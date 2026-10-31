@@ -24,7 +24,14 @@
     "icons:build": "node scripts/icons/build.mjs",
     "ffmpeg:build": "node scripts/ffmpeg/build.mjs",
     "ffmpeg:verify": "node --import tsx scripts/ffmpeg/verify.mjs",
-    "ffmpeg:verify-artifacts": "node scripts/ffmpeg/verify-artifacts.mjs"
+    "ffmpeg:verify-artifacts": "node scripts/ffmpeg/verify-artifacts.mjs",
+    "test:electron:runtime": "node scripts/test-electron-runtime.mjs",
+    "test:electron:packaged": "node --import tsx scripts/test-packaged-electron.mjs",
+    "test:electron:auth": "node scripts/test-electron-auth.mjs",
+    "test:electron:updater": "node scripts/test-electron-updater.mjs",
+    "test:electron:prepare-baseline": "node scripts/electron/prepare-baseline.mjs",
+    "test:electron:upgrade": "node --import tsx scripts/test-electron-upgrade.mjs",
+    "test:electron:recovery": "node --import tsx scripts/test-electron-recovery.mjs"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
