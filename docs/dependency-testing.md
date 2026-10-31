@@ -72,6 +72,15 @@ Electronのスモークテストは、空の一時userData・保存先と自動�
 実FFmpegを配置してから実行してください。mainのエラーログも失敗として扱います。
 PRとReleaseのmacOS・Windowsジョブにも含めています。
 
+## Electron Cookieの契約
+
+`npm run test:electron:auth` は本体のNicoAuthを実Electronで動かします。
+隔離したsessionにダミーCookieを入れ、同名の親ドメインCookieの優先、値中の`=`、
+ログイン窓の二重起動防止・キャンセル・成功通知、再起動後の永続化、ログアウト時の削除を確認します。
+ログインページのHTTPSはローカルの固定HTMLで応答し、実アカウントへは接続しません。
+実サービスのログインや認証方式の変更への対応は、人間による確認が必要です。
+PRとReleaseのmacOS・Windowsジョブで実行します。
+
 ## 配布アプリの録画テスト
 
 `ffmpeg:verify-artifacts` はDMG/ZIP/NSISから展開したアプリも起動します。
