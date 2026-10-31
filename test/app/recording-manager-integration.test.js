@@ -64,6 +64,20 @@ async function recordingMatches(predicate, timeout = 5000) {
   return structuredClone(found);
 }
 
+async function waitForPushReady() {
+  // start()はpush接続を待たない。保存ファイルの連続読込ではなく、保存後のconnectedを待つ。
+  // 遅いWindowsランナーにも余裕を持たせるが、接続失敗はログを添えて即座に失敗させる。
+  await waitFor(() => {
+    const status = manager.getPushStatus();
+    if (status.state === 'error') {
+      throw new Error(
+        `push startup failed: ${JSON.stringify({ status, errors: logger.error.mock.calls, warnings: logger.warn.mock.calls })}`,
+      );
+    }
+    return status.state === 'connected' && status.niconicoRegistered;
+  }, 10000);
+}
+
 test('実録画の失敗後に次のパートへ再開し、動画・CSV・累計履歴を保持する', async () => {
   program = await startFakeProgram();
   manager = createManager();
@@ -157,7 +171,8 @@ test('保存したpush購読を再読込して暗号通知から録画し、再�
   const feed = await setupDetection();
   manager = createManager();
   await manager.start();
-  await waitFor(async () => (await store.load())?.niconicoRegistered === true);
+  await waitForPushReady();
+  expect((await store.load())?.niconicoRegistered).toBe(true);
   await manager.shutdown();
   const saved = await store.load();
   const registeredChannels = push.channels.length;
@@ -165,11 +180,8 @@ test('保存したpush購読を再読込して暗号通知から録画し、再�
   store = new FilePushStateStore(path.join(dir, 'push.json'));
   manager = createManager();
   await manager.start();
-  await waitFor(() => push.hellos.length === 2);
-  await waitFor(
-    () =>
-      manager.getPushStatus().state === 'connected' && manager.getPushStatus().niconicoRegistered,
-  );
+  await waitForPushReady();
+  expect(push.hellos).toHaveLength(2);
   expect(push.hellos[1].uaid).toBe(saved.uaid);
   expect(push.channels).toHaveLength(registeredChannels);
   const data = encryptWebPush(
@@ -194,7 +206,7 @@ test('保存したpush購読を再読込して暗号通知から録画し、再�
   expect(program.watch.connections).toHaveLength(2);
   expect(history.all()).toHaveLength(1);
   expect((await store.load()).keys).toEqual(saved.keys);
-});
+}, 15000);
 
 test('push登録に失敗してもポーリング検知から実録画を保存する', async () => {
   const feed = await setupDetection(503);
