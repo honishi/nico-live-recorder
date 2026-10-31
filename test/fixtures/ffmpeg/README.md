@@ -15,3 +15,9 @@ ffmpeg -i video.mp4 -i audio.mp4 -map 0:v -map 1:a -c copy -movflags +frag_keyfr
 ```bash
 ffmpeg -f lavfi -i 'color=c=red:s=640x360:r=1:d=1,drawbox=x=320:y=0:w=320:h=180:color=lime:t=fill,drawbox=x=0:y=180:w=320:h=180:color=blue:t=fill,drawbox=x=320:y=180:w=320:h=180:color=white:t=fill' -an -c:v libx264 -preset ultrafast -threads 1 -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov+default_base_moof preview-colors.mp4
 ```
+
+`live-combined.mp4` は録画中の出力とクラッシュ後のファイル保持を確認する20秒の合成映像・無音です。FFmpegの入力解析と出力バッファを満たす長さが必要なため、2秒素材と分けています。この素材もCC0-1.0です。
+
+```bash
+ffmpeg -f lavfi -i 'testsrc2=s=64x64:r=10:d=20' -f lavfi -i 'anullsrc=r=48000:cl=stereo' -t 20 -c:v libx264 -preset ultrafast -threads 1 -pix_fmt yuv420p -c:a aac -movflags +frag_keyframe+empty_moov+default_base_moof live-combined.mp4
+```

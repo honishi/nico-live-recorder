@@ -8,23 +8,39 @@ import { startFakeWatchServer, type FakeWatchServer } from './fake-watch-server'
 import { ndgrFixture } from './ndgr-fixture';
 
 export interface FakeProgramOptions {
+  /** 録画中の実出力を検証するため、FFmpegの解析・出力バッファを満たす20秒素材を使う。 */
+  longMedia?: boolean;
   mode?: 'live' | 'timeshift';
   separateAudio?: boolean;
   commentsStatus?: number;
   missingSegment?: boolean;
   openEnded?: boolean;
   refreshKey?: boolean;
+  /** backward 保存後のコメント取得を止め、終了処理の検証で使う。 */
+  holdForward?: boolean;
+  /** プレビュー購読を待ってからセグメントを渡す。 */
+  holdSegments?: boolean;
 }
 
 /** 番組HTMLから暗号化HLS・NDGRまで、外部通信なしで本体の取得経路を通す。 */
 export async function startFakeProgram(options: FakeProgramOptions = {}) {
+  let releaseSegments!: () => void;
+  const segmentsReady = new Promise<void>((resolve) => {
+    releaseSegments = resolve;
+  });
+  if (!options.holdSegments) releaseSegments();
   const registry = await getProtoRegistry();
   const key = Buffer.alloc(16, 7);
   const iv = Buffer.alloc(16);
   iv[15] = 1;
   const media = new Map<string, Buffer>();
   for (const track of options.separateAudio ? ['video', 'audio'] : ['combined']) {
-    const input = readFileSync(new URL(`../fixtures/ffmpeg/${track}.mp4`, import.meta.url));
+    const input = readFileSync(
+      new URL(
+        `../fixtures/ffmpeg/${options.longMedia && track === 'combined' ? 'live-combined' : track}.mp4`,
+        import.meta.url,
+      ),
+    );
     const split = input.indexOf(Buffer.from('moof')) - 4;
     if (split < 0) throw new Error(`fragment not found: ${track}`);
     media.set(`/init-${track}`, input.subarray(0, split));
@@ -72,6 +88,7 @@ export async function startFakeProgram(options: FakeProgramOptions = {}) {
       return;
     }
     if (url.pathname === '/packed' || url.pathname === '/forward') {
+      if (url.pathname === '/forward' && options.holdForward) return;
       response.writeHead(200, { 'content-encoding': 'gzip' });
       response.end(gzipSync(ndgrFixture(url.pathname === '/packed' ? 'packed' : 'forward')));
       return;
@@ -111,7 +128,9 @@ export async function startFakeProgram(options: FakeProgramOptions = {}) {
       return send(key);
     }
     const body = media.get(url.pathname);
-    send(body ?? 'missing', body ? 200 : 404);
+    if (url.pathname.startsWith('/segment-')) {
+      void segmentsReady.then(() => send(body ?? 'missing', body ? 200 : 404));
+    } else send(body ?? 'missing', body ? 200 : 404);
   });
   const originalDispatcher = getGlobalDispatcher();
   const agent = new MockAgent();
@@ -135,9 +154,13 @@ export async function startFakeProgram(options: FakeProgramOptions = {}) {
       .persist();
     setGlobalDispatcher(agent);
     return {
+      url: http.url,
+      dispatcher: agent,
+      releaseSegments,
       requests,
       watch,
       close: async () => {
+        releaseSegments();
         setGlobalDispatcher(originalDispatcher);
         await watch.close();
         await http.close();

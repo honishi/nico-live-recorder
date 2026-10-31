@@ -52,6 +52,7 @@ for (const name of artifacts) {
   let mounted = false;
   try {
     let resources;
+    let executable;
     if (process.platform === 'darwin') {
       const unpacked = path.join(work, 'app');
       mkdirSync(unpacked);
@@ -72,6 +73,7 @@ for (const name of artifacts) {
       // 圧縮・展開を経た最終成果物で、署名と公証チケットが残っていることを確かめる。
       if (requireNotarization) verifyNotarizedApp(app, process.env.APPLE_TEAM_ID);
       resources = path.join(app, 'Contents', 'Resources');
+      executable = path.join(app, 'Contents', 'MacOS', 'NicoLiveRecorder');
     } else {
       // GitHub の Windows ランナーにある 7-Zip を使って NSIS 内の payload を展開する。
       const sevenZip = path.join(process.env.ProgramFiles, '7-Zip', '7z.exe');
@@ -81,6 +83,7 @@ for (const name of artifacts) {
       const unpacked = path.join(work, 'app');
       run(sevenZip, ['x', '-y', `-o${unpacked}`, payload]);
       resources = path.join(unpacked, 'resources');
+      executable = path.join(unpacked, 'NicoLiveRecorder.exe');
     }
     await verifyUpdateConfig(resources);
     console.log(
@@ -90,6 +93,19 @@ for (const name of artifacts) {
         path.join(root, 'scripts', 'ffmpeg', 'verify.mjs'),
         path.join(resources, 'ffmpeg'),
       ]),
+    );
+    // アーカイブ内のmain/preloadと外部リソースを、展開したアプリ自身で読み込む。
+    console.log(
+      run(process.execPath, [
+        '--import',
+        'tsx',
+        path.join(root, 'scripts', 'test-packaged-electron.mjs'),
+        executable,
+      ]),
+    );
+    // 更新適用は行わず、展開済みアプリの実ドライバーでローカル配信を取得する。
+    console.log(
+      run(process.execPath, [path.join(root, 'scripts', 'test-electron-updater.mjs'), executable]),
     );
     console.log(`Artifact verified: ${artifact}`);
   } finally {
