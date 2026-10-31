@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import WebSocket from 'ws';
 import { createOutputDiagnostics } from './diagnostics.mjs';
+import { observeElectronProcesses } from './process-diagnostics.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -137,13 +138,16 @@ export async function launchElectron({
     }
     changed.emit('output');
   };
-  for (const stream of [child.stdout, child.stderr]) {
-    stream.on('data', (data) => {
-      append(data);
-      diagnostics.append(stream, data);
-    });
-  }
-  child.once('close', () => diagnostics.finish());
+  const observeOutput = (target) => {
+    for (const stream of [target.stdout, target.stderr]) {
+      stream.on('data', (data) => {
+        append(data);
+        diagnostics.append(stream, data);
+      });
+      stream.once('end', () => diagnostics.finish(stream));
+    }
+  };
+  observeOutput(child);
   const debuggerUrl = async (pattern) => {
     let cleanup;
     try {
@@ -222,7 +226,13 @@ export async function launchElectron({
     value(
       await main.send('Debugger.evaluateOnCallFrame', {
         callFrameId: pause.callFrames[0].callFrameId,
-        expression: `globalThis.__nlrTest = { require: process.getBuiltinModule("module").createRequire(${requireBase}) }; ${'(' + observeChildren.toString() + ')(__nlrTest.require)'}; ${prepare}; true`,
+        expression: [
+          `globalThis.__nlrTest = { require: process.getBuiltinModule("module").createRequire(${requireBase}) }`,
+          `(${observeChildren.toString()})(__nlrTest.require)`,
+          `(${observeElectronProcesses.toString()})(__nlrTest.require('electron').app, __nlrTest, message => process.stderr.write(message + '\\n'))`,
+          prepare,
+          'true',
+        ].join(';'),
         returnByValue: true,
       }),
     );
@@ -310,7 +320,11 @@ export async function launchElectron({
           `new Promise(resolve => {
           const contents = __nlrTest.require("electron").BrowserWindow.getAllWindows()[0].webContents;
           const reload = () => { contents.once("did-finish-load", () => resolve(true)); contents.reload(); };
-          if (${crash}) { contents.once("render-process-gone", reload); contents.forcefullyCrashRenderer(); }
+          if (${crash}) {
+            __nlrTest.expectedRendererCrashes.add(contents);
+            contents.once("render-process-gone", reload);
+            contents.forcefullyCrashRenderer();
+          }
           else reload();
         })`,
         );
@@ -323,10 +337,11 @@ export async function launchElectron({
           env,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
-        second.stdout.on('data', append);
-        second.stderr.on('data', append);
+        observeOutput(second);
+        const secondClosed = once(second, 'close');
+        void secondClosed.catch(() => {});
         try {
-          const [code, signal] = await deadline(once(second, 'exit'), 'second instance exit');
+          const [code, signal] = await deadline(secondClosed, 'second instance output drain');
           assert.equal(code, 0, `Second instance exited: ${code}/${signal}`);
         } finally {
           if (second.pid && second.exitCode === null && second.signalCode === null) {
@@ -334,6 +349,7 @@ export async function launchElectron({
             second.kill('SIGKILL');
             await deadline(stopped, 'second instance cleanup');
           }
+          await deadline(secondClosed, 'second instance cleanup output drain');
         }
       },
       async quit() {

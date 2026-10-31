@@ -20,6 +20,21 @@ test('分割されたstderr警告と終了直前の改行なしエラーを保�
   ]);
 });
 
+test('二重起動側の出力終了で、稼働中の別ストリームを途中で検査しない', () => {
+  const errors = [];
+  const diagnostics = createOutputDiagnostics(errors);
+  diagnostics.append('first', 'Deprecation');
+  diagnostics.append('second', 'DeprecationWarning: second instance');
+  diagnostics.finish('second');
+  expect(errors).toEqual(['DeprecationWarning: second instance']);
+  diagnostics.append('first', 'Warning: first instance\n');
+  diagnostics.finish();
+  expect(errors).toEqual([
+    'DeprecationWarning: second instance',
+    'DeprecationWarning: first instance',
+  ]);
+});
+
 test('再起動前のインスタンスのエラーも最終検査で拒否する', async () => {
   await expect(
     verifyScenarioDiagnostics(

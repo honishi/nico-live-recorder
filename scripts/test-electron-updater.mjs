@@ -39,6 +39,25 @@ for (const corrupt of [false, true]) {
         downloadStarted = resolve;
       });
       const requests = [];
+      // GitHubの配信と同様に、メタデータとは別のオリジンへ転送して取得する。
+      const downloads = [];
+      const downloadServer = createServer((request, response) => {
+        downloads.push(request.url);
+        if (request.url === `/downloads/${filename}`) {
+          held.push(response);
+          downloadStarted();
+        } else {
+          response.writeHead(404);
+          response.end();
+        }
+      });
+      defer(async () => {
+        downloadServer.closeAllConnections();
+        await new Promise((resolve) => downloadServer.close(resolve));
+      });
+      downloadServer.listen(0, '127.0.0.1');
+      await once(downloadServer, 'listening');
+      const downloadOrigin = `http://127.0.0.1:${downloadServer.address().port}`;
       const server = createServer((request, response) => {
         const pathname = new URL(request.url, 'http://localhost').pathname;
         requests.push(pathname);
@@ -53,11 +72,8 @@ for (const corrupt of [false, true]) {
             }),
           );
         } else if (pathname === `/${filename}`) {
-          response.writeHead(302, { location: `/downloads/${filename}` });
+          response.writeHead(302, { location: `${downloadOrigin}/downloads/${filename}` });
           response.end();
-        } else if (pathname === `/downloads/${filename}`) {
-          held.push(response);
-          downloadStarted();
         } else {
           response.writeHead(404);
           response.end();
@@ -82,7 +98,7 @@ for (const corrupt of [false, true]) {
       app = await launch({
         binary,
         prepareMain: prepareUpdateMain,
-        config: { origin, configPath, cacheDir, installMarker },
+        config: { origin, downloadOrigin, configPath, cacheDir, installMarker },
       });
       assert.equal(await app.mainEvaluate('__nlrTest.require("electron").app.isPackaged'), true);
       assert.equal(await app.mainEvaluate('__nlrTest.updater.autoInstallOnAppQuit'), false);
@@ -130,7 +146,7 @@ for (const corrupt of [false, true]) {
       }
       assert.deepEqual(app.errors, []);
       assert.equal(requests.filter((url) => url === `/${filename}`).length, 1);
-      assert.equal(requests.filter((url) => url === `/downloads/${filename}`).length, 1);
+      assert.deepEqual(downloads, [`/downloads/${filename}`]);
       await app.quit();
       await assert.rejects(access(installMarker), { code: 'ENOENT' });
       console.log(

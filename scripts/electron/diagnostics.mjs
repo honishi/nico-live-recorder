@@ -18,9 +18,12 @@ export function createOutputDiagnostics(errors) {
       pending.set(stream, lines.pop());
       for (const line of lines) inspect(line);
     },
-    finish() {
-      for (const line of pending.values()) inspect(line);
-      pending.clear();
+    finish(stream) {
+      const streams = stream === undefined ? [...pending.keys()] : [stream];
+      for (const key of streams) {
+        if (pending.has(key)) inspect(pending.get(key));
+        pending.delete(key);
+      }
     },
   };
 }

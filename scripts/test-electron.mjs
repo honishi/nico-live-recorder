@@ -81,6 +81,13 @@ await runElectronScenario('diagnostics-check', async ({ work }) => {
         });
         return true;
       })()`);
+        // 復旧検査用の除外を設定せず、本物のrendererクラッシュが検出されることを確かめる。
+        await app.mainEvaluate(`new Promise(resolve => {
+          const contents = __nlrTest.require('electron').BrowserWindow.getAllWindows()[0].webContents;
+          contents.once('render-process-gone', () => resolve(true));
+          contents.forcefullyCrashRenderer();
+        })`);
+        await app.reloadRenderer();
         await app.quit();
         quitCompleted = true;
       }),
@@ -88,6 +95,7 @@ await runElectronScenario('diagnostics-check', async ({ work }) => {
         assert.match(error.message, /UnhandledPromiseRejectionWarning/);
         assert.match(error.message, /NLR sentinel deprecation/);
         assert.match(error.message, /NLR sentinel shutdown/);
+        assert.match(error.message, /Electron render-process-gone.*(?:crashed|killed)/);
         return true;
       },
     );
@@ -96,5 +104,5 @@ await runElectronScenario('diagnostics-check', async ({ work }) => {
     if (previous === undefined) delete process.env.NLR_TEST_ARTIFACTS;
     else process.env.NLR_TEST_ARTIFACTS = previous;
   }
-  console.log('Electron diagnostics OK: unhandled rejection, deprecation, shutdown error');
+  console.log('Electron diagnostics OK: rejection, deprecation, renderer crash, shutdown error');
 });

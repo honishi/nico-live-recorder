@@ -1,5 +1,8 @@
 /** 実updaterの通信・ダウンロードを残し、配信先とキャッシュだけを隔離する。 */
-export function prepareUpdateMain(require, { origin, configPath, cacheDir, installMarker }) {
+export function prepareUpdateMain(
+  require,
+  { origin, downloadOrigin, configPath, cacheDir, installMarker },
+) {
   const { app, session, autoUpdater: nativeUpdater } = require('electron');
   const { MockAgent, setGlobalDispatcher } = require('undici');
   const agent = new MockAgent();
@@ -37,11 +40,14 @@ export function prepareUpdateMain(require, { origin, configPath, cacheDir, insta
     nativeUpdater.quitAndInstall = forbidden;
   } else autoUpdater.doInstall = forbidden;
   app.whenReady().then(() => {
+    const allowedOrigins = new Set([origin, downloadOrigin]);
     for (const target of [session.defaultSession, session.fromPartition('electron-updater')]) {
       target.webRequest.onBeforeRequest((details, callback) => {
         const url = new URL(details.url);
         callback({
-          cancel: !['file:', 'data:', 'devtools:'].includes(url.protocol) && url.origin !== origin,
+          cancel:
+            !['file:', 'data:', 'devtools:'].includes(url.protocol) &&
+            !allowedOrigins.has(url.origin),
         });
       });
     }

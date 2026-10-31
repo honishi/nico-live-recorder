@@ -22,7 +22,7 @@ export async function runElectronProbe(work, entry, args = [], extraEnv = {}) {
       cwd: work,
       env,
       encoding: 'utf8',
-      timeout: 30_000,
+      timeout: 60_000,
       killSignal: 'SIGKILL',
       maxBuffer: 1024 * 1024,
     });
