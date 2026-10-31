@@ -1,20 +1,39 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
+import { createHash, X509Certificate } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer } from 'node:https';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
-import electron from 'electron';
+import { runElectronScenario } from './electron/scenario.mjs';
+import { runElectronProbe } from './electron/probe.mjs';
 
-const work = await mkdtemp(path.join(os.tmpdir(), 'nlr-auth-test-'));
-const env = {
-  ...process.env,
-  NLR_USER_DATA: path.join(work, 'userdata'),
-  NLR_OUTPUT_DIR: path.join(work, 'recordings'),
-};
-for (const key of ['ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS', 'NICO_USER_SESSION']) delete env[key];
-try {
+await runElectronScenario('auth', async ({ work, defer }) => {
+  const cert = await readFile(new URL('../test/fixtures/tls/server.pem', import.meta.url));
+  const key = await readFile(new URL('../test/fixtures/tls/server-key.pem', import.meta.url));
+  const pin = createHash('sha256')
+    .update(new X509Certificate(cert).publicKey.export({ type: 'spki', format: 'der' }))
+    .digest('base64');
+  let loginRequests = 0;
+  const server = createServer({ cert, key }, (request, response) => {
+    if (request.url === '/login') {
+      loginRequests += 1;
+      response.setHeader('set-cookie', [
+        'user_session=dummy-host; Path=/; Secure; HttpOnly; SameSite=None; Max-Age=86400',
+        'user_session=dummy=parent==; Domain=.nicovideo.jp; Path=/; Secure; HttpOnly; SameSite=None; Max-Age=86400',
+        'extra=another=value==; Domain=.nicovideo.jp; Path=/; Secure; HttpOnly; SameSite=None; Max-Age=86400',
+      ]);
+    }
+    response.setHeader('content-type', 'text/html');
+    response.end('<html><body>offline login</body></html>');
+  });
+  defer(async () => {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
   // 本体のNicoAuthをそのままbundleし、ElectronのCookie実装で検証する。
   await build({
     configFile: false,
@@ -30,15 +49,18 @@ try {
     },
   });
   for (const args of [[], ['--restore']]) {
-    const result = spawnSync(electron, [path.join(work, 'auth-main.cjs'), ...args], {
-      env,
-      encoding: 'utf8',
-      timeout: 30_000,
-    });
-    assert.equal(result.status, 0, `${result.error ?? ''}\n${result.stdout}\n${result.stderr}`);
-    assert.ok(result.stdout.includes('Electron auth OK:'));
-    process.stdout.write(result.stdout);
+    const output = await runElectronProbe(
+      work,
+      path.join(work, 'auth-main.cjs'),
+      [
+        ...args,
+        '--host-resolver-rules=MAP www.nicovideo.jp 127.0.0.1',
+        '--no-proxy-server',
+        `--ignore-certificate-errors-spki-list=${pin}`,
+      ],
+      { NLR_AUTH_PORT: String(server.address().port) },
+    );
+    assert.ok(output.includes('Electron auth OK:'));
   }
-} finally {
-  await rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}
+  assert.equal(loginRequests, 1, 'Chromium must accept Set-Cookie from the local HTTPS response');
+});

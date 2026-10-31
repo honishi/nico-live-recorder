@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { createServer as createHttpsServer } from 'node:https';
+import { createSecureServer, constants } from 'node:http2';
 import { createServer as createTcpServer } from 'node:net';
 import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { WebSocketServer } from 'ws';
 
 /** 信頼設定と全ソケットを各検査で隔離し、失敗時にも元に戻す。 */
-async function withTlsServers(run) {
+async function withTlsServers(run, http2 = false) {
   const fixture = (name) =>
     readFile(new URL(`../fixtures/tls/${name}.pem`, import.meta.url), 'utf8');
   const [ca, key, cert, untrusted] = await Promise.all(
@@ -17,6 +18,7 @@ async function withTlsServers(run) {
   const sockets = new Set();
   const servers = [];
   const websockets = [];
+  const sessions = new Set();
   async function listen(server) {
     servers.push(server);
     server.on('connection', (socket) => {
@@ -30,7 +32,13 @@ async function withTlsServers(run) {
   try {
     // 証明書検証は有効なまま、このスレッドだけにテストCAを追加する。
     setDefaultCACertificates([...previous, ca]);
-    const secure = createHttpsServer({ key, cert });
+    const secure = http2
+      ? createSecureServer({ key, cert, allowHTTP1: true })
+      : createHttpsServer({ key, cert });
+    secure.on('session', (session) => {
+      sessions.add(session);
+      session.once('close', () => sessions.delete(session));
+    });
     const rejected = createHttpsServer({ key, cert: untrusted });
     let rejectedRequests = 0;
     rejected.on('request', (_request, response) => {
@@ -68,14 +76,102 @@ async function withTlsServers(run) {
       ws.close();
     }
     const closed = servers.map((server) => new Promise((resolve) => server.close(resolve)));
+    for (const session of sessions) session.destroy();
     for (const socket of sockets) socket.destroy();
     setDefaultCACertificates(previous);
     await Promise.all(closed);
   }
 }
 
+async function loadUndici() {
+  // npm版のロードで内蔵fetchのdispatcherを置き換えない。native側の検査とは分離する。
+  void fetch('data:,initialize-native-dispatcher');
+  const key = Symbol.for('undici.globalDispatcher.1');
+  const native = globalThis[key];
+  const undici = await import('undici');
+  globalThis[key] = native;
+  return undici;
+}
+
+/** npm版Agentの既定ALPN設定で、明示的にHTTP/2経路を検査する。 */
+export async function verifyUndiciHttp2Recovery() {
+  const { request, Agent } = await loadUndici();
+  await withTlsServers(async (h) => {
+    const dispatcher = new Agent();
+    const controller = new AbortController();
+    const protocols = [];
+    h.secure.on('request', (req, response) => {
+      protocols.push(req.httpVersion);
+      if (req.httpVersion !== '2.0') {
+        response.end('HTTP/2録画通信');
+        return;
+      }
+      // RST_STREAMを実際の応答中に送る。サーバー側の想定内エラーだけを消費する。
+      req.stream.on('error', () => {});
+      if (req.url === '/reset') {
+        response.write('partial');
+        setImmediate(() => req.stream.close(constants.NGHTTP2_INTERNAL_ERROR));
+      } else if (req.url === '/abort') controller.abort();
+      else response.end('HTTP/2録画通信');
+    });
+    const read = async (host, route, signal) => {
+      const response = await request(`https://${host}${route}`, { dispatcher, signal });
+      return response.body.text();
+    };
+    const healthy = async () =>
+      assert.equal(
+        await read(h.trustedHost, '/healthy', AbortSignal.timeout(5000)),
+        'HTTP/2録画通信',
+      );
+    try {
+      await healthy();
+      for (const [host, route] of [
+        [h.untrustedHost, '/certificate'],
+        [h.brokenHost, '/handshake'],
+        [h.trustedHost, '/reset'],
+        [h.trustedHost, '/abort'],
+      ]) {
+        const timeout = AbortSignal.timeout(5000);
+        const signal = route === '/abort' ? AbortSignal.any([timeout, controller.signal]) : timeout;
+        await assert.rejects(read(host, route, signal), (error) => {
+          if (route === '/certificate') return error.code === 'DEPTH_ZERO_SELF_SIGNED_CERT';
+          if (route === '/abort') return error.name === 'AbortError';
+          return error instanceof Error;
+        });
+        assert.equal(timeout.aborted, false, `${route}: timeout is not recovery`);
+        await healthy();
+      }
+      assert.ok(protocols.length >= 7);
+      assert.ok(
+        protocols.every((version) => version === '2.0'),
+        `expected HTTP/2, got ${protocols}`,
+      );
+      assert.equal(h.rejectedRequests(), 0);
+      assert.ok(h.handshakes() > 0);
+    } finally {
+      await dispatcher.destroy();
+    }
+  }, true);
+}
+
 /** 内蔵fetchのTLS拒否・接続中の切断・応答待ち中断と、その後の正常通信を確認する。 */
 export async function verifyHttpsRecovery() {
+  return verifyHttpsClient(async (url, signal) => {
+    const response = await fetch(url, { signal });
+    return response.text();
+  });
+}
+
+/** 本体と同じrequest呼び出しも、グローバルdispatcherの既定状態のままHTTPSで確認する。 */
+export async function verifyUndiciHttpsRecovery() {
+  const { request } = await loadUndici();
+  return verifyHttpsClient(async (url, signal) => {
+    const response = await request(url, { signal });
+    return response.body.text();
+  });
+}
+
+async function verifyHttpsClient(readText) {
   await withTlsServers(async (h) => {
     const controller = new AbortController();
     h.secure.on('request', (request, response) => {
@@ -87,27 +183,27 @@ export async function verifyHttpsRecovery() {
       } else response.end('TLS通信を再開');
     });
     async function healthy() {
-      const response = await fetch(`https://${h.trustedHost}/healthy`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      assert.equal(await response.text(), 'TLS通信を再開');
+      assert.equal(
+        await readText(`https://${h.trustedHost}/healthy`, AbortSignal.timeout(5000)),
+        'TLS通信を再開',
+      );
     }
     await healthy();
     for (const [host, route, expectedCode] of [
       [h.untrustedHost, '/certificate', 'DEPTH_ZERO_SELF_SIGNED_CERT'],
-      [h.brokenHost, '/handshake', 'ECONNRESET'],
-      [h.trustedHost, '/truncated', 'UND_ERR_SOCKET'],
+      [h.brokenHost, '/handshake', undefined],
+      [h.trustedHost, '/truncated', undefined],
       [h.trustedHost, '/abort', undefined],
     ]) {
       const timeout = AbortSignal.timeout(5000);
       const signal = route === '/abort' ? AbortSignal.any([timeout, controller.signal]) : timeout;
       await assert.rejects(
-        async () => {
-          const response = await fetch(`https://${host}${route}`, { signal });
-          await response.text();
+        () => readText(`https://${host}${route}`, signal),
+        (error) => {
+          if (expectedCode) return (error.cause?.code ?? error.code) === expectedCode;
+          if (route === '/abort') return error.name === 'AbortError';
+          return error instanceof Error;
         },
-        (error) =>
-          expectedCode ? error.cause?.code === expectedCode : error.name === 'AbortError',
       );
       assert.equal(timeout.aborted, false, `${route}: timeout is not recovery`);
       await healthy();

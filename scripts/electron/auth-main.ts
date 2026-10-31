@@ -10,14 +10,18 @@ app.on('window-all-closed', () => {});
 void app
   .whenReady()
   .then(async () => {
-    // 実サービスへ接続せず、ChromiumのHTTPSナビゲーションだけを通す。
-    session.defaultSession.protocol.handle(
-      'https',
-      () =>
-        new Response('<html><body>offline login</body></html>', {
-          headers: { 'content-type': 'text/html' },
-        }),
-    );
+    // 本物のChromiumネットワークでSet-Cookieを受理する。ローカル検証用の鍵だけを親が許可する。
+    let acceptCookies = false;
+    const local = `https://www.nicovideo.jp:${process.env['NLR_AUTH_PORT']}`;
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+      const url = new URL(details.url);
+      if (url.origin === 'https://account.nicovideo.jp' && url.pathname === '/login') {
+        callback({ redirectURL: `${local}/${acceptCookies ? 'login' : 'cancel'}` });
+      } else
+        callback({
+          cancel: url.origin !== local && !['devtools:', 'data:', 'file:'].includes(url.protocol),
+        });
+    });
     const auth = new NicoAuth(silentLogger);
     const changes: boolean[] = [];
     auth.on('change', (loggedIn) => changes.push(loggedIn));
@@ -35,24 +39,18 @@ void app
       window.close();
       assert.equal(await cancelled, false);
       assert.deepEqual(changes, []);
-      const expirationDate = Date.now() / 1000 + 86400;
-      for (const details of [
-        { name: 'user_session', value: 'dummy-host' },
-        { name: 'user_session', value: expected.user_session, domain: '.nicovideo.jp' },
-        { name: 'extra', value: expected.extra, domain: '.nicovideo.jp' },
-      ])
-        await cookies.set({
-          url: 'https://www.nicovideo.jp',
-          path: '/',
-          secure: true,
-          expirationDate,
-          ...details,
-        });
+      acceptCookies = true;
       assert.equal(await auth.login(), true);
       assert.deepEqual(changes, [true]);
       assert.equal(auth.revision, 1);
     }
     assert.equal(await auth.isLoggedIn(), true);
+    const stored = await cookies.get({ url: 'https://www.nicovideo.jp' });
+    assert.ok(
+      stored.every(
+        (cookie) => cookie.secure && cookie.httpOnly && cookie.sameSite === 'no_restriction',
+      ),
+    );
     assert.deepEqual(await auth.getCookieRecord(), expected);
     assert.equal((await auth.getCookieHeader())!.split('user_session=').length, 2);
     if (process.argv.includes('--restore')) {
