@@ -25,7 +25,8 @@
     "ffmpeg:build": "node scripts/ffmpeg/build.mjs",
     "ffmpeg:verify": "node --import tsx scripts/ffmpeg/verify.mjs",
     "ffmpeg:verify-artifacts": "node scripts/ffmpeg/verify-artifacts.mjs",
-    "test:electron:runtime": "node scripts/test-electron-runtime.mjs"
+    "test:electron:runtime": "node scripts/test-electron-runtime.mjs",
+    "test:electron:packaged": "node --import tsx scripts/test-packaged-electron.mjs"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
