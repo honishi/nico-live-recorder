@@ -34,11 +34,11 @@ nico-live-recorder の仕組み、開発の手順、コード構成、リリー�
 ## 開発
 
 Node のバージョンは `.node-version` に固定しています (nodenv などで自動的に切り替わります)。
-Electron 44 が内蔵する Node と同じ 24 系で、`min-release-age` などに使う npm 11 が同梱されます。
+Electron 45 が内蔵する Node と同じ 24 系で、`min-release-age` などに使う npm 11 が同梱されます。
 
 開発・CI 用 Node.js は 2026-10-21 のセキュリティ修正版 24.22.1 に固定しています。
 配布アプリの Node.js は Electron が内蔵するため、`.node-version` の更新だけでは変更されません。
-Electron は 44.10.0 に完全固定し、内蔵 Node.js 24.22.1・Undici 7.30.1 を使います。
+Electron は 45.2.1 に完全固定し、内蔵 Node.js 24.22.1・Undici 7.30.1 を使います。
 HTTP 応答・WebSocket の DoS 修正が内蔵版に取り込まれたため、44.9.3 向けに導入した
 `install()` によるグローバル通信 API の差し替えは撤去しました。
 `fetch`・`WebSocket` と関連する `Request`・`Response` 等は、アプリもテストも内蔵実装を使います。
@@ -54,6 +54,17 @@ Node.js のスクリプトは `.node-version` の修正版を使って実行し�
 で固定し、確認済みの `node node_modules/electron/install.js` で検証用バイナリを取得しています。
 npm の除外設定はパッケージ名単位なので、コマンドに明示したバージョンに限定して適用しました。
 `.npmrc` に恒久的な除外は追加せず、今後の更新には引き続き7日間の制限を適用します。
+
+2026-11-01 の Electron 45.2.1 更新も、このバージョンに限ってユーザーの例外承認を受けました。
+npm 公開日時は `2026-10-31T01:03:15.875Z` で、通常の7日制限を満たすのは11月7日10:03（日本時間）です。
+`npm install --save-dev --save-exact electron@45.2.1 --min-release-age-exclude=electron --ignore-scripts`
+で固定し、確認済みの `node node_modules/electron/install.js` でバイナリを取得します。
+Chromium 156.0.8078.75 の修正を含む最新45系を選び、Node.js 24.22.0 の45.0.0へ戻しません。
+移行テストの `scripts/electron/baseline.json` は更新前の44.10.0に固定します。
+変更点は [45.0.0](https://releases.electronjs.org/release/v45.0.0)、
+[45.1.0](https://releases.electronjs.org/release/v45.1.0)、
+[45.2.0](https://releases.electronjs.org/release/v45.2.0)、
+[45.2.1](https://github.com/electron/electron/releases/tag/v45.2.1) を参照してください。
 
 ```bash
 npm ci
@@ -104,7 +115,18 @@ NLR_USER_DATA="$nlr_check_dir/userdata" NLR_OUTPUT_DIR="$nlr_check_dir/recording
 途中切断の拒否、後続の正常な Brotli 応答、WebSocket の送受信・PING/PONG・切断を確認しました。
 format・lint・型チェック・597件のテスト・ビルド、実FFmpegの9件の結合テスト、
 Electronの画面操作・設定保存と再起動後の復元、隔離した実放送の録画・停止、CLIの30秒録画も成功しています。
-Windows 実機とログインが必要な push・フォロー監視は未確認のため、issue #47 は継続して追跡します。
+その後、Windows・macOS の動作はユーザーが確認し、issue #47 は完了しています。
+
+2026-11-01 の45.2.1更新では、macOS arm64の実体で上記のNode.js・Undiciと
+Chromium 156.0.8078.75を確認しました。証明書拒否リストの45系への
+[バックポート #55129](https://github.com/electron/electron/pull/55129)も45.2.1に含まれます。
+内蔵通信とnpm版UndiciのHTTP/HTTPS/HTTP2・WS/WSSの回復、証明書拒否、Cookieの保存・復元、
+preload/IPC、44.10.0からの移行、暗号pushからの録画、プロセス障害からの復旧を確認しました。
+移行対象は現在のアプリコードを旧・新Electronで実行したプロファイルです。
+sandboxed preloadの削除対象は再ビルドした成果物にも含まれず、FFmpeg・proto・トレイ画像は
+ASAR外の配置を維持しています。FFmpegへ渡すのはパイプで、ASAR内ファイルのfdではありません。
+Windows・macOSの配布形式と残る手動確認は [issue #48](https://github.com/honishi/nico-live-recorder/issues/48)
+の対応PRに記録します。起動性能は未測定です。
 
 今後の Electron 更新でも、次の確認を行ってください。
 
