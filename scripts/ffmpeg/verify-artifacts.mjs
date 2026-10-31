@@ -103,6 +103,10 @@ for (const name of artifacts) {
         executable,
       ]),
     );
+    // 更新適用は行わず、展開済みアプリの実ドライバーでローカル配信を取得する。
+    console.log(
+      run(process.execPath, [path.join(root, 'scripts', 'test-electron-updater.mjs'), executable]),
+    );
     console.log(`Artifact verified: ${artifact}`);
   } finally {
     // detach 失敗時にはマウント先を削除しない。
