@@ -139,6 +139,7 @@ export async function startFakeProgram(options: FakeProgramOptions = {}) {
     setGlobalDispatcher(agent);
     return {
       url: http.url,
+      dispatcher: agent,
       requests,
       watch,
       close: async () => {

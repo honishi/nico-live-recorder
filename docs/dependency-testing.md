@@ -14,6 +14,12 @@
 | コメント変換              | `test/vendor/nico-client/NicoClient.test.ts`                 | 実デコード結果のRGB色と名前付き色、既定値、重複排除                                    |
 | 録画全体                  | `test/core/recorder/program-recorder-integration.test.ts`    | 番組HTML→視聴WS→HLS・コメント→動画・CSV・JSONの保存                                    |
 
+`test/app/recording-manager-integration.test.js` は実managerと録画・検知をつなぎ、
+FFmpeg異常終了後の別パート再開、旧動画とCSVの保持、累計履歴を確認します。
+さらにファイルへ保存したpush購読の再読込、暗号通知からの録画、検知再起動後の
+ポーリングとの重複防止、push登録失敗時のポーリング録画を確認します。
+OS通知と認証情報の入口だけを差し替え、外部接続は拒否します。
+
 Electron・React・electron-viteは `scripts/test-electron.mjs` でビルド済み画面の起動、
 preload・IPC、タブ操作、変更通知、設定の保存・再起動後の復元を確認します。
 
