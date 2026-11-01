@@ -66,6 +66,13 @@ Chromium 156.0.8078.75 の修正を含む最新45系を選び、Node.js 24.22.0 
 [45.2.0](https://releases.electronjs.org/release/v45.2.0)、
 [45.2.1](https://github.com/electron/electron/releases/tag/v45.2.1) を参照してください。
 
+2026-11-01 の electron-updater 6.8.12 更新は、ユーザーの指定により、このバージョンと
+必須依存の builder-util-runtime 9.7.1 に限って公開後7日間の導入制限を例外にしました。
+`npm install --save-exact electron-updater@6.8.12 --min-release-age-exclude=electron-updater --min-release-age-exclude=builder-util-runtime --ignore-scripts`
+で固定しています。両パッケージに install script がないことを確認し、`.npmrc` の7日制限は維持します。
+差分ダウンロードのキャッシュ整合性とリダイレクト処理の修正を取り込みます。
+変更点は [6.8.12 のリリースノート](https://github.com/electron-userland/electron-builder/releases/tag/electron-updater%406.8.12) を参照してください。
+
 ```bash
 npm ci
 npm run ffmpeg:build # 録画用 FFmpeg をビルド (前提ツールは下記参照)
